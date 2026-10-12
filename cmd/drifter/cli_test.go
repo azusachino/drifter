@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/azusachino/drifter/internal/companion"
 )
@@ -214,5 +216,75 @@ func TestCLIDefaultStatePath(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "relative")
 	if _, err := defaultDB(); err == nil {
 		t.Fatal("relative XDG state home accepted")
+	}
+}
+
+func TestCLIServeProbesWiring(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "mappings.sqlite")
+	if err := os.WriteFile(configPath, []byte("[probes]\nenabled = true\naddr = \"127.0.0.1:0\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var raw bytes.Buffer
+	out := &syncWriter{mu: &mu, buf: &raw}
+	var stderr bytes.Buffer
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		done <- run(ctx, []string{"serve-probes", "--config", configPath, "--db", dbPath}, out, &stderr, clients{})
+	}()
+	var line string
+	for i := 0; i < 200; i++ {
+		line = out.String()
+		if strings.Contains(line, "probe server starting") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(line, `"msg":"probe server starting"`) || !strings.Contains(line, "run_id") {
+		t.Fatalf("expected structured startup log with run id, got: %s", line)
+	}
+	if strings.Contains(line, "synthetic-secret") {
+		t.Fatal("log echoed secret")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("serve-probes failed: %v", err)
+	}
+}
+
+// syncWriter serializes log writes with test reads under -race.
+type syncWriter struct {
+	mu  *sync.Mutex
+	buf *bytes.Buffer
+}
+
+func (w *syncWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+func (w *syncWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+func TestCLIServeProbesRejectsInvalidConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("werede_api_key = \"synthetic-secret\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	err := run(context.Background(), []string{"serve-probes", "--config", configPath, "--db", filepath.Join(dir, "m.sqlite")}, &out, &stderr, clients{})
+	if err == nil || !strings.Contains(err.Error(), "credential") {
+		t.Fatalf("credential-bearing config accepted: %v", err)
+	}
+	if strings.Contains(err.Error()+out.String(), "synthetic-secret") {
+		t.Fatal("error echoed secret")
 	}
 }

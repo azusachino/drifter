@@ -1,0 +1,91 @@
+# Drifter architecture
+
+Drifter relates reading facts from source services (WeRead today; Kindle
+Unlimited later) to Hardcover reading status. This document describes the
+system as implemented on `feat/oss-foundation`; future behavior (status
+writes, daemon scheduling, deployment) is labeled as planned, not built.
+
+## Components
+
+| Component | Location | Responsibility |
+| --- | --- | --- |
+| CLI | `cmd/drifter` | Argument parsing, command routing, JSON output, wiring config/logging/probes |
+| Source client (WeRead) | `internal/companion/weread.go` | Read-only gateway calls: search, book info, personal progress |
+| Target client (Hardcover) | `internal/companion/hardcover.go` | Read-only GraphQL: exact-edition lookup, bounded candidate search, work/edition membership validation |
+| Transport | `internal/companion/http.go` | Shared hardened HTTP: fixed HTTPS destinations, no redirects, 30 s timeout, 2 MiB cap, per-client pacing, no retries, sanitized errors |
+| Identity normalization | `internal/companion/book.go` | ISBN checksum/10↔13 conversion, book-ID validation, conservative status inference |
+| Mapping store | `internal/companion/store.go` | SQLite confirmed mappings; account-scoped keys, mode-600 file checks, secure-delete |
+| Configuration | `internal/config` | Settings-only TOML: full validation at load, unknown keys rejected, credential-like keys refused, restart-applied |
+| Logging | `internal/logging` | stdlib `slog` JSON to stdout, level from config, random run IDs, no payloads or secrets |
+| Health probes | `internal/probes` | Read-only `/healthz` and `/readyz` over stdlib `net/http`; local dependency checks only |
+
+## Data flow (implemented)
+
+```text
+WeRead gateway ──▶ source client ──▶ normalized Book/Progress
+                                          │
+                                          ▼
+                          ISBN variants ─▶ Hardcover exact-edition query
+                                          │ no exact match
+                                          ▼
+                          bounded title/original-language candidate search
+                                          │
+                                          ▼
+                        owner reviews candidates (human decision)
+                                          │ explicit confirmation
+                                          ▼
+              membership validation (work exists; edition belongs to work)
+                                          │
+                                          ▼
+                     SQLite mapping store (local, private)
+```
+
+Nothing in this flow writes to either provider. Personal progress is fetched
+only on explicit request and never persisted.
+
+## Trust boundaries
+
+- **Providers are untrusted input.** Every response passes field-by-field
+  validation; unknown fields are discarded; API-level errors inside HTTP 200
+  (GraphQL `errors`, WeRead `errcode`, upgrade notices) fail closed.
+- **The owner is the only linking authority.** Search ranking and identifier
+  uniqueness produce *candidates*, never mappings. `link` requires an explicit
+  work ID and validates membership but does not judge literary identity.
+- **The state file is secret-adjacent.** It contains personal tracking
+  metadata, is mode 600, must be a regular non-symlink file with a
+  non-group/other-writable parent, and enables SQLite `secure_delete`.
+- **Credentials never enter TOML, logs, flags or errors.** They exist only in
+  the process environment and are sent as bearer headers to fixed HTTPS
+  destinations.
+
+## Configuration and probes
+
+`config.toml` holds settings only (log level, probe address, optional database
+path). Load is total: missing file → defaults; unknown key, bad value or
+credential-like key → error. Callers apply configuration at startup; the
+confirmed direction is restart-only, so a running process's behavior cannot
+change underneath it. `serve-probes` exposes honest liveness/readiness for a
+future container Deployment: `/readyz` opens and lists the mapping database
+per request, and optionally requires provider environment variables to be
+present (without contacting providers).
+
+## OSS component inventory and rationale
+
+| Dependency | Why | What would change it |
+| --- | --- | --- |
+| Go standard library (`net/http`, `encoding/json`, `flag`, `log/slog`, `crypto/rand`) | Small audit surface for a credential-holding tool; no framework churn | A need for middleware-rich routing or OpenTelemetry traces |
+| `github.com/mattn/go-sqlite3` (pinned v1.14.52) | Battle-tested driver; CGO cost accepted for single-file durable state | A pure-Go/cross-compilation requirement (`modernc.org/sqlite` tradeoff: larger binaries, different perf profile) |
+| `github.com/BurntSushi/toml` (pinned v1.6.0) | Minimal, dependency-free TOML decode with unknown-key detection | None foreseeable; the file is deliberately tiny |
+| GitHub Actions + `govulncheck` | Free CI running the owning gate; advisory vulnerability scan | Self-hosted runners if secrets ever enter CI (they do not today) |
+
+Deliberately absent: CLI frameworks (cobra/urfave), validation libraries,
+retry/backoff libraries, ORMs, telemetry SDKs. Each is recorded here as a
+choice, with the trigger that would justify revisiting.
+
+## Planned, not implemented
+
+Status synchronization, the persistent daemon, per-book holds/resolution,
+Telegram notifications and k3s deployment follow the owner-confirmed
+direction in the [implementation plan](plans/read-only-matching.md). Their
+acceptance criteria live in their own future issues; nothing in this
+repository performs a provider write.
