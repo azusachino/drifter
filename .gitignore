@@ -45,3 +45,4 @@ go.work.sum
 
 # archify working files
 .archify/
+*.delivery-pending.json
