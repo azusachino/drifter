@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "c9fbc114-e25b-4e2a-90ae-3bfeef36b0b6",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "/home/haru/Projects/project-github/harus-workstation/vendor/drifter/.archify/workflow-mapping-20261014/candidate.json",
+  "output": "/home/haru/Projects/project-github/harus-workstation/vendor/drifter/docs/diagrams/cli-mapping-workflow.html",
+  "specification": {
+    "sha256": "439d160f265749d100939b18f0c02aa1a5a5f6c66093e2dd9c4995b5edbdf479",
+    "bytes": 5423
+  },
+  "artifact": {
+    "sha256": "74d15b9b78e536ad618291acd9a9be0beac40b29b7895ff0286fc3130a767200",
+    "bytes": 761646
+  }
+}
