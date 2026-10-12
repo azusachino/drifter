@@ -39,6 +39,40 @@ second, Hardcover 1.1 seconds), without automatic retries. These are client
 safeguards, not proof of remaining account quota or a complete rate-limit
 policy.
 
+## Configuration and health probes
+
+Optional settings file (never credentials; validated fully at startup;
+applied by the invoking process — no live reload):
+
+```toml
+# config.toml — settings only
+[log]
+level = "info"        # debug | info | warn | error
+
+[probes]
+enabled = true
+addr = "127.0.0.1:8080"  # host:port for the read-only health endpoint
+
+[database]
+# path = "/var/lib/drifter/mappings.sqlite"  # optional absolute override
+```
+
+Credential-like keys (`api_key`, `token`, `secret`, `password`, `credential`)
+are rejected outright; unknown keys fail validation so typos cannot silently
+disable behavior. A missing file yields built-in defaults.
+
+### Health probes (read-only)
+
+```sh
+bin/drifter serve-probes --config config.toml [--db PATH] [--require-providers]
+```
+
+Serves `/healthz` (process alive) and `/readyz` (mapping database opens and
+lists; with `--require-providers`, also reports unready when environment
+credentials are absent). It makes no provider network calls and performs no
+synchronization; it exists so a future container/Deployment has honest
+liveness/readiness targets.
+
 ## Inspect and match
 
 ```sh

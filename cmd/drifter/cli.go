@@ -43,8 +43,10 @@ Explicit local mappings (never remote status writes):
   unlink   --book-id ID --account LABEL --target-account LABEL [--db PATH]
 
 Use COMMAND -h for flags. Credentials come from WEREAD_API_KEY and
-HARDCOVER_API_KEY; local links/unlink need neither. Daemon, TOML and remote
-status synchronization are not implemented in this slice.
+HARDCOVER_API_KEY; local links/unlink need neither. serve-probes runs a local
+read-only health endpoint from a settings-only config file; it performs no
+synchronization. Daemon scheduling, TOML-driven sync and remote status
+synchronization are not implemented in this slice.
 `
 
 func defaultDB() (string, error) {
@@ -77,15 +79,15 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 		fs.PrintDefaults()
 		fs.SetOutput(io.Discard)
 	}
-	var title, bookID, query, account, targetAccount, dbPath string
-	var progress, replace bool
+	var title, bookID, query, account, targetAccount, dbPath, configPath string
+	var progress, replace, requireProviders bool
 	var workID, editionID int64
 	switch command {
 	case "search":
 		fs.StringVar(&title, "title", "", "WeRead search title (required)")
 	case "inspect", "match", "link", "unlink":
 		fs.StringVar(&bookID, "book-id", "", "WeRead book ID (required)")
-	case "links":
+	case "links", "serve-probes":
 	default:
 		return fmt.Errorf("unknown command; use drifter help")
 	}
@@ -104,8 +106,12 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 		fs.Int64Var(&editionID, "edition-id", 0, "optional confirmed edition; omitted means work-only")
 		fs.BoolVar(&replace, "replace", false, "explicitly replace an existing local mapping")
 	}
-	if command == "link" || command == "links" || command == "unlink" {
+	if command == "link" || command == "links" || command == "unlink" || command == "serve-probes" {
 		fs.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
+	}
+	if command == "serve-probes" {
+		fs.StringVar(&configPath, "config", "", "settings-only TOML path (missing file uses defaults; never credentials)")
+		fs.BoolVar(&requireProviders, "require-providers", false, "readiness reports unready when provider credentials are absent (no network calls)")
 	}
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -119,7 +125,7 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 	if command == "search" && title == "" {
 		return fmt.Errorf("--title required")
 	}
-	if command != "search" && command != "links" && !companion.ValidBookID(bookID) {
+	if command != "search" && command != "links" && command != "serve-probes" && !companion.ValidBookID(bookID) {
 		return fmt.Errorf("valid --book-id required")
 	}
 	if command == "link" || command == "unlink" {
@@ -130,7 +136,7 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 	if command == "link" && (workID <= 0 || editionID < 0) {
 		return fmt.Errorf("positive --work-id and nonnegative --edition-id required")
 	}
-	if command == "link" || command == "links" || command == "unlink" {
+	if command == "link" || command == "links" || command == "unlink" || command == "serve-probes" {
 		if dbPath == "" {
 			var err error
 			dbPath, err = defaultDB()
@@ -141,6 +147,9 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 	}
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
+	if command == "serve-probes" {
+		return serveProbes(ctx, configPath, dbPath, requireProviders, out)
+	}
 	if command == "links" || command == "unlink" {
 		store, err := companion.OpenStore(dbPath)
 		if err != nil {
