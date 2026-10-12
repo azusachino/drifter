@@ -8,16 +8,63 @@ immediate deliverable is a **read-only first vertical slice**, not a claim that
 status synchronization is implemented.
 
 Sequence: [saved research](../research/reading-status-companion.md) → this
-finite plan → owning acceptance issue → implementation slices and verification →
-owning PR for one final owner review. GitHub Issues is the task ledger; this
-document explains scope and dependencies, not a second live checklist. No Asobi,
-Herdr, agent review or deployment is authorized.
+finite plan →
+[acceptance issue #1](https://github.com/azusachino/drifter/issues/1) →
+implementation slices and verification → owning PR for one final owner review.
+GitHub Issues is the task ledger; this document explains scope and dependencies,
+not a second live checklist. No Asobi, Herdr, agent review or deployment is
+authorized.
 
 Workflow correction: initial model/provider code and focused tests were written
 before this plan and acceptance issue. Those files remain uncommitted. Work
 paused for this correction; it must not be retrospectively described as
 plan-first or fully verified. Resume coding only once the acceptance issue
 exists.
+
+## Owner-confirmed operating direction
+
+The owner confirmed the following after a design interview. These are future
+operating decisions, not an expansion of this PR's read-only acceptance scope.
+See [the domain glossary](../../CONTEXT.md) for mapping, authority, baseline and
+hold; these concepts must not be conflated.
+
+- **Execution:** a persistent daemon in a single-replica k3s Deployment, not a
+  Kubernetes CronJob or an internally spawned background process. The CLI/core
+  remains the first slice. Deployment is separately approved work.
+- **Configuration:** `config.toml` contains operational settings only. SQLite
+  owns confirmed mappings and future reconciliation state. Credentials remain
+  outside TOML. Validate the full configuration at startup; changes take effect
+  on restart, with no file watcher or live reload.
+- **Freshness:** aim to reflect source status changes within 30 minutes under
+  healthy conditions. This is a requirement to validate against actual quotas,
+  acquisition capability and library size, not an established service guarantee
+  or a promise that one full poll may run every 30 minutes regardless of size.
+- **Authority:** explicitly approve one primary source per Hardcover work and
+  target account. Another source mapping does not acquire write authority merely
+  because identity is confirmed. Work-only confirmation remains valid.
+- **Autonomy:** following mapping and bootstrap approval, future unattended runs
+  may apply unambiguous status deltas. Concurrent source/target changes or
+  uncertain write outcomes hold the affected book; unrelated safe books
+  continue. For example, source Read versus independently selected target Paused
+  preserves Paused and opens a hold rather than overwriting the manual edit.
+- **Exceptions:** durable exception state is exposed through CLI reports and
+  structured daemon logs. Telegram notifications belong on the roadmap as a
+  separately scoped integration, not in the first deliverable. Delivery failure
+  must not lose an exception or block reconciliation; destination, credentials,
+  privacy-safe payloads and deduplication remain to be specified. Resolve
+  conflicts through an explicit CLI choice to accept-source or keep-target,
+  against freshly fetched facts; reject stale resolutions and record the
+  decision. Neither resolution commands nor these reports are implemented by the
+  initial inspection/mapping CLI.
+- **First deliverable:** keep issue #1's read-only CLI scope. TOML, daemon
+  polling, status writes and deployment follow in separately verified slices.
+
+Future write contracts, verified account identity, privacy policy, quota tests,
+restart/single-writer safety and resolution semantics still require their owning
+acceptance work. This interview does not authorize live mutation experiments,
+release or deployment. An ADR is not needed merely to repeat these reversible
+operating choices; keep their rationale here and domain language in the
+glossary.
 
 ## Evidence driving the slice
 
@@ -39,8 +86,8 @@ catalog creation.
 - `internal/companion`: small source and target clients, native-fact
   normalization, candidate discovery and durable confirmed mappings. No plugin
   registry or public SDK contract.
-- `cmd/drifter`: standard-library CLI using the core; JSON output so it can
-  later serve scheduled jobs.
+- `cmd/drifter`: standard-library CLI using the core; JSON output for manual
+  inspection and later daemon operations.
 - SQLite: mapping records only, scoped by provider, source-account label,
   source-book ID and target-account label. No raw responses, excerpts, device
   identifiers, personal progress archive or credentials persisted.
