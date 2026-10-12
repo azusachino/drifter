@@ -21,6 +21,10 @@ writes, daemon scheduling, deployment) is labeled as planned, not built.
 
 ## Data flow (implemented)
 
+An interactive rendered version of the confirmation workflow lives at
+[docs/diagrams/cli-mapping-workflow.html](diagrams/cli-mapping-workflow.html)
+(generated with archify; validate/deliver/check/browser gates all passed).
+
 ```text
 WeRead gateway ──▶ source client ──▶ normalized Book/Progress
                                           │
