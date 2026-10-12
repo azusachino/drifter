@@ -25,8 +25,19 @@ profile.cov
 go.work
 go.work.sum
 
-# env file
+# Credentials, private local state and build/scratch output
 .env
+.env.*
+/bin/
+/.tmp/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Editor/IDE
 # .idea/

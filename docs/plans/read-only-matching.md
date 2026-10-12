@@ -16,10 +16,11 @@ not a second live checklist. No Asobi, Herdr, agent review or deployment is
 authorized.
 
 Workflow correction: initial model/provider code and focused tests were written
-before this plan and acceptance issue. Those files remain uncommitted. Work
-paused for this correction; it must not be retrospectively described as
-plan-first or fully verified. Resume coding only once the acceptance issue
-exists.
+before this plan and acceptance issue. At that checkpoint those files were
+uncommitted and work paused for this correction; it must not be retrospectively
+described as plan-first or fully verified. Research and plan were then published,
+issue #1 created, and implementation resumed against its criteria. Delivery
+verification belongs in the owning PR, not this historical account.
 
 ## Owner-confirmed operating direction
 
