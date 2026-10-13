@@ -1,7 +1,7 @@
 ---
 title: 2026-10-12 reading status companion routes
 created: 2026-10-12T14:20
-modified: 2026-10-12T15:52
+modified: 2026-10-13T10:00
 type: research
 status: maintained
 maturity: developing
@@ -833,6 +833,78 @@ The next project can begin small without routing through Iroha or changing
 readers. Keep the uncertainty attached to the source adapter where it belongs,
 rather than building an elaborate generic platform around an unverified Kindle
 feed.
+
+### value and matching check (2026-10-13)
+
+The owner asked whether Drifter would actually help before more daemon work.
+This owner-authorized check made read-only calls only: `/shelf/sync`,
+`/user/notebooks`, one `/review/list/mine`, Hardcover `me`, search and the
+existing `drifter match`. Raw captures stayed in private, disposable workstation
+scratch; this public note records aggregates only, no shelf titles.
+
+**Volume is real.** The shelf holds 1,243 ebooks (no albums); 251 carry
+`finishReading=1` and 76 are private. Over the last 365 days 208 books had a
+`readUpdateTime` and 50 of those are finished; 38 in the last 90 days and 21 in
+the last 30. `readUpdateTime` is "last opened", so the 208 includes browsing.
+
+**Matching, not sync, is the bottleneck.** `drifter match` on the 20 most
+recently read books:
+
+| Outcome | Books |
+| --- | --- |
+| Exact Hardcover edition | 1 |
+| Work candidate from native title | 1 |
+| No candidate from native title | 15 |
+| Rejected: imported `CB_…` book ID fails `ValidBookID` | 3 |
+
+76 shelf IDs (21 of the 208 read in the last year) are `CB_` imported books;
+they lack catalog metadata, and the current numeric-only ID rule refuses them.
+13 of the 17 matchable books list a translator, so an original-language work
+plausibly exists; the other 4 are Chinese originals likely absent from Hardcover.
+
+Bridges tried on those 13 translations:
+
+| Approach | Plausible right work found |
+| --- | --- |
+| Hardcover `search` `query_type: Author` with the WeRead author string | 3/13, correctness unchecked |
+| Wikidata `wbsearchentities` on the Chinese author name | 3/13 |
+| LLM-proposed original title → `drifter match --query` | 8/13 in top 3 with the right author, plus 1 exact edition |
+
+Deterministic bridges fail because most names are Chinese transliterations of
+Western names, which neither Hardcover `alternate_names` nor Wikidata labels
+carry. The LLM route failed in instructive ways: a Japanese-original book
+produced only an unrelated same-title English work; a common title ranked a
+different author first; an 8-volume collection has no single work; two
+low-confidence guesses were doubtful. Hints are search inputs, never links.
+One Hardcover call failed transport and succeeded on a manual re-run; review
+tooling must make re-running a failed lookup cheap.
+
+**Account identity is obtainable but fragile.** The gateway key binds a `vid`,
+yet no documented endpoint returns the caller's own. One `/review/list/mine`
+response carried a single consistent value at `review.userVid` and
+`review.author.userVid`, which the contract does not list. It requires at least
+one own review (22 of the 50 most recent notebooks had one). Hardcover `me`
+returns an ID as documented. [W2–W3, H4]
+
+**Quota and stability facts** for the daemon direction [H4]: the Free plan is
+5,000 requests/day, burst 10, 60/minute, and each top-level field costs one
+request; "always running processes" are listed as a Supporter use. The API is
+"heavily in flux" and tokens "may reset without notice while in beta". A
+30-minute poll must therefore batch target reads into one field per run, and
+credential failure must be loud.
+
+**Prior art confirms manual linking.** The Calibre plugin [X1] links by ISBN or
+title search then explicit selection, with a "linked?" column and an "ignored"
+flag. Record-linkage tooling such as
+[Splink](https://github.com/moj-analytical-services/splink) names the
+human-review band explicitly ("clerical review"); its concepts, not the
+dependency, apply here.
+
+Conclusion: the next useful slice is a pending worklist, externally produced
+original-title hints, author-aware re-ranking and batch review with durable
+skip/exclude decisions, bootstrapping recent books first rather than the whole
+backlog. The daemon admin surface is deferred until enough books are linked to
+make status automation worth running.
 
 ### sources and checkpoints
 
