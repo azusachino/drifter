@@ -159,6 +159,7 @@ main file during an active write or commit a personal database as a fixture.
 
 - [Source-backed research and measured findings](docs/research/reading-status-companion.md)
 - [First-slice plan, gates and owner-confirmed direction](docs/plans/read-only-matching.md)
+- [Proposed matching-worklist deliveries (#7)](docs/plans/matching-worklist.md)
 - [Domain language](CONTEXT.md)
 - [Acceptance issue #1](https://github.com/azusachino/drifter/issues/1)
 
