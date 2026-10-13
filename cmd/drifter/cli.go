@@ -9,11 +9,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/azusachino/drifter/internal/companion"
 )
 
 type source interface {
+	Shelf(context.Context) (companion.ShelfResult, error)
 	Search(context.Context, string) (companion.SearchResult, error)
 	Book(context.Context, string) (companion.Book, error)
 	Progress(context.Context, string) (companion.Progress, error)
@@ -35,6 +37,8 @@ Read-only provider operations:
   search   --title TITLE
   inspect  --book-id ID [--progress]
   match    --book-id ID [--query ORIGINAL_TITLE]
+  pending  --account LABEL --target-account LABEL [--days 90] [--db PATH]
+           [--include-private] [--include-imported]
 
 Explicit local mappings (never remote status writes):
   link     --book-id ID --work-id ID --account LABEL --target-account LABEL
@@ -80,14 +84,15 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 		fs.SetOutput(io.Discard)
 	}
 	var title, bookID, query, account, targetAccount, dbPath, configPath string
-	var progress, replace, requireProviders bool
+	var progress, replace, requireProviders, includePrivate, includeImported bool
+	var days int
 	var workID, editionID int64
 	switch command {
 	case "search":
 		fs.StringVar(&title, "title", "", "WeRead search title (required)")
 	case "inspect", "match", "link", "unlink":
 		fs.StringVar(&bookID, "book-id", "", "WeRead book ID (required)")
-	case "links", "serve-probes":
+	case "links", "serve-probes", "pending":
 	default:
 		return fmt.Errorf("unknown command; use drifter help")
 	}
@@ -97,7 +102,12 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 	if command == "match" {
 		fs.StringVar(&query, "query", "", "original-language or alternate title search")
 	}
-	if command == "link" || command == "unlink" {
+	if command == "pending" {
+		fs.IntVar(&days, "days", 90, "recently opened window in days (1–36500; browsing counts)")
+		fs.BoolVar(&includePrivate, "include-private", false, "explicitly include privacy-marked books (unknown privacy remains excluded)")
+		fs.BoolVar(&includeImported, "include-imported", false, "include imported books for inspection only; match/link remain unsupported")
+	}
+	if command == "link" || command == "unlink" || command == "pending" {
 		fs.StringVar(&account, "account", "", "source account namespace (required; not an authenticated ID)")
 		fs.StringVar(&targetAccount, "target-account", "", "target account namespace (required; not an authenticated ID)")
 	}
@@ -106,7 +116,7 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 		fs.Int64Var(&editionID, "edition-id", 0, "optional confirmed edition; omitted means work-only")
 		fs.BoolVar(&replace, "replace", false, "explicitly replace an existing local mapping")
 	}
-	if command == "link" || command == "links" || command == "unlink" || command == "serve-probes" {
+	if command == "link" || command == "links" || command == "unlink" || command == "serve-probes" || command == "pending" {
 		fs.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
 	}
 	if command == "serve-probes" {
@@ -125,10 +135,13 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 	if command == "search" && title == "" {
 		return fmt.Errorf("--title required")
 	}
-	if command != "search" && command != "links" && command != "serve-probes" && !companion.ValidBookID(bookID) {
+	if command != "search" && command != "links" && command != "serve-probes" && command != "pending" && !companion.ValidBookID(bookID) {
 		return fmt.Errorf("valid --book-id required")
 	}
-	if command == "link" || command == "unlink" {
+	if command == "pending" && (days < 1 || days > 36500) {
+		return fmt.Errorf("--days must be between 1 and 36500")
+	}
+	if command == "link" || command == "unlink" || command == "pending" {
 		if !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
 			return fmt.Errorf("valid --account and --target-account required")
 		}
@@ -136,7 +149,7 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 	if command == "link" && (workID <= 0 || editionID < 0) {
 		return fmt.Errorf("positive --work-id and nonnegative --edition-id required")
 	}
-	if command == "link" || command == "links" || command == "unlink" || command == "serve-probes" {
+	if command == "link" || command == "links" || command == "unlink" || command == "serve-probes" || command == "pending" {
 		if dbPath == "" {
 			var err error
 			dbPath, err = defaultDB()
@@ -171,6 +184,31 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 	reader, err := providers.source()
 	if err != nil {
 		return err
+	}
+	if command == "pending" {
+		store, err := companion.OpenStore(dbPath)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		mappings, err := store.List(ctx)
+		if err != nil {
+			return err
+		}
+		report, err := companion.Pending(ctx, reader, mappings, companion.PendingOptions{
+			SourceAccount: account, TargetAccount: targetAccount, Days: days,
+			IncludePrivate: includePrivate, IncludeImported: includeImported, Now: time.Now(),
+		})
+		if err != nil {
+			return err
+		}
+		if err := encoder.Encode(report); err != nil {
+			return err
+		}
+		if !report.Complete {
+			return fmt.Errorf("pending worklist incomplete; see JSON issue codes")
+		}
+		return nil
 	}
 	if command == "search" {
 		result, err := reader.Search(ctx, title)

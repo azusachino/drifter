@@ -16,7 +16,18 @@ import (
 	"github.com/azusachino/drifter/internal/companion"
 )
 
-type fakeReader struct{ calls []string }
+type fakeReader struct {
+	calls []string
+	shelf *companion.ShelfResult
+}
+
+func (f *fakeReader) Shelf(_ context.Context) (companion.ShelfResult, error) {
+	f.calls = append(f.calls, "shelf")
+	if f.shelf != nil {
+		return *f.shelf, nil
+	}
+	return companion.ShelfResult{Books: []companion.ShelfBook{}, Complete: true}, nil
+}
 
 func (f *fakeReader) Search(_ context.Context, title string) (companion.SearchResult, error) {
 	f.calls = append(f.calls, "search:"+title)
@@ -24,7 +35,7 @@ func (f *fakeReader) Search(_ context.Context, title string) (companion.SearchRe
 }
 func (f *fakeReader) Book(_ context.Context, id string) (companion.Book, error) {
 	f.calls = append(f.calls, "book:"+id)
-	return companion.Book{ID: id, Title: "Synthetic book", ISBN: "9780306406157"}, nil
+	return companion.Book{ID: id, Title: "Synthetic book", ISBN: "9780306406157", TranslatorKnown: true}, nil
 }
 func (f *fakeReader) Progress(_ context.Context, id string) (companion.Progress, error) {
 	f.calls = append(f.calls, "progress:"+id)

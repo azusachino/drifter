@@ -81,6 +81,7 @@ bin/drifter inspect --book-id 123
 bin/drifter inspect --book-id 123 --progress
 bin/drifter match --book-id 123
 bin/drifter match --book-id 123 --query 'Original-language title'
+bin/drifter pending --account my-weread --target-account my-hardcover
 ```
 
 IDs above are placeholders, not sample account records. Output is JSON. Search
@@ -100,6 +101,40 @@ lists show at most ten editions each. Exact ISBN lookup is capped at 100 rows.
 These bounded views do not prove that an absent title/edition is missing from
 the whole catalog. Every result requires owner confirmation. No catalog
 enrichment or automatic English-edition substitution is attempted.
+
+## Pending matching worklist
+
+`pending` lists recently opened **ebooks**, not albums, article collections or
+proof that you are actively reading. It needs only `WEREAD_API_KEY`; it makes no
+Hardcover calls and creates no mapping. Account labels and optional `--db PATH`
+select the same mapping namespace as `link`. A mapping for another source or
+target account does not hide a book.
+
+The default window is 90 elapsed 24-hour days, with an inclusive cutoff and
+newest-first ordering (book ID breaks ties). Use `--days N` from 1 through 36500.
+Books with no opening activity are omitted; missing, negative or future activity
+is reported as an issue, not guessed. Private books are excluded **before**
+metadata lookup or output unless `--include-private` is supplied. Missing or
+invalid privacy always stays excluded, including with that flag.
+
+Rows are `translated` when book-info explicitly names a translator, or `native`
+when that field is explicitly empty. Missing translator evidence is reported,
+not silently classified as native. Imported `CB_` books are excluded by default;
+`--include-imported` shows them as `imported` using shelf metadata only. They
+remain unsupported by `match` and `link`; this flag is inspection, not matching
+approval. JSON containing opted-in private metadata must be protected by you.
+
+Output has `books`, `complete` and privacy-safe `issues` (book IDs and fixed
+codes, never provider error bodies). Shelf count mismatch/missing count or a
+more-results flag prevents claiming completeness. Eligible metadata lookups are
+capped at 100 books per invocation. A lookup failure leaves other valid books in
+the output; narrowing the window or confirming mappings makes reruns useful.
+Incomplete output exits nonzero so a partial list cannot look like success.
+Shelf facts, progress and raw responses are never persisted. Opening the local
+mapping database may initialize or migrate it as documented below.
+
+Saved review decisions, external hints and interactive review are subsequent
+issue #7 slices; this command does not yet filter decisions or synchronize status.
 
 ## Confirm local mappings
 

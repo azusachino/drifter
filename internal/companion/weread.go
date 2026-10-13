@@ -19,7 +19,7 @@ func NewWeRead(token string) (*WeRead, error) {
 func (w *WeRead) call(ctx context.Context, name string, args map[string]any, target any) error {
 	// Only explicit read operations exist; there is no generic exported gateway.
 	switch name {
-	case "/store/search", "/book/info", "/book/getprogress":
+	case "/store/search", "/book/info", "/book/getprogress", "/shelf/sync":
 	default:
 		return fmt.Errorf("unsupported WeRead operation")
 	}
@@ -93,13 +93,13 @@ func (w *WeRead) Book(ctx context.Context, id string) (Book, error) {
 		return Book{}, fmt.Errorf("invalid WeRead book ID")
 	}
 	var row struct {
-		ID         string `json:"bookId"`
-		Title      string `json:"title"`
-		Author     string `json:"author"`
-		Translator string `json:"translator"`
-		ISBN       string `json:"isbn"`
-		Publisher  string `json:"publisher"`
-		URL        string `json:"readerLink"`
+		ID         string  `json:"bookId"`
+		Title      string  `json:"title"`
+		Author     string  `json:"author"`
+		Translator *string `json:"translator"`
+		ISBN       string  `json:"isbn"`
+		Publisher  string  `json:"publisher"`
+		URL        string  `json:"readerLink"`
 	}
 	if err := w.call(ctx, "/book/info", map[string]any{"bookId": id}, &row); err != nil {
 		return Book{}, err
@@ -107,7 +107,11 @@ func (w *WeRead) Book(ctx context.Context, id string) (Book, error) {
 	if row.ID != id || row.Title == "" {
 		return Book{}, fmt.Errorf("WeRead book identity missing or differs from request")
 	}
-	return Book{ID: row.ID, Title: row.Title, Author: row.Author, Translator: row.Translator, ISBN: row.ISBN, Publisher: row.Publisher, ReaderURL: row.URL}, nil
+	book := Book{ID: row.ID, Title: row.Title, Author: row.Author, ISBN: row.ISBN, Publisher: row.Publisher, ReaderURL: row.URL}
+	if row.Translator != nil {
+		book.Translator, book.TranslatorKnown = *row.Translator, true
+	}
+	return book, nil
 }
 
 func (w *WeRead) Progress(ctx context.Context, id string) (Progress, error) {
