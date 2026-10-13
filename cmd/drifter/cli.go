@@ -14,17 +14,9 @@ import (
 	"github.com/azusachino/drifter/internal/companion"
 )
 
-type source interface {
-	Shelf(context.Context) (companion.ShelfResult, error)
-	Search(context.Context, string) (companion.SearchResult, error)
-	Book(context.Context, string) (companion.Book, error)
-	Progress(context.Context, string) (companion.Progress, error)
-}
-
-type target interface {
-	Match(context.Context, companion.Book, string) (companion.MatchReport, error)
-	ValidateLink(context.Context, int64, int64) error
-}
+// Aliases keep credential factories local while core owns provider contracts.
+type source = companion.Source
+type target = companion.Target
 
 type clients struct {
 	source func() (source, error)
@@ -186,16 +178,7 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 		return err
 	}
 	if command == "pending" {
-		store, err := companion.OpenStore(dbPath)
-		if err != nil {
-			return err
-		}
-		defer store.Close()
-		mappings, err := store.List(ctx)
-		if err != nil {
-			return err
-		}
-		report, err := companion.Pending(ctx, reader, mappings, companion.PendingOptions{
+		report, err := companion.PendingWorklist(ctx, reader, dbPath, companion.PendingOptions{
 			SourceAccount: account, TargetAccount: targetAccount, Days: days,
 			IncludePrivate: includePrivate, IncludeImported: includeImported, Now: time.Now(),
 		})
@@ -224,47 +207,28 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 			return err
 		}
 	}
-	book, err := reader.Book(ctx, bookID)
-	if err != nil {
-		return err
-	}
 	switch command {
 	case "inspect":
-		result := struct {
-			Book     companion.Book      `json:"book"`
-			Progress *companion.Progress `json:"progress,omitempty"`
-		}{Book: book}
-		if progress {
-			p, err := reader.Progress(ctx, bookID)
-			if err != nil {
-				return err
-			}
-			result.Progress = &p
+		result, err := companion.Inspect(ctx, reader, bookID, progress)
+		if err != nil {
+			return err
 		}
 		return encoder.Encode(result)
 	case "match":
-		report, err := catalog.Match(ctx, book, query)
+		report, err := companion.Match(ctx, reader, catalog, bookID, query)
 		if err != nil {
 			return err
 		}
 		return encoder.Encode(report)
 	case "link":
-		if err := catalog.ValidateLink(ctx, workID, editionID); err != nil {
-			return err
-		}
-		store, err := companion.OpenStore(dbPath)
-		if err != nil {
-			return err
-		}
-		defer store.Close()
 		mapping := companion.Mapping{Provider: "weread", SourceAccount: account,
-			BookID: book.ID, TargetAccount: targetAccount, WorkID: workID,
-			EditionID: editionID, SourceTitle: book.Title, SourceISBN: book.ISBN}
-		if err := store.Confirm(ctx, mapping, replace); err != nil {
+			BookID: bookID, TargetAccount: targetAccount, WorkID: workID,
+			EditionID: editionID}
+		if err := companion.ConfirmLink(ctx, reader, catalog, dbPath, mapping, replace); err != nil {
 			return err
 		}
 		return encoder.Encode(map[string]any{"confirmed_local_mapping": true,
-			"book_id": book.ID, "work_id": workID, "edition_id": editionID})
+			"book_id": bookID, "work_id": workID, "edition_id": editionID})
 	}
 	return fmt.Errorf("unsupported command")
 }
