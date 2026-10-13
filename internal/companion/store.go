@@ -72,16 +72,52 @@ func OpenStore(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS mappings (
-		provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
-		target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
-		edition_id INTEGER NOT NULL CHECK(edition_id >= 0), source_title TEXT NOT NULL, source_isbn TEXT NOT NULL,
-		PRIMARY KEY(provider, source_account, book_id, target_account))`)
-	if err != nil {
+	if err := migrateStore(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("cannot initialize mapping database: %w", err)
 	}
 	return &Store{db}, nil
+}
+
+const storeVersion = 1
+
+func migrateStore(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var version int
+	if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if version < 0 || version > storeVersion {
+		return fmt.Errorf("unsupported database schema version %d (supported: %d)", version, storeVersion)
+	}
+	if version == 0 {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS mappings (
+			provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+			target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+			edition_id INTEGER NOT NULL CHECK(edition_id >= 0), source_title TEXT NOT NULL, source_isbn TEXT NOT NULL,
+			PRIMARY KEY(provider, source_account, book_id, target_account))`); err != nil {
+			return err
+		}
+	}
+	// Check required columns without reading or rewriting personal metadata.
+	rows, err := tx.Query(`SELECT provider,source_account,book_id,target_account,
+		work_id,edition_id,source_title,source_isbn FROM mappings LIMIT 0`)
+	if err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if version == 0 {
+		if _, err := tx.Exec("PRAGMA user_version = 1"); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) Close() error { return s.db.Close() }

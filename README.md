@@ -150,6 +150,13 @@ them out of Git and public artifacts. Raw provider responses, personal progress,
 excerpts, device identifiers and tokens are not stored. JSON progress output is
 still personal data; protect redirected output yourself.
 
+The database uses SQLite `PRAGMA user_version` (currently version 1). Opening
+an unversioned database from the first release upgrades it transactionally,
+without rewriting mappings. Unsupported versions and missing required mapping
+columns are refused; a failed upgrade does not advance the version. Do not
+manually lower the version or use an older binary against newer state. Back up
+privately before upgrading; schema versioning is not a downgrade mechanism.
+
 Mappings remain until explicitly unlinked. SQLite secure-delete is enabled, but
 backups and filesystem recovery are not erased by unlink. Back up the database
 only through a private, SQLite-consistent backup procedure. Do not copy only the
