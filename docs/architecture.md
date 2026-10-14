@@ -9,7 +9,7 @@ writes, daemon scheduling, deployment) is labeled as planned, not built.
 
 | Component | Location | Responsibility |
 | --- | --- | --- |
-| CLI | `cmd/drifter` | Argument parsing, command routing, JSON output, wiring config/logging/probes |
+| CLI | `cmd/drifter` | Argument parsing, command routing, JSON output, wiring config/logging/probes/admin server |
 | Core operations | `internal/companion/operations.go` | Provider contracts and shared inspect, match, validated confirmation and stored-mapping worklist orchestration |
 | Worklist selection | `internal/companion/pending.go` | Privacy/activity/account filtering, bounded enrichment, classification and partial-result reporting |
 | Source client (WeRead) | `internal/companion/weread.go` | Read-only gateway calls: shelf, search, book info, personal progress |
@@ -20,6 +20,7 @@ writes, daemon scheduling, deployment) is labeled as planned, not built.
 | Configuration | `internal/config` | Settings-only TOML: full validation at load, unknown keys rejected, credential-like keys refused, restart-applied |
 | Logging | `internal/logging` | stdlib `slog` JSON to stdout, level from config, random run IDs, no payloads or secrets |
 | Health probes | `internal/probes` | Read-only `/healthz` and `/readyz` over stdlib `net/http`; local dependency checks only |
+| Admin HTTP adapter | `internal/admin` | Foreground lifecycle, same-origin/Host boundary, rendered explicit mapping maintenance, read-only mapping/pending routes and core-owned writes |
 
 ## Core and adapter responsibilities
 
@@ -90,16 +91,33 @@ only on explicit request and never persisted.
   the process environment and are sent as bearer headers to fixed HTTPS
   destinations.
 
-## Configuration and probes
+## Configuration, probes and admin server
 
-`config.toml` holds settings only (log level, probe address, optional database
-path). Load is total: missing file → defaults; unknown key, bad value or
-credential-like key → error. Callers apply configuration at startup; the
-confirmed direction is restart-only, so a running process's behavior cannot
-change underneath it. `serve-probes` exposes honest liveness/readiness for a
-future container Deployment: `/readyz` opens and lists the mapping database
-per request, and optionally requires provider environment variables to be
-present (without contacting providers).
+`config.toml` holds settings only (log level, probe address, server listener
+address, optional database path). Load is total: missing file → defaults;
+unknown key, bad value or credential-like key → error. Callers apply
+configuration at startup; the confirmed direction is restart-only. `serve-probes`
+remains a separate health-only process. `serve` establishes the first slice of
+the same intended long-running daemon server foundation, delivered
+incrementally. It serves `/healthz`, `/readyz`, the server-rendered `/admin`,
+read-only mapping/pending JSON, and explicit local mapping confirmation,
+replacement and unlink routes. Confirmation delegates to `ConfirmLinkOwned`,
+which validates the source book and selected target work/edition before storing;
+there is no inferred candidate acceptance. Shared source and target provider
+clients are lazy, so page rendering and mapping reads require no credentials or
+provider calls. Pending calls occur only on explicit request through
+`companion.PendingWorklist`. JSON writes require bounded strict
+`application/json`, same-origin Origin, Host allowlisting and a process-random
+CSRF token. Native forms use separate bounded URL-encoded routes and same-origin
+checks. Responses are no-store, nosniff and protected from framing by CSP and
+frame headers. No CORS is enabled; unauthenticated non-loopback exposure is not
+an authenticated deployment model. The default listener is loopback.
+
+The server holds the core SQLite ownership lease through shutdown; ordinary
+store writes check the same lock. Read-only CLI opens fall back to a
+current-schema SQLite read-only handle while that lease is held and never
+migrate under it. Synchronization and provider-status writes are not
+implemented.
 
 ## Development tooling
 
@@ -125,8 +143,7 @@ choice, with the trigger that would justify revisiting.
 
 ## Planned, not implemented
 
-Status synchronization, the persistent daemon, per-book holds/resolution,
-Telegram notifications and k3s deployment follow the owner-confirmed
-direction in the [implementation plan](plans/read-only-matching.md). Their
-acceptance criteria live in their own future issues; nothing in this
-repository performs a provider write.
+The incremental server work and acceptance boundaries are recorded in the
+[daemon-admin plan](plans/daemon-admin.md). Status synchronization, per-book
+holds/resolution, Telegram notifications and k3s deployment remain future work;
+nothing in this repository performs a provider status write.

@@ -35,7 +35,7 @@ func serveProbes(ctx context.Context, configPath, dbPath string, requireProvider
 	ready := []probes.Readiness{{
 		Name: "mapping_database",
 		Check: func(*http.Request) error {
-			store, err := companion.OpenStore(dbPath)
+			store, err := companion.OpenStoreForRead(dbPath)
 			if err != nil {
 				return err
 			}

@@ -5,8 +5,10 @@ Hardcover**. Hardcover → Iroha remains an independent Iroha integration.
 
 Today Drifter inspects WeRead books, lists recent unmapped ebooks, proposes
 Hardcover candidates and stores explicitly confirmed local mappings. Provider
-operations are read-only. Status sync, Kindle Unlimited intake, interactive
-review, a persistent daemon and deployment are not implemented.
+operations never write remote status. A foreground local admin server
+exposes mappings, explicitly requested pending data, and explicit local mapping
+confirm/replace/unlink actions. Status sync, Kindle Unlimited intake and
+deployment are not implemented.
 
 ## Quick start
 

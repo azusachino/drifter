@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -282,6 +285,119 @@ func (w *syncWriter) String() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.buf.String()
+}
+
+const writerSubprocessEnv = "DRIFTER_CLI_WRITER_HELPER"
+
+func TestCLIWriterSubprocessHelper(t *testing.T) {
+	mode := os.Getenv(writerSubprocessEnv)
+	if mode == "" {
+		return
+	}
+	path := os.Getenv("DRIFTER_CLI_WRITER_DB")
+	args := []string{"--db", path}
+	switch mode {
+	case "link":
+		args = append([]string{"link", "--book-id", "123", "--work-id", "42", "--account", "source", "--target-account", "target"}, args...)
+	case "unlink":
+		args = append([]string{"unlink", "--book-id", "123", "--account", "source", "--target-account", "target"}, args...)
+	default:
+		t.Fatalf("unknown CLI helper mode %q", mode)
+	}
+	reader := &fakeReader{}
+	var out, stderr bytes.Buffer
+	err := run(context.Background(), args, &out, &stderr, fakeClients(reader, &fakeCatalog{}))
+	if err == nil {
+		t.Fatal("CLI mutation unexpectedly succeeded")
+	}
+	if mode == "link" && len(reader.calls) != 0 {
+		t.Fatalf("link contacted provider before ownership refusal: %v", reader.calls)
+	}
+	_, _ = fmt.Fprintln(os.Stdout, err.Error())
+}
+
+func TestCLIWritersRefuseDaemonOwnershipAndReadsRemainAvailable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mappings.sqlite")
+	owner, err := companion.AcquireDatabaseOwnership(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	store, err := companion.OpenOwnedStore(path, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping := companion.Mapping{Provider: "weread", SourceAccount: "source", BookID: "123", TargetAccount: "target", WorkID: 42}
+	if err := store.Confirm(context.Background(), mapping, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"link", "unlink"} {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestCLIWriterSubprocessHelper$")
+		cmd.Env = append(os.Environ(), writerSubprocessEnv+"="+mode, "DRIFTER_CLI_WRITER_DB="+path)
+		output, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(output), "mapping database is owned or write-locked") {
+			t.Fatalf("%s subprocess was not clearly refused: %q %v", mode, output, err)
+		}
+	}
+	var out, stderr bytes.Buffer
+	if err := run(context.Background(), []string{"links", "--db", path}, &out, &stderr, clients{}); err != nil {
+		t.Fatalf("read-only links failed during ownership: %v", err)
+	}
+	var rows []companion.Mapping
+	if err := json.Unmarshal(out.Bytes(), &rows); err != nil || len(rows) != 1 || rows[0].WorkID != 42 {
+		t.Fatalf("owned-state read: rows=%+v err=%v", rows, err)
+	}
+}
+
+func TestCLIServeAdminWiringAndCancellation(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("[server]\naddr = \"127.0.0.1:0\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var raw bytes.Buffer
+	out := &syncWriter{mu: &sync.Mutex{}, buf: &raw}
+	var stderr bytes.Buffer
+	reader := &fakeReader{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx, []string{"serve", "--config", configPath, "--db", filepath.Join(dir, "mappings.sqlite")}, out, &stderr, fakeClients(reader, &fakeCatalog{}))
+	}()
+	var record struct {
+		Addr    string `json:"addr"`
+		Message string `json:"msg"`
+	}
+	for i := 0; i < 200; i++ {
+		for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+			_ = json.Unmarshal([]byte(line), &record)
+		}
+		if record.Message == "admin server starting" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if record.Message != "admin server starting" || !strings.HasPrefix(record.Addr, "127.0.0.1:") {
+		cancel()
+		t.Fatalf("admin server startup log missing: %s", out.String())
+	}
+	response, err := http.Get("http://" + record.Addr + "/healthz")
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || len(reader.calls) != 0 {
+		cancel()
+		t.Fatalf("health status=%d provider calls=%v", response.StatusCode, reader.calls)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("serve did not stop cleanly: %v", err)
+	}
 }
 
 func TestCLIServeProbesRejectsInvalidConfig(t *testing.T) {

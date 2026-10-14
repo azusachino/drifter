@@ -38,6 +38,9 @@ type Config struct {
 		Enabled bool   `toml:"enabled"`
 		Addr    string `toml:"addr"`
 	} `toml:"probes"`
+	Server struct {
+		Addr string `toml:"addr"`
+	} `toml:"server"`
 	Database struct {
 		// Path overrides the CLI default mapping database location.
 		Path string `toml:"path"`
@@ -50,6 +53,7 @@ func Defaults() Config {
 	c.Log.Level = LevelInfo
 	c.Probes.Enabled = false
 	c.Probes.Addr = "127.0.0.1:8080"
+	c.Server.Addr = "127.0.0.1:8081"
 	return c
 }
 
@@ -109,18 +113,33 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+func validateAddress(name, address string) error {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || port == "" {
+		return fmt.Errorf("%s must be host:port", name)
+	}
+	if strings.ContainsAny(host, "/\\\\@?#") {
+		return fmt.Errorf("%s must be a listener address", name)
+	}
+	return nil
+}
+
 func (c Config) validate() error {
 	switch c.Log.Level {
 	case LevelDebug, LevelInfo, LevelWarn, LevelError:
 	default:
 		return fmt.Errorf("log.level must be one of debug, info, warn, error")
 	}
-	if c.Probes.Addr == "" {
-		return fmt.Errorf("probes.addr must not be empty when configuration is provided")
+	if err := validateAddress("probes.addr", c.Probes.Addr); err != nil {
+		return err
 	}
-	host, port, err := net.SplitHostPort(c.Probes.Addr)
-	if err != nil || host == "" || port == "" {
-		return fmt.Errorf("probes.addr must be host:port")
+	if err := validateAddress("server.addr", c.Server.Addr); err != nil {
+		return err
+	}
+	serverHost, _, _ := net.SplitHostPort(c.Server.Addr)
+	serverIP := net.ParseIP(serverHost)
+	if serverHost == "" || serverHost == "*" || (serverIP != nil && serverIP.IsUnspecified()) {
+		return fmt.Errorf("server.addr must name a concrete listener host for Host validation")
 	}
 	if strings.TrimSpace(c.Database.Path) != "" && !filepath.IsAbs(c.Database.Path) {
 		return fmt.Errorf("database.path must be absolute")

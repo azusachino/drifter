@@ -1,7 +1,7 @@
 GO = mise exec -- go
 GOFMT = mise exec -- gofmt
 
-.PHONY: check fmt fmt-check test build
+.PHONY: check fmt fmt-check test build e2e e2e-install
 
 check: fmt-check
 	$(GO) vet ./...
@@ -21,3 +21,13 @@ test:
 build:
 	mkdir -p bin
 	$(GO) build -o bin/drifter ./cmd/drifter
+
+e2e:
+	mise exec -- npm run e2e
+
+e2e-probe:
+	E2E_PROBE=1 E2E_PROBE_ROUTE="$(ROUTE)" mise exec -- npm run e2e
+
+e2e-install:
+	mise exec -- npm install
+	mise exec -- npm run e2e:install

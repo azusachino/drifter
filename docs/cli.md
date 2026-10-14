@@ -3,11 +3,13 @@
 A headless reading-status companion: **WeRead / Kindle Unlimited → Drifter →
 Hardcover**. Hardcover → Iroha remains an independent Iroha integration.
 
-This first slice is **remote-read-only**: inspect WeRead books/progress,
-discover Hardcover candidates, and explicitly confirm local identity mappings.
-It does not synchronize statuses, import/create catalog entries or infer fuzzy
-matches. KU intake, a persistent daemon and deployment are not yet implemented.
-Settings-only TOML and read-only health probes are available.
+Provider operations are **read-only**: inspect WeRead books/progress and
+validate explicitly selected Hardcover identities. Local mappings can be
+confirmed, replaced and unlinked with CLI commands or the foreground `serve`
+admin UI/JSON API. No provider status writes occur. The server does not
+synchronize statuses, import catalog entries or infer fuzzy matches. KU intake
+and deployment are not implemented. Settings-only TOML and standalone health
+probes remain available.
 
 ## Build and check
 
@@ -19,6 +21,9 @@ Requires Make, CGO enabled and a C compiler. SQLite uses the pinned
 make check
 make build
 bin/drifter help
+make e2e-install  # once, for the admin browser check
+make e2e-probe ROUTE=/admin  # inspect the rendered page
+make e2e
 ```
 
 `make check` verifies Go formatting, runs vet and race-enabled offline tests,
@@ -52,7 +57,10 @@ level = "info"        # debug | info | warn | error
 
 [probes]
 enabled = true
-addr = "127.0.0.1:8080"  # host:port for the read-only health endpoint
+addr = "127.0.0.1:8080"  # standalone read-only health endpoint
+
+[server]
+addr = "127.0.0.1:8081"  # local admin HTTP listener; loopback by default
 
 [database]
 # path = "/var/lib/drifter/mappings.sqlite"  # optional absolute override
@@ -62,17 +70,65 @@ Credential-like keys (`api_key`, `token`, `secret`, `password`, `credential`)
 are rejected outright; unknown keys fail validation so typos cannot silently
 disable behavior. A missing file yields built-in defaults.
 
-### Health probes (read-only)
+### Health probes and admin server
+
+The standalone health-only process remains available:
 
 ```sh
 bin/drifter serve-probes --config config.toml [--db PATH] [--require-providers]
 ```
 
-Serves `/healthz` (process alive) and `/readyz` (mapping database opens and
-lists; with `--require-providers`, also reports unready when environment
-credentials are absent). It makes no provider network calls and performs no
-synchronization; it exists so a future container/Deployment has honest
-liveness/readiness targets.
+It serves `/healthz` and `/readyz` without provider network calls or synchronization.
+The foreground `serve` command establishes the first slice of the same intended
+long-running daemon server foundation, delivered incrementally; it is not a
+separate server product. Synchronization is not implemented:
+
+```sh
+bin/drifter serve --config config.toml [--db PATH]
+```
+
+`serve` uses `server.addr` (default `127.0.0.1:8081`), provides the same health
+routes, server-rendered `/admin`, read-only `/api/mappings` and
+`/api/pending?account=LABEL&target_account=LABEL[&days=N]`, and explicit local
+mapping maintenance. New confirmations use `ConfirmLinkOwned`, including source
+book lookup and target work/edition membership validation. The HTML form and
+JSON routes support separate confirm, replace and scoped unlink actions; neither
+accepts inferred matches. Work-only (`edition_id: 0` in JSON) and an explicit
+edition choice remain separate selections. `/api/mappings/confirm` and
+`/api/mappings/replace` require POST; `/api/mappings/unlink` requires DELETE.
+JSON writes require `application/json`, a bounded strictly decoded body, same-
+origin Origin, Host allowlisting and the server's per-process CSRF token. This
+token prevents cross-site requests; it is not authentication. Obtain it from
+the protected `/api/csrf`
+response or the `/admin` page's
+`drifter-csrf-token` meta value; send it as `X-Drifter-CSRF`. Confirm and replace
+POST JSON fields `source_account`, `book_id`, `target_account`, `work_id` and
+`edition_id` to `/api/mappings/confirm` or `/api/mappings/replace`. `edition_id`
+is required: use `0` only for a deliberate work-only mapping, or the selected
+positive edition ID. Unlink with DELETE `/api/mappings/unlink` and JSON fields
+`source_account`, `book_id` and `target_account`. Native form posts use separate
+bounded URL-encoded routes with the same Origin/Host and hidden-token checks.
+GET/HEAD never mutate, no CORS is enabled, and invalid/provider errors do not
+disclose raw details.
+
+It can start without provider credentials for local mapping listing; WeRead and
+Hardcover credentials are needed only when a user explicitly confirms/replaces
+a mapping, and WeRead credentials are needed for an explicit pending request.
+Pending calls use the existing core worklist operation. `/admin` and mapping
+listing do not call providers. Requests are bounded, Host is checked against
+the configured listener, and cross-site browser Origin/Fetch Metadata requests
+are rejected. No CORS is enabled. Keep the listener on loopback unless an
+explicit configuration opts into another concrete host; wildcard listeners
+are rejected because they cannot define the Host allowlist. Exposing
+unauthenticated HTTP beyond the trusted local host is not an authenticated
+deployment model.
+The server takes exclusive ownership of its SQLite state before initialization
+and keeps it until shutdown. While it runs, standalone `link` and `unlink`
+refuse with an ownership error; `links` and pending reads may use the existing
+current schema read-only. If that schema needs migration, a reader fails rather
+than migrating under the owner. HTTP mapping maintenance uses the same owned
+capability; standalone `link` and `unlink` remain refused while `serve` owns the
+state.
 
 ## Inspect and match
 
@@ -176,13 +232,19 @@ Default database:
 
 Use `--db PATH` on `link`, `links` or `unlink` to override it. Local listing may
 initialize an empty database. New application directories are mode 700 and the
-database must be a regular, non-symlink mode-600 file. Its immediate parent must
+database must be a regular, non-symlink mode-600 file. The daemon also leaves a
+mode-600 `.owner.lock` sidecar; the kernel releases its lock on process exit,
+but do not remove the file while Drifter is running. Parent-directory symlink
+aliases resolve to the same sidecar, and hard-linked database files are
+rejected. The database's immediate parent must
 not be writable by other users. Keep the state directory under your control;
 these checks do not protect against a hostile process running as you.
 
 Persisted fields are source/provider account namespaces, source book ID,
 confirmed target IDs, source title and ISBN. These are personal metadata: keep
-them out of Git and public artifacts. Raw provider responses, personal progress,
+them out of Git and public artifacts. The admin mapping JSON route exposes the
+same saved fields and must be protected like the local database. Raw provider
+responses, personal progress,
 excerpts, device identifiers and tokens are not stored. JSON progress output is
 still personal data; protect redirected output yourself.
 
