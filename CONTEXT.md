@@ -34,6 +34,13 @@ _Avoid_: Work used interchangeably with edition
 and a target work, optionally including an edition. A mapping does not grant
 status authority. _Avoid_: Automatic match, write approval
 
+**Local HTTP server and mapping interface**:
+The foreground `serve` process provides a local browser interface and HTTP API
+for reading or explicitly maintaining confirmed mappings. It is an adapter over
+the same core and SQLite state as the CLI, not a separate administrator role or
+an authority to write provider status.
+_Avoid_: Admin service, status-sync daemon
+
 **Pending source book**:
 An eligible recently opened source book with neither a mapping nor a suppressing
 review decision for the selected source and target accounts.

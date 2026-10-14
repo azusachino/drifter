@@ -41,8 +41,8 @@ Explicit local mappings (never remote status writes):
 
 Use COMMAND -h for flags. Credentials come from WEREAD_API_KEY and
 HARDCOVER_API_KEY; local links/unlink need neither. serve-probes remains a
-standalone health endpoint. serve starts the local administration server;
-synchronization and provider-status writes are not implemented there.
+standalone health endpoint. serve starts the local HTTP server and its mapping
+interface; synchronization and provider-status writes are not implemented.
 `
 
 func defaultDB() (string, error) {
@@ -162,7 +162,7 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 		return serveProbes(ctx, configPath, dbPath, requireProviders, out)
 	}
 	if command == "serve" {
-		return serveAdmin(ctx, configPath, dbPath, out, providers)
+		return serveHTTPServer(ctx, configPath, dbPath, out, providers)
 	}
 	if command == "link" {
 		if err := companion.CheckDatabaseWriteAvailable(dbPath); err != nil {

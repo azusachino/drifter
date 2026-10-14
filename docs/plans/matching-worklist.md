@@ -13,7 +13,7 @@ historical; it is not overwritten.
 
 Matching hints are search inputs. Only explicit owner selection may create a
 local mapping. No LLM calls, new credentials, automatic linking, remote status
-writes, catalog creation, daemon/admin work (#6), deployment or whole-backlog
+writes, catalog creation, HTTP server work (#6), deployment or whole-backlog
 bootstrap enters this scope. No agent reviewer or coordination service is
 needed for this planning pass. Pi-subagents may be used if agent review is
 actually needed; no delegation has occurred. Continue in this session on this

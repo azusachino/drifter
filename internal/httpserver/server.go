@@ -1,12 +1,12 @@
-// Package admin provides Drifter's local HTTP mapping adapter.
-package admin
+// Package httpserver provides Drifter's local HTTP mapping server and mapping interface.
+package httpserver
 
 import (
 	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
-	_ "embed"
+	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -32,72 +32,16 @@ const maxRequestBody = 8 << 10
 
 var errProviderUnavailable = errors.New("provider unavailable")
 
-//go:embed admin.js
-var adminScript string
+//go:embed templates/*.html
+var htmlTemplates embed.FS
 
-type adminPageData struct {
+type pageData struct {
 	Mappings []companion.Mapping
 	Token    string
 	Notice   string
 }
 
-var page = template.Must(template.New("admin").Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<meta name="drifter-csrf-token" content="{{.Token}}">
-<title>Drifter administration</title><script src="/admin.js" defer></script><style>
-:root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
-body { margin: 0; background: #f4f6f8; color: #18212b; }
-main { max-width: 52rem; margin: 3rem auto; padding: 2rem; background: white; border: 1px solid #d8dee5; border-radius: .8rem; }
-h1 { margin-top: 0; } section { border-top: 1px solid #d8dee5; margin-top: 1.5rem; padding-top: 1rem; }
-form { display: flex; flex-wrap: wrap; align-items: end; gap: 1rem; margin: .8rem 0; }
-label { display: grid; gap: .3rem; } input, button { font: inherit; padding: .5rem; }
-button { border: 0; border-radius: .35rem; background: #155eef; color: white; cursor: pointer; }
-button.secondary { background: #465467; } button.danger { background: #a21d2a; }
-.note { color: #4b5563; } .notice { padding: .7rem; border: 1px solid #39734a; border-radius: .4rem; }
-.mapping { border-top: 1px solid #d8dee5; padding: 1rem 0; } fieldset { display: flex; gap: 1rem; }
-fieldset label { display: inline-flex; align-items: center; }
-@media (prefers-color-scheme: dark) { body { background: #101820; color: #e7edf3; } main { background: #18212b; border-color: #394653; } section, .mapping { border-color: #394653; } .note { color: #b5c0ca; } }
-</style></head><body><main>
-<h1>Drifter administration</h1>
-<p class="note">Local mapping maintenance. Provider status is never written; pending requests are explicit.</p>
-<p id="mutation-status" class="notice" role="status" aria-live="polite" tabindex="-1">{{.Notice}}</p>
-<section><h2>Confirmed mappings</h2><p><a href="/api/mappings">View mappings as JSON</a></p>
-{{if .Mappings}}<ul>{{range .Mappings}}<li class="mapping" aria-label="Mapping for book {{.BookID}}">
-<p><strong>{{.SourceTitle}}</strong> (source book {{.BookID}}) — {{.SourceAccount}} to {{.TargetAccount}}; work {{.WorkID}}{{if .EditionID}}, edition {{.EditionID}}{{else}}, work only{{end}}</p>
-<details><summary>Replace mapping for book {{.BookID}}</summary>
-<form aria-label="Replace mapping for book {{.BookID}}" data-mapping-action="replace" action="/admin/mappings/replace" method="post">
-<input type="hidden" name="csrf_token" value="{{$.Token}}">
-<input type="hidden" name="source_account" value="{{.SourceAccount}}"><input type="hidden" name="book_id" value="{{.BookID}}"><input type="hidden" name="target_account" value="{{.TargetAccount}}">
-<label>New target work ID <input name="work_id" type="number" min="1" required></label>
-<fieldset><legend>Target identity</legend>
-<label><input name="edition_mode" type="radio" value="work_only" required> Work only</label>
-<label><input name="edition_mode" type="radio" value="edition" required> Specific edition</label></fieldset>
-<label>Edition ID (required for a specific edition) <input name="edition_id" type="number" min="1"></label>
-<button type="submit">Replace mapping</button></form></details>
-<details><summary>Unlink mapping for book {{.BookID}}</summary>
-<form aria-label="Unlink mapping for book {{.BookID}}" data-mapping-action="unlink" action="/admin/mappings/unlink" method="post">
-<input type="hidden" name="csrf_token" value="{{$.Token}}"><input type="hidden" name="source_account" value="{{.SourceAccount}}"><input type="hidden" name="book_id" value="{{.BookID}}"><input type="hidden" name="target_account" value="{{.TargetAccount}}">
-<button class="danger" type="submit">Unlink this mapping</button></form></details>
-</li>{{end}}</ul>{{else}}<p>No mappings are saved.</p>{{end}}</section>
-<section><h2>Confirm a mapping</h2><form aria-label="Confirm a mapping" data-mapping-action="confirm" action="/admin/mappings/confirm" method="post">
-<input type="hidden" name="csrf_token" value="{{.Token}}">
-<label>Source account <input name="source_account" required maxlength="64"></label>
-<label>Source book ID <input name="book_id" required inputmode="numeric"></label>
-<label>Target account <input name="target_account" required maxlength="64"></label>
-<label>Target work ID <input name="work_id" type="number" min="1" required></label>
-<fieldset><legend>Target identity</legend>
-<label><input name="edition_mode" type="radio" value="work_only" required> Work only</label>
-<label><input name="edition_mode" type="radio" value="edition" required> Specific edition</label></fieldset>
-<label>Edition ID (required for a specific edition) <input name="edition_id" type="number" min="1"></label>
-<button type="submit">Confirm mapping</button></form>
-<p class="note">IDs are manually selected. Confirming fetches source metadata and validates target work/edition membership; no candidate is accepted automatically.</p></section>
-<section><h2>Pending worklist</h2><form action="/api/pending" method="get">
-<label>Source account <input name="account" required maxlength="64"></label>
-<label>Target account <input name="target_account" required maxlength="64"></label>
-<label>Days <input name="days" type="number" min="1" max="36500" value="90"></label>
-<button class="secondary" type="submit">Request pending books</button></form>
-<p class="note">Submitting explicitly requests WeRead shelf and book metadata. This page makes no provider calls.</p></section>
-</main></body></html>`))
+var page = template.Must(template.ParseFS(htmlTemplates, "templates/index.html"))
 
 // Server owns an HTTP listener and the shared core dependencies used by routes.
 type Server struct {
@@ -163,17 +107,16 @@ func New(options Options) (*Server, error) {
 		path := path
 		mux.Handle(path, probesHandler(path, ready, options.Logger))
 	}
-	mux.HandleFunc("/admin", s.handleAdmin)
-	mux.HandleFunc("/admin.js", s.handleAdminScript)
+	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/api/csrf", s.handleCSRF)
 	mux.HandleFunc("/api/mappings", s.handleMappings)
 	mux.HandleFunc("/api/mappings/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, false) })
 	mux.HandleFunc("/api/mappings/replace", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, true) })
 	mux.HandleFunc("/api/mappings/unlink", s.handleJSONUnlink)
 	mux.HandleFunc("/api/pending", s.handlePending)
-	mux.HandleFunc("/admin/mappings/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, false) })
-	mux.HandleFunc("/admin/mappings/replace", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, true) })
-	mux.HandleFunc("/admin/mappings/unlink", s.handleFormUnlink)
+	mux.HandleFunc("/mappings/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, false) })
+	mux.HandleFunc("/mappings/replace", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, true) })
+	mux.HandleFunc("/mappings/unlink", s.handleFormUnlink)
 	s.http = &http.Server{
 		Addr: options.Address, Handler: mux, ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second,
@@ -199,8 +142,12 @@ func (s *Server) confirmationTarget() (companion.Target, error) {
 	return s.target, s.targetErr
 }
 
-func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if !readRequestAllowed(w, r) {
+		return
+	}
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -234,23 +181,8 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodGet {
-		_ = page.Execute(w, adminPageData{Mappings: mappings, Token: s.token, Notice: notice})
+		_ = page.Execute(w, pageData{Mappings: mappings, Token: s.token, Notice: notice})
 	}
-}
-
-func (s *Server) handleAdminScript(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, "GET")
-		return
-	}
-	if r.URL.RawQuery != "" || !noBody(w, r) {
-		if r.URL.RawQuery != "" {
-			http.Error(w, "unexpected query", http.StatusBadRequest)
-		}
-		return
-	}
-	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	_, _ = io.WriteString(w, adminScript)
 }
 
 func (s *Server) handleCSRF(w http.ResponseWriter, r *http.Request) {
@@ -463,7 +395,7 @@ func (s *Server) handleFormMapping(w http.ResponseWriter, r *http.Request, repla
 	if replace {
 		notice = "replaced"
 	}
-	http.Redirect(w, r, "/admin?notice="+notice, http.StatusSeeOther)
+	http.Redirect(w, r, "/?notice="+notice, http.StatusSeeOther)
 }
 
 func (s *Server) handleFormUnlink(w http.ResponseWriter, r *http.Request) {
@@ -488,7 +420,7 @@ func (s *Server) handleFormUnlink(w http.ResponseWriter, r *http.Request) {
 		s.renderFormFailure(w, r, status, "The mapping could not be unlinked.")
 		return
 	}
-	http.Redirect(w, r, "/admin?notice=unlinked", http.StatusSeeOther)
+	http.Redirect(w, r, "/?notice=unlinked", http.StatusSeeOther)
 }
 
 func (s *Server) confirmMapping(ctx context.Context, selection companion.Mapping, replace bool) error {
@@ -544,7 +476,7 @@ func (s *Server) renderFormFailure(w http.ResponseWriter, r *http.Request, statu
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_ = page.Execute(w, adminPageData{Mappings: mappings, Token: s.token, Notice: notice})
+	_ = page.Execute(w, pageData{Mappings: mappings, Token: s.token, Notice: notice})
 }
 
 func writeJSONStatus(w http.ResponseWriter, r *http.Request, status int, value any) {
@@ -842,8 +774,8 @@ func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
 }
 
 func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, error) {

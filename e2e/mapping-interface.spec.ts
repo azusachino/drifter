@@ -1,12 +1,12 @@
 import { expect, test } from '@playwright/test';
 
-test('admin confirms, replaces and unlinks mappings only after explicit form actions', async ({ page, request }) => {
+test('mapping interface confirms, replaces and unlinks explicit mappings', async ({ page, request }) => {
   const providerRequests: string[] = [];
   page.on('request', (requestEvent) => {
     if (requestEvent.url().includes('/api/pending')) providerRequests.push(requestEvent.url());
   });
-  await page.goto('/admin');
-  await expect(page.getByRole('heading', { name: 'Drifter administration' })).toBeVisible();
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Drifter mapping interface' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'View mappings as JSON' })).toBeVisible();
   await expect(page.getByRole('form', { name: 'Confirm a mapping' })).toBeVisible();
   expect(providerRequests).toEqual([]);
@@ -51,9 +51,30 @@ test('admin confirms, replaces and unlinks mappings only after explicit form act
   expect(providerRequests).toEqual([]);
 });
 
-test('admin remains usable at a narrow viewport', async ({ page }) => {
+test('native mapping form submits with same-origin Origin and no page script', async ({ page }) => {
+  const scriptRequests: string[] = [];
+  page.on('request', (requestEvent) => {
+    if (requestEvent.resourceType() === 'script') scriptRequests.push(requestEvent.url());
+  });
+  await page.goto('/');
+  const form = page.getByRole('form', { name: 'Confirm a mapping' });
+  await form.getByLabel('Source account').fill('synthetic-source');
+  await form.getByLabel('Source book ID').fill('124');
+  await form.getByLabel('Target account').fill('synthetic-target');
+  await form.getByLabel('Target work ID').fill('78');
+  await form.getByRole('radio', { name: 'Work only' }).check();
+  const [response] = await Promise.all([
+    page.waitForResponse((candidate) => candidate.request().method() === 'POST' && candidate.url().includes('/mappings/confirm')),
+    form.getByRole('button', { name: 'Confirm mapping' }).click(),
+  ]);
+  expect(response.status()).toBe(303);
+  expect(response.request().headers().origin).toBe(new URL(process.env.E2E_BASE_URL!).origin);
+  expect(scriptRequests).toEqual([]);
+});
+
+test('mapping interface remains usable at a narrow viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/admin');
+  await page.goto('/');
   await expect(page.getByRole('button', { name: 'Confirm mapping' })).toBeVisible();
   const width = await page.locator('html').evaluate((element) => element.scrollWidth);
   expect(width).toBe(390);

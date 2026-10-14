@@ -1,149 +1,179 @@
 # Drifter architecture
 
-Drifter relates reading facts from source services (WeRead today; Kindle
-Unlimited later) to Hardcover reading status. This document describes the
-current core and CLI, including the pending-worklist slice; future behavior (status
-writes, daemon scheduling, deployment) is labeled as planned, not built.
+Drifter is a local companion between WeRead reading data and Hardcover catalog
+identities. The current product is a CLI plus one foreground HTTP server and a
+shared Go core. Both interfaces read the same private SQLite mapping store.
+Provider clients are read-only: a mapping does not authorize status updates.
+Kindle Unlimited intake, status synchronization and deployment are not
+implemented.
 
 ## Components
 
 | Component | Location | Responsibility |
 | --- | --- | --- |
-| CLI | `cmd/drifter` | Argument parsing, command routing, JSON output, wiring config/logging/probes/admin server |
-| Core operations | `internal/companion/operations.go` | Provider contracts and shared inspect, match, validated confirmation and stored-mapping worklist orchestration |
-| Worklist selection | `internal/companion/pending.go` | Privacy/activity/account filtering, bounded enrichment, classification and partial-result reporting |
-| Source client (WeRead) | `internal/companion/weread.go` | Read-only gateway calls: shelf, search, book info, personal progress |
-| Target client (Hardcover) | `internal/companion/hardcover.go` | Read-only GraphQL: exact-edition lookup, bounded candidate search, work/edition membership validation |
-| Transport | `internal/companion/http.go` | Shared hardened HTTP: fixed HTTPS destinations, no redirects, 30 s timeout, 2 MiB cap, per-client pacing, no retries, sanitized errors |
-| Identity normalization | `internal/companion/book.go` | ISBN checksum/10↔13 conversion, book-ID validation, conservative status inference |
-| Mapping store | `internal/companion/store.go` | Versioned SQLite confirmed mappings; transactional initialization, account-scoped keys, mode-600 file checks, secure-delete |
-| Configuration | `internal/config` | Settings-only TOML: full validation at load, unknown keys rejected, credential-like keys refused, restart-applied |
-| Logging | `internal/logging` | stdlib `slog` JSON to stdout, level from config, random run IDs, no payloads or secrets |
-| Health probes | `internal/probes` | Read-only `/healthz` and `/readyz` over stdlib `net/http`; local dependency checks only |
-| Admin HTTP adapter | `internal/admin` | Foreground lifecycle, same-origin/Host boundary, rendered explicit mapping maintenance, read-only mapping/pending routes and core-owned writes |
+| CLI and wiring | `cmd/drifter` | Parse commands, load settings, construct providers lazily, own foreground server lifecycle, emit JSON and structured logs. |
+| Shared feature core | `internal/companion/operations.go`, `pending.go` | Source/target contracts, matching, explicit confirmation, pending selection, account-scoped local operations and owned writes. |
+| WeRead client | `internal/companion/weread.go` | Read-only shelf, search, book metadata and explicitly requested personal progress. |
+| Hardcover client | `internal/companion/hardcover.go` | Read-only edition lookup, bounded candidate search and work/edition membership validation. |
+| Provider transport | `internal/companion/http.go` | Fixed HTTPS endpoints, no redirects, bounded responses, timeouts, per-client pacing and sanitized errors. |
+| Mapping store and ownership | `internal/companion/store.go`, `ownership*.go` | Versioned SQLite, private-file validation, schema initialization, confirmed mappings, sidecar process lock and owned-operation lifetime. |
+| Local HTTP server | `internal/httpserver` | Foreground listener, server-rendered mapping interface, request boundary, read routes and explicit mapping mutations through shared core. |
+| Configuration | `internal/config` | Settings-only TOML with full validation, unknown-key rejection and refusal of credential-like settings. |
+| Logging and probes | `internal/logging`, `internal/probes` | JSON `slog` output and local `/healthz`/`/readyz` checks. |
 
-## Core and adapter responsibilities
+## Domain and authority
 
-Core owns feature operations and their provider contracts (`Source`, `Target`).
-`PendingWorklist` reads mappings and selects eligible books; `ConfirmLink` fetches
-source metadata, validates work/edition membership and persists only the explicit
-selection. CLI and a future server call these same operations, not each other.
-The existing `Pending` selector has a narrower internal source dependency for
-focused tests; it does not define a separate CLI feature contract.
+A source book is identified inside a source account namespace. A target work may
+have multiple editions. `internal/companion` owns validation and mapping
+operations; adapters decode inputs, choose outputs and manage lifetimes. The
+HTTP server does not call the CLI, and the CLI does not make HTTP requests to
+itself.
 
-Adapters own credentials/configuration wiring, argument or request decoding,
-output formatting and translation of core results into exit codes or HTTP
-responses. Store lifetime for simple local listing/removal is adapter wiring;
-`Store.List` and `Store.Unlink` already own those operations. No server, cache,
-plugin registry or additional service layer is introduced by this separation.
+The owner selects source account/book, target account/work and either work-only
+or a specific edition. The core fetches the source book and validates target
+existence and edition membership before storing. This proves those records
+exist and are related by the provider; it does not prove literary identity.
+Search results, ISBN uniqueness, or ranking are candidates, never a mapping.
+Replacement must be requested explicitly. Unlink is scoped by both account
+labels and source book ID. Labels are user-chosen namespaces, not authenticated
+provider account IDs.
 
-## Data flow (implemented)
+`PendingWorklist` reads the selected source shelf, filters private/activity and
+already-mapped rows before enrichment, and reports completeness/issues. It does
+not contact Hardcover or write a mapping. Personal progress is fetched only by
+the explicit inspect option and is not stored. Provider status writes and
+synchronization do not exist.
 
-The [interactive workflow diagram](diagrams/cli-mapping-workflow.html) separates
-pending, matching and explicit confirmation. Its
-[editable specification](diagrams/cli-mapping-workflow.json) pins the implemented
-source revision. These are independent commands, not an automatic linking loop.
-The [current verification receipt](diagrams/core-workflow-check/cli-mapping-workflow.finalize-summary.json)
-binds this specification and HTML to passing artifact and browser checks.
-Older adjacent receipts describe the previous diagram; browser checks are
-distinct from optional visual review.
+## Data flow
 
-Pending reads mappings through core, fetches the WeRead shelf, filters privacy,
-activity and mapped identities, then enriches eligible rows. It returns JSON
-with explicit completeness and issue codes, never invokes Hardcover and never
-creates a mapping. Full limits and opt-in behavior live in the
-[CLI reference](cli.md#pending-matching-worklist).
+The [workflow diagram](diagrams/cli-mapping-workflow.html) remains focused on
+the CLI pending/matching/confirmation sequence and does not yet show the HTTP
+interface. The [HTTP user-story/test map](plans/http-server.md) describes the
+current server behavior and acceptance evidence.
 
 ```text
-WeRead gateway ──▶ source client ──▶ normalized Book/Progress
-                                          │
-                                          ▼
-                          ISBN variants ─▶ Hardcover exact-edition query
-                                          │ no exact match
-                                          ▼
-                          bounded title/original-language candidate search
-                                          │
-                                          ▼
-                        owner reviews candidates (human decision)
-                                          │ explicit confirmation
-                                          ▼
-              membership validation (work exists; edition belongs to work)
-                                          │
-                                          ▼
-                     SQLite mapping store (local, private)
+CLI command ───────┐
+                   ├──▶ shared companion operations ──▶ WeRead read client
+HTTP request ──────┘                  │
+                                      ├──▶ Hardcover read client
+                                      └──▶ private SQLite mappings
 ```
 
-Nothing in this flow writes to either provider. Personal progress is fetched
-only on explicit request and never persisted.
+Matching performs bounded exact-edition lookup first, then bounded candidate
+search; the operator reviews and confirms. Pending reads use WeRead and SQLite
+only. The local page and mapping list read SQLite only; provider construction
+is lazy and shared by each server instance.
 
-## Trust boundaries
+## CLI and HTTP interfaces
 
-- **Providers are untrusted input.** Every response passes field-by-field
-  validation; unknown fields are discarded; API-level errors inside HTTP 200
-  (GraphQL `errors`, WeRead `errcode`, upgrade notices) fail closed.
-- **The owner is the only linking authority.** Search ranking and identifier
-  uniqueness produce *candidates*, never mappings. `link` requires an explicit
-  work ID and validates membership but does not judge literary identity.
-- **The state file is secret-adjacent.** It contains personal tracking
-  metadata, is mode 600, must be a regular non-symlink file with a
-  non-group/other-writable parent, and enables SQLite `secure_delete`.
-- **Credentials never enter TOML, logs, flags or errors.** They exist only in
-  the process environment and are sent as bearer headers to fixed HTTPS
-  destinations.
+`drifter serve` owns one foreground HTTP process. The default bind is
+`127.0.0.1:8081`; wildcard binds are rejected. The root `GET /` serves an
+embedded server-rendered mapping page. It uses native forms and no browser
+JavaScript asset or frontend build. The page and saved-mapping reads do not
+construct or call providers. Provider-backed requests happen only when a user
+explicitly asks for pending data or confirms/replaces a mapping.
 
-## Configuration, probes and admin server
+| Method and route | Behavior |
+| --- | --- |
+| `GET /`, `HEAD /` | Mapping interface; local store only. |
+| `GET /api/mappings`, `HEAD /api/mappings` | Read-only mapping list. |
+| `GET /api/pending?account=…&target_account=…[&days=N]` | Explicit WeRead-backed pending request. |
+| `GET /api/csrf` | Return the process token for a trusted same-origin JSON client. |
+| `POST /api/mappings/confirm` | Strict JSON explicit confirmation. |
+| `POST /api/mappings/replace` | Strict JSON explicit replacement. |
+| `DELETE /api/mappings/unlink` | Strict JSON account-scoped unlink. |
+| `POST /mappings/confirm` | Bounded URL-encoded native form confirmation; success redirects to `/`. |
+| `POST /mappings/replace` | Bounded URL-encoded native form replacement; success redirects to `/`. |
+| `POST /mappings/unlink` | Bounded URL-encoded native form unlink; success redirects to `/`. |
+| `GET /healthz`, `/readyz` | Local liveness/readiness checks. |
 
-`config.toml` holds settings only (log level, probe address, server listener
-address, optional database path). Load is total: missing file → defaults;
-unknown key, bad value or credential-like key → error. Callers apply
-configuration at startup; the confirmed direction is restart-only. `serve-probes`
-remains a separate health-only process. `serve` establishes the first slice of
-the same intended long-running daemon server foundation, delivered
-incrementally. It serves `/healthz`, `/readyz`, the server-rendered `/admin`,
-read-only mapping/pending JSON, and explicit local mapping confirmation,
-replacement and unlink routes. Confirmation delegates to `ConfirmLinkOwned`,
-which validates the source book and selected target work/edition before storing;
-there is no inferred candidate acceptance. Shared source and target provider
-clients are lazy, so page rendering and mapping reads require no credentials or
-provider calls. Pending calls occur only on explicit request through
-`companion.PendingWorklist`. JSON writes require bounded strict
-`application/json`, same-origin Origin, Host allowlisting and a process-random
-CSRF token. Native forms use separate bounded URL-encoded routes and same-origin
-checks. Responses are no-store, nosniff and protected from framing by CSP and
-frame headers. No CORS is enabled; unauthenticated non-loopback exposure is not
-an authenticated deployment model. The default listener is loopback.
+JSON confirmation/replacement requires source account, source book ID, target
+account, target work ID and an explicit edition choice (`edition_id: 0` means
+work-only; a positive ID selects an edition). Form actions require the same
+explicit work-only or specific-edition choice. The HTTP adapter delegates
+validation, conflict rules and writes to the same shared core as CLI linking;
+there is no parallel mapping policy in the handler.
 
-The server holds the core SQLite ownership lease through shutdown; ordinary
-store writes check the same lock. Read-only CLI opens fall back to a
-current-schema SQLite read-only handle while that lease is held and never
-migrate under it. Synchronization and provider-status writes are not
-implemented.
+## Browser and request boundary
 
-## Development tooling
+The server checks Host against its configured listener and rejects cross-origin
+Origin and cross-site Fetch Metadata on browser requests. Mutation JSON must
+use `application/json`, stay within the body bound, decode strictly (unknown,
+duplicate, trailing and malformed values are refused), and provide the
+per-process CSRF token. Native forms use separate size-bounded
+`application/x-www-form-urlencoded` endpoints with the same Host, Origin and
+token checks. GET and HEAD never mutate. No CORS is provided. The token is a
+cross-site request defense, not authentication.
 
-`.mise.toml` pins Go and rumdl. Make executes Go and gofmt through mise;
-GitHub Actions installs the same tools with `jdx/mise-action`. The Go language
-requirement remains in `go.mod`. Make and a C compiler are host prerequisites
-because the SQLite driver requires CGO. The advisory vulnerability scan runs a
-pinned govulncheck with the same Go toolchain; it does not select another Go
-version. See the [quick start](../README.md#quick-start).
+The response uses no-store, nosniff, frame denial and a restrictive CSP. It
+loads no script. The page uses
+`Referrer-Policy: strict-origin-when-cross-origin`: Chromium sent
+`Origin: null` for the native form when the previous `no-referrer` policy was
+set, so the correct same-origin form was rejected by the server. A browser
+experiment confirmed this policy sends the exact same-origin Origin while
+cross-origin referrers contain only the origin. The native-form Playwright test
+locks down the behavior; request validation was not weakened.
 
-## OSS component inventory and rationale
+Default loopback binding is the supported safe mode. The server has no user
+authentication. Explicit non-loopback binding is unauthenticated and requires
+an independently protected network boundary; the CSRF token does not change
+that fact. Provider errors and mutation responses are sanitized. Request
+payloads, credentials, source titles and CSRF tokens are not logged.
 
-| Dependency | Why | What would change it |
-| --- | --- | --- |
-| Go standard library (`net/http`, `encoding/json`, `flag`, `log/slog`, `crypto/rand`) | Small audit surface for a credential-holding tool; no framework churn | A need for middleware-rich routing or OpenTelemetry traces |
-| `github.com/mattn/go-sqlite3` (pinned v1.14.52) | Battle-tested driver; CGO cost accepted for single-file durable state | A pure-Go/cross-compilation requirement (`modernc.org/sqlite` tradeoff: larger binaries, different perf profile) |
-| `github.com/BurntSushi/toml` (pinned v1.6.0) | Minimal, dependency-free TOML decode with unknown-key detection | None foreseeable; the file is deliberately tiny |
-| GitHub Actions + `govulncheck` | Free CI running the owning gate; advisory vulnerability scan | Self-hosted runners if secrets ever enter CI (they do not today) |
+## SQLite and ownership lifecycle
 
-Deliberately absent: CLI frameworks (cobra/urfave), validation libraries,
-retry/backoff libraries, ORMs, telemetry SDKs. Each is recorded here as a
-choice, with the trigger that would justify revisiting.
+The SQLite database is local state, not an identity service. Its schema is
+versioned; initialization is transactional, mapping keys include both account
+namespaces, and secure-delete is enabled. The database must be a regular
+non-symlink file with restrictive permissions and a safe parent directory.
 
-## Planned, not implemented
+Before serving, the HTTP server acquires a sidecar OS lock (`flock` on supported
+macOS/Linux systems), canonicalizes the database path, rejects hard-link
+ambiguity and initializes/opens the owned store. Owned initialization and every
+owned mutation retain an in-process lease scope for the complete operation.
+Closing the owner rejects new scopes and waits for active operations before
+releasing the process lock. Shutdown cancels provider work, drains HTTP requests,
+closes the store and then releases the lease. Standalone CLI initialization and
+writes use a nonblocking ownership check; they fail while the server owns the
+database. A CLI reader may use an already-current schema read-only under the
+lease, but does not migrate it.
 
-The incremental server work and acceptance boundaries are recorded in the
-[daemon-admin plan](plans/daemon-admin.md). Status synchronization, per-book
-holds/resolution, Telegram notifications and k3s deployment remain future work;
-nothing in this repository performs a provider status write.
+## Configuration and credentials
+
+`config.toml` contains validated settings (log level, probe address, HTTP
+listener address and optional database path), never secrets. Missing settings
+use defaults; unknown keys and credential-like keys fail closed. Changes apply
+at process startup, not live reload. Credentials come from
+`WEREAD_API_KEY` and `HARDCOVER_API_KEY` in the invoking process environment.
+Provider endpoints are fixed HTTPS URLs. The clients reject redirects, bound
+response size and timeout, pace their own calls, and do not automatically
+retry. These safeguards are not a provider quota guarantee.
+
+The standalone `serve-probes` command remains separate from the mapping HTTP
+server. `/readyz` checks local database access and makes no provider requests.
+
+## Development and verification
+
+The supported local gates are `make check`, pinned Markdown lint for changed
+docs, and synthetic Playwright journeys via `make e2e`. Make and a C compiler
+are required because the SQLite driver uses CGO. `.mise.toml` pins development
+tools; `go.mod` declares the Go version. Tests use synthetic provider
+implementations and temporary SQLite, never live credentials.
+
+The [HTTP acceptance plan](plans/http-server.md) maps user stories to CLI, HTTP,
+browser and shared-core tests. The larger matching work is in the
+[matching-worklist plan](plans/matching-worklist.md); neither plan is a claim
+that status synchronization or the full broader milestone is complete.
+
+## Dependency choices
+
+| Dependency | Rationale |
+| --- | --- |
+| Go standard library (`net/http`, JSON, `flag`, `log/slog`, crypto) | Small audit surface for a credential-holding local tool. |
+| `github.com/mattn/go-sqlite3` | Durable local state with explicit CGO tradeoff. |
+| `github.com/BurntSushi/toml` | Small settings-only configuration with unknown-key detection. |
+| GitHub Actions and pinned `govulncheck` | Owning CI checks and advisory vulnerability scanning. |
+
+Deliberately absent are a CLI framework, ORM, frontend framework/build chain,
+retry library, telemetry SDK, user-authentication system and background job
+runner.

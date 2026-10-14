@@ -900,11 +900,12 @@ flag. Record-linkage tooling such as
 human-review band explicitly ("clerical review"); its concepts, not the
 dependency, apply here.
 
-Conclusion: the next useful slice is a pending worklist, externally produced
-original-title hints, author-aware re-ranking and batch review with durable
-skip/exclude decisions, bootstrapping recent books first rather than the whole
-backlog. The daemon admin surface is deferred until enough books are linked to
-make status automation worth running.
+Conclusion: the next useful matching slice is a pending worklist, externally
+produced original-title hints, author-aware re-ranking and batch review with
+durable skip/exclude decisions, bootstrapping recent books first rather than
+the whole backlog. A foreground local HTTP server and mapping interface now
+expose explicit local mapping maintenance; they do not perform status
+automation, polling or provider writes.
 
 ### sources and checkpoints
 

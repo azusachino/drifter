@@ -1,4 +1,4 @@
-package admin
+package httpserver
 
 import (
 	"context"
@@ -138,6 +138,27 @@ func request(t *testing.T, base, method, path string, headers map[string]string,
 	return response
 }
 
+func TestRootRendersMappingInterface(t *testing.T) {
+	now := time.Now()
+	source := &sourceStub{now: now}
+	_, base, _, _ := newTestServer(t, source, filepath.Join(t.TempDir(), "db.sqlite"), now)
+	response := request(t, base, http.MethodGet, "/", nil, nil)
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "Drifter mapping interface") || !strings.Contains(string(body), "Confirm a mapping") {
+		t.Fatalf("root did not render the mapping interface: status=%d", response.StatusCode)
+	}
+	if source.calls != 0 || source.bookCalls.Load() != 0 {
+		t.Fatal("rendering the mapping interface contacted a provider")
+	}
+	legacy := request(t, base, http.MethodGet, "/admin", nil, nil)
+	if legacy.StatusCode != http.StatusNotFound {
+		t.Fatalf("legacy /admin path remained available: status=%d", legacy.StatusCode)
+	}
+}
+
 func TestHostBoundaryWithHTTPTestServer(t *testing.T) {
 	now := time.Now()
 	source := &sourceStub{now: now}
@@ -155,7 +176,7 @@ func TestHostBoundaryWithHTTPTestServer(t *testing.T) {
 	httpServer := httptest.NewServer(hostAndBrowserBoundary("drifter.test:8081", server.http.Handler))
 	defer httpServer.Close()
 	request := func(host string) *http.Response {
-		req, err := http.NewRequest(http.MethodGet, httpServer.URL+"/admin", nil)
+		req, err := http.NewRequest(http.MethodGet, httpServer.URL+"/", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -181,7 +202,7 @@ func TestHostBoundaryWithHTTPTestServer(t *testing.T) {
 	}
 }
 
-func TestAdminPageHasNoProviderCallsAndJSONUsesCoreAndStore(t *testing.T) {
+func TestMappingInterfaceReadsWithoutProviderCalls(t *testing.T) {
 	now := time.Now().UTC()
 	source := &sourceStub{now: now}
 	db := filepath.Join(t.TempDir(), "state.sqlite")
@@ -198,13 +219,13 @@ func TestAdminPageHasNoProviderCallsAndJSONUsesCoreAndStore(t *testing.T) {
 	}
 	target := &targetStub{}
 	_, base, _, _ := newTestServer(t, source, db, now, target)
-	pageResponse := request(t, base, http.MethodGet, "/admin", nil, nil)
+	pageResponse := request(t, base, http.MethodGet, "/", nil, nil)
 	page, _ := io.ReadAll(pageResponse.Body)
 	if pageResponse.StatusCode != http.StatusOK || !strings.Contains(string(page), "Request pending books") || source.calls != 0 || source.bookCalls.Load() != 0 || target.calls.Load() != 0 {
-		t.Fatalf("admin page status=%d provider calls=%d", pageResponse.StatusCode, source.calls)
+		t.Fatalf("mapping interface status=%d provider calls=%d", pageResponse.StatusCode, source.calls)
 	}
-	if pageResponse.Header.Get("Cache-Control") != "no-store" || pageResponse.Header.Get("X-Frame-Options") != "DENY" || !strings.Contains(pageResponse.Header.Get("Content-Security-Policy"), "frame-ancestors 'none'") {
-		t.Fatalf("admin page missing browser security headers: %v", pageResponse.Header)
+	if pageResponse.Header.Get("Cache-Control") != "no-store" || pageResponse.Header.Get("X-Frame-Options") != "DENY" || pageResponse.Header.Get("Referrer-Policy") != "strict-origin-when-cross-origin" || !strings.Contains(pageResponse.Header.Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+		t.Fatalf("mapping interface missing browser security headers: %v", pageResponse.Header)
 	}
 	mappings := request(t, base, http.MethodGet, "/api/mappings", nil, nil)
 	var rows []companion.Mapping
@@ -225,7 +246,7 @@ func TestAdminPageHasNoProviderCallsAndJSONUsesCoreAndStore(t *testing.T) {
 	}
 }
 
-func TestAdminHostOriginFetchMetadataMethodsAndBodies(t *testing.T) {
+func TestHTTPServerHostOriginFetchMetadataMethodsAndBodies(t *testing.T) {
 	now := time.Now()
 	source := &sourceStub{now: now}
 	_, base, _, _ := newTestServer(t, source, filepath.Join(t.TempDir(), "db.sqlite"), now)
@@ -263,7 +284,7 @@ func TestAdminHostOriginFetchMetadataMethodsAndBodies(t *testing.T) {
 	}
 }
 
-func TestAdminProviderFactoryRunsOnlyOnceAcrossPendingRequests(t *testing.T) {
+func TestPendingRouteSharesLazySourceClient(t *testing.T) {
 	now := time.Now()
 	source := &sourceStub{now: now}
 	factoryCalls := 0
@@ -285,7 +306,7 @@ func TestAdminProviderFactoryRunsOnlyOnceAcrossPendingRequests(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(ctx, listener) }()
 	base := "http://" + listener.Addr().String()
-	if response := request(t, base, http.MethodGet, "/admin", nil, nil); response.StatusCode != http.StatusOK {
+	if response := request(t, base, http.MethodGet, "/", nil, nil); response.StatusCode != http.StatusOK {
 		t.Fatal(response.StatusCode)
 	}
 	if response := request(t, base, http.MethodGet, "/api/mappings", nil, nil); response.StatusCode != http.StatusOK {
@@ -374,7 +395,7 @@ func TestConcurrentPendingRequestsShareOneProviderClient(t *testing.T) {
 	}
 }
 
-func TestAdminPendingRejectsInvalidParametersWithoutProviderCalls(t *testing.T) {
+func TestPendingRejectsInvalidParametersWithoutProviderCalls(t *testing.T) {
 	now := time.Now()
 	source := &sourceStub{now: now}
 	_, base, _, _ := newTestServer(t, source, filepath.Join(t.TempDir(), "db.sqlite"), now)
@@ -389,7 +410,7 @@ func TestAdminPendingRejectsInvalidParametersWithoutProviderCalls(t *testing.T) 
 	}
 }
 
-func TestAdminServerStopsOnContextCancel(t *testing.T) {
+func TestHTTPServerStopsOnContextCancel(t *testing.T) {
 	now := time.Now()
 	_, _, cancel, done := newTestServer(t, &sourceStub{now: now}, filepath.Join(t.TempDir(), "db.sqlite"), now)
 	cancel()
@@ -453,7 +474,7 @@ func TestPendingHeadIsRejectedWithoutProviderCalls(t *testing.T) {
 	}
 }
 
-func TestAdminReadinessIsLocal(t *testing.T) {
+func TestHTTPServerReadinessIsLocal(t *testing.T) {
 	now := time.Now()
 	source := &sourceStub{now: now}
 	_, base, _, _ := newTestServer(t, source, filepath.Join(t.TempDir(), "db.sqlite"), now)
@@ -558,7 +579,7 @@ func TestMappingMutationHTTPUsesCoreValidationAndOwnedStore(t *testing.T) {
 	}
 }
 
-func TestNativeAdminFormsUseExplicitCoreMappingActions(t *testing.T) {
+func TestNativeMappingFormsUseExplicitCoreActions(t *testing.T) {
 	now := time.Now()
 	source := &sourceStub{now: now}
 	target := &targetStub{}
@@ -570,7 +591,7 @@ func TestNativeAdminFormsUseExplicitCoreMappingActions(t *testing.T) {
 	}
 	selection := url.Values{"csrf_token": {token}, "source_account": {"src"}, "book_id": {"123"},
 		"target_account": {"dst"}, "work_id": {"7"}, "edition_mode": {"edition"}, "edition_id": {"8"}}
-	response := postForm("/admin/mappings/confirm", selection)
+	response := postForm("/mappings/confirm", selection)
 	if response.StatusCode != http.StatusOK || !strings.Contains(response.Header.Get("Content-Type"), "text/html") {
 		t.Fatalf("confirm form status=%d content type=%q", response.StatusCode, response.Header.Get("Content-Type"))
 	}
@@ -579,7 +600,7 @@ func TestNativeAdminFormsUseExplicitCoreMappingActions(t *testing.T) {
 	}
 	selection.Set("work_id", "9")
 	selection.Set("edition_id", "10")
-	response = postForm("/admin/mappings/replace", selection)
+	response = postForm("/mappings/replace", selection)
 	if response.StatusCode != http.StatusOK || !strings.Contains(response.Header.Get("Content-Type"), "text/html") {
 		t.Fatalf("replace form status=%d", response.StatusCode)
 	}
@@ -587,7 +608,7 @@ func TestNativeAdminFormsUseExplicitCoreMappingActions(t *testing.T) {
 		t.Fatalf("form replacement did not persist: %+v", mappings)
 	}
 	unlink := url.Values{"csrf_token": {token}, "source_account": {"src"}, "book_id": {"123"}, "target_account": {"dst"}}
-	response = postForm("/admin/mappings/unlink", unlink)
+	response = postForm("/mappings/unlink", unlink)
 	if response.StatusCode != http.StatusOK || len(listHTTPMappings(t, base)) != 0 {
 		t.Fatalf("form unlink status=%d", response.StatusCode)
 	}
@@ -676,7 +697,7 @@ func TestMutationRejectionsPrecedeProviderCallsAndStateWrites(t *testing.T) {
 	}
 	for _, tc := range badFormCases {
 		t.Run("form "+tc.name, func(t *testing.T) {
-			response := request(t, base, http.MethodPost, "/admin/mappings/confirm", tc.headers, strings.NewReader(tc.body))
+			response := request(t, base, http.MethodPost, "/mappings/confirm", tc.headers, strings.NewReader(tc.body))
 			if response.StatusCode != tc.want {
 				t.Fatalf("status=%d want=%d", response.StatusCode, tc.want)
 			}

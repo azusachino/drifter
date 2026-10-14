@@ -352,7 +352,62 @@ func TestCLIWritersRefuseDaemonOwnershipAndReadsRemainAvailable(t *testing.T) {
 	}
 }
 
-func TestCLIServeAdminWiringAndCancellation(t *testing.T) {
+func TestCLIServeStartsWithoutProviderCredentials(t *testing.T) {
+	t.Setenv("WEREAD_API_KEY", "")
+	t.Setenv("HARDCOVER_API_KEY", "")
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("[server]\naddr = \"127.0.0.1:0\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var raw bytes.Buffer
+	out := &syncWriter{mu: &sync.Mutex{}, buf: &raw}
+	var stderr bytes.Buffer
+	providers := clients{
+		source: func() (source, error) { return companion.NewWeRead(os.Getenv("WEREAD_API_KEY")) },
+		target: func() (target, error) { return companion.NewHardcover(os.Getenv("HARDCOVER_API_KEY")) },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx, []string{"serve", "--config", configPath, "--db", filepath.Join(dir, "mappings.sqlite")}, out, &stderr, providers)
+	}()
+	var record struct {
+		Addr    string `json:"addr"`
+		Message string `json:"msg"`
+	}
+	for i := 0; i < 200; i++ {
+		for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+			_ = json.Unmarshal([]byte(line), &record)
+		}
+		if record.Message == "HTTP server starting" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if record.Message != "HTTP server starting" {
+		cancel()
+		t.Fatalf("HTTP server did not start without provider credentials: %s", out.String())
+	}
+	for _, path := range []string{"/", "/api/mappings"} {
+		response, err := http.Get("http://" + record.Addr + path)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			cancel()
+			t.Fatalf("GET %s status=%d without provider credentials", path, response.StatusCode)
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("serve did not stop cleanly without provider credentials: %v", err)
+	}
+}
+
+func TestCLIServeHTTPWiringAndCancellation(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
 	if err := os.WriteFile(configPath, []byte("[server]\naddr = \"127.0.0.1:0\"\n"), 0o600); err != nil {
@@ -375,14 +430,14 @@ func TestCLIServeAdminWiringAndCancellation(t *testing.T) {
 		for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
 			_ = json.Unmarshal([]byte(line), &record)
 		}
-		if record.Message == "admin server starting" {
+		if record.Message == "HTTP server starting" {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if record.Message != "admin server starting" || !strings.HasPrefix(record.Addr, "127.0.0.1:") {
+	if record.Message != "HTTP server starting" || !strings.HasPrefix(record.Addr, "127.0.0.1:") {
 		cancel()
-		t.Fatalf("admin server startup log missing: %s", out.String())
+		t.Fatalf("HTTP server startup log missing: %s", out.String())
 	}
 	response, err := http.Get("http://" + record.Addr + "/healthz")
 	if err != nil {

@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const temp = await mkdtemp(join(tmpdir(), 'drifter-admin-e2e-'));
-const binary = join(temp, 'drifter-admin-fixture');
+const temp = await mkdtemp(join(tmpdir(), 'drifter-http-e2e-'));
+const binary = join(temp, 'drifter-http-fixture');
 const database = join(temp, 'mappings.sqlite');
 let server;
 
@@ -20,7 +20,7 @@ async function stopServer() {
 
 try {
   const build = spawnSync('mise', ['exec', '--', 'go', 'build', '-o', binary, './e2e/fixture'], { stdio: 'inherit' });
-  if (build.status !== 0) throw new Error(`Synthetic admin fixture build failed (${build.status ?? build.signal})`);
+  if (build.status !== 0) throw new Error(`Synthetic HTTP fixture build failed (${build.status ?? build.signal})`);
   server = spawn(binary, ['--addr', '127.0.0.1:0', '--db', database], {
     stdio: ['ignore', 'pipe', 'inherit'],
     env: process.env,
@@ -33,7 +33,7 @@ try {
     for (const line of output.split('\n')) {
       try {
         const record = JSON.parse(line);
-        if (record.msg === 'admin server starting') baseURL = `http://${record.addr}`;
+        if (record.msg === 'HTTP server starting') baseURL = `http://${record.addr}`;
       } catch {}
     }
   });
@@ -45,7 +45,7 @@ try {
   const playwright = resolve('node_modules/@playwright/test/cli.js');
   const testArgs = process.env.E2E_PROBE === '1'
     ? ['test', 'e2e/probe.spec.ts']
-    : ['test', 'e2e/admin.spec.ts'];
+    : ['test', 'e2e/mapping-interface.spec.ts'];
   const result = spawnSync(process.execPath, [playwright, ...testArgs], {
     stdio: 'inherit', env: { ...process.env, E2E_BASE_URL: baseURL },
   });

@@ -10,8 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/azusachino/drifter/internal/admin"
 	"github.com/azusachino/drifter/internal/companion"
+	"github.com/azusachino/drifter/internal/httpserver"
 )
 
 type source struct{}
@@ -50,22 +50,22 @@ func main() {
 		os.Exit(2)
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	server, err := admin.New(admin.Options{Address: *address, Database: *database,
+	server, err := httpserver.New(httpserver.Options{Address: *address, Database: *database,
 		Source: source{}, Target: target{}, Logger: logger})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "synthetic admin server unavailable")
+		fmt.Fprintln(os.Stderr, "synthetic HTTP server unavailable")
 		os.Exit(1)
 	}
 	listener, err := server.Listen()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "synthetic admin listener unavailable")
+		fmt.Fprintln(os.Stderr, "synthetic HTTP listener unavailable")
 		os.Exit(1)
 	}
-	logger.Info("admin server starting", slog.String("addr", listener.Addr().String()))
+	logger.Info("HTTP server starting", slog.String("addr", listener.Addr().String()))
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if err := server.Serve(ctx, listener); err != nil {
-		fmt.Fprintln(os.Stderr, "synthetic admin server stopped unexpectedly")
+		fmt.Fprintln(os.Stderr, "synthetic HTTP server stopped unexpectedly")
 		os.Exit(1)
 	}
 }

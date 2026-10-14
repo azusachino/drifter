@@ -6,13 +6,13 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/azusachino/drifter/internal/admin"
 	"github.com/azusachino/drifter/internal/companion"
 	"github.com/azusachino/drifter/internal/config"
+	"github.com/azusachino/drifter/internal/httpserver"
 	"github.com/azusachino/drifter/internal/logging"
 )
 
-func serveAdmin(ctx context.Context, configPath, dbPath string, out io.Writer, providers clients) error {
+func serveHTTPServer(ctx context.Context, configPath, dbPath string, out io.Writer, providers clients) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -31,7 +31,7 @@ func serveAdmin(ctx context.Context, configPath, dbPath string, out io.Writer, p
 	if err := companion.CheckDatabaseWriteAvailable(dbPath); err != nil {
 		return err
 	}
-	server, err := admin.New(admin.Options{Address: cfg.Server.Addr, Database: dbPath, SourceFactory: providers.source, TargetFactory: providers.target, Logger: logger})
+	server, err := httpserver.New(httpserver.Options{Address: cfg.Server.Addr, Database: dbPath, SourceFactory: providers.source, TargetFactory: providers.target, Logger: logger})
 	if err != nil {
 		return err
 	}
@@ -39,9 +39,9 @@ func serveAdmin(ctx context.Context, configPath, dbPath string, out io.Writer, p
 	if err != nil {
 		return err
 	}
-	logger.InfoContext(ctx, "admin server starting", "run_id", runID, "addr", listener.Addr().String())
+	logger.InfoContext(ctx, "HTTP server starting", "run_id", runID, "addr", listener.Addr().String())
 	if err := server.Serve(ctx, listener); err != nil && err != http.ErrServerClosed {
-		return fmt.Errorf("admin server failed")
+		return fmt.Errorf("HTTP server failed")
 	}
 	return nil
 }
