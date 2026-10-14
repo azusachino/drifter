@@ -3,6 +3,8 @@ package companion
 import (
 	"context"
 	"fmt"
+
+	"github.com/azusachino/drifter/internal/matchingcatalog"
 )
 
 // Source and Target are the provider dependencies of core operations. Adapters
@@ -40,12 +42,88 @@ func Inspect(ctx context.Context, source Source, id string, progress bool) (Insp
 	return result, nil
 }
 
+type MatchOptions struct {
+	CatalogLoader *matchingcatalog.Loader
+}
+
 func Match(ctx context.Context, source Source, target Target, id, query string) (MatchReport, error) {
+	return MatchWithOptions(ctx, source, target, id, query, MatchOptions{})
+}
+
+func MatchWithOptions(ctx context.Context, source Source, target Target, id, query string, options MatchOptions) (MatchReport, error) {
 	book, err := source.Book(ctx, id)
 	if err != nil {
 		return MatchReport{}, err
 	}
-	return target.Match(ctx, book, query)
+	report, err := target.Match(ctx, book, query)
+	if err != nil {
+		return MatchReport{}, err
+	}
+	if options.CatalogLoader == nil {
+		return report, nil
+	}
+	snapshot := options.CatalogLoader.Load(ctx)
+	if !snapshot.Configured {
+		return report, nil
+	}
+	complete := snapshot.Complete
+	report.CatalogsComplete = &complete
+	report.CatalogIssues = append([]matchingcatalog.Issue(nil), snapshot.Issues...)
+	for _, catalog := range snapshot.Catalogs {
+		for _, assertion := range catalog.Assertions {
+			if assertion.Source.Provider != "weread" || assertion.Source.ID != book.ID {
+				continue
+			}
+			report.CatalogAssertions = append(report.CatalogAssertions, CatalogAssertion{
+				SubscriptionID: catalog.SubscriptionID,
+				CatalogID:      catalog.CatalogID,
+				Publisher:      catalog.Publisher,
+				RecordID:       assertion.RecordID,
+				Source:         assertion.Source,
+				Target:         assertion.Target,
+				Provenance:     assertion.Provenance,
+			})
+		}
+		for _, hint := range catalog.Hints {
+			if hint.Source.Provider != "weread" || hint.Source.ID != book.ID {
+				continue
+			}
+			report.CatalogHints = append(report.CatalogHints, CatalogHint{
+				SubscriptionID: catalog.SubscriptionID,
+				CatalogID:      catalog.CatalogID,
+				Publisher:      catalog.Publisher,
+				RecordID:       hint.RecordID,
+				Source:         hint.Source,
+				Title:          hint.Title,
+				OriginalAuthor: hint.OriginalAuthor,
+				ISBN:           hint.ISBN,
+				Confidence:     hint.Confidence,
+				Provenance:     hint.Provenance,
+			})
+		}
+	}
+	if len(report.CatalogAssertions) > 1 {
+		targets := make(map[string]struct{}, len(report.CatalogAssertions))
+		for _, assertion := range report.CatalogAssertions {
+			key := fmt.Sprintf("%d:%d", assertion.Target.WorkID, editionValue(assertion.Target.EditionID))
+			targets[key] = struct{}{}
+		}
+		if len(targets) > 1 {
+			report.CatalogConflicts = []CatalogConflict{{
+				Source: matchingcatalog.SourceRef{Provider: "weread", ID: book.ID},
+				Claims: append([]CatalogAssertion(nil), report.CatalogAssertions...),
+			}}
+		}
+	}
+	report.RequiresConfirmation = true
+	return report, nil
+}
+
+func editionValue(editionID *int64) int64 {
+	if editionID == nil {
+		return 0
+	}
+	return *editionID
 }
 
 // ConfirmLink is the shared explicit-confirmation path, not an automatic match.

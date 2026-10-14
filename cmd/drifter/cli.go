@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/azusachino/drifter/internal/companion"
+	"github.com/azusachino/drifter/internal/config"
+	"github.com/azusachino/drifter/internal/matchingcatalog"
 )
 
 // Aliases keep credential factories local while core owns provider contracts.
@@ -28,7 +30,7 @@ const usage = `Usage: drifter COMMAND [flags]
 Read-only provider operations:
   search   --title TITLE
   inspect  --book-id ID [--progress]
-  match    --book-id ID [--query ORIGINAL_TITLE]
+  match    --book-id ID [--query ORIGINAL_TITLE] [--config PATH]
   pending  --account LABEL --target-account LABEL [--days 90] [--db PATH]
            [--include-private] [--include-imported]
 
@@ -111,9 +113,9 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 	if command == "link" || command == "links" || command == "unlink" || command == "serve-probes" || command == "serve" || command == "pending" {
 		fs.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
 	}
-	if command == "serve-probes" || command == "serve" {
+	if command == "serve-probes" || command == "serve" || command == "match" {
 		defaultConfig := ""
-		if command == "serve" {
+		if command == "serve" || command == "match" {
 			defaultConfig = "config.toml"
 		}
 		fs.StringVar(&configPath, "config", defaultConfig, "settings-only TOML path (missing file uses defaults; never credentials)")
@@ -193,6 +195,18 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 		}
 		return encoder.Encode(map[string]any{"local_mapping_absent": true, "book_id": bookID})
 	}
+	var matchOptions companion.MatchOptions
+	if command == "match" {
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			return err
+		}
+		loader, err := matchingcatalog.NewLoader(cfg.Matching.Catalogs, matchingcatalog.LoaderOptions{})
+		if err != nil {
+			return err
+		}
+		matchOptions.CatalogLoader = loader
+	}
 	reader, err := providers.source()
 	if err != nil {
 		return err
@@ -235,11 +249,17 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 		}
 		return encoder.Encode(result)
 	case "match":
-		report, err := companion.Match(ctx, reader, catalog, bookID, query)
+		report, err := companion.MatchWithOptions(ctx, reader, catalog, bookID, query, matchOptions)
 		if err != nil {
 			return err
 		}
-		return encoder.Encode(report)
+		if err := encoder.Encode(report); err != nil {
+			return err
+		}
+		if report.CatalogsComplete != nil && !*report.CatalogsComplete {
+			return fmt.Errorf("matching catalogs incomplete; see JSON issue codes")
+		}
+		return nil
 	case "link":
 		mapping := companion.Mapping{Provider: "weread", SourceAccount: account,
 			BookID: bookID, TargetAccount: targetAccount, WorkID: workID,

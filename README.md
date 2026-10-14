@@ -15,6 +15,8 @@ implemented.
   Private books are excluded by default; incomplete responses remain explicit.
 - Compare a source book with bounded Hardcover candidates. Candidates are
   suggestions, never automatic matches.
+- Optionally surface user-selected community catalog assertions and title/ISBN
+  hints with provenance; they never select or confirm a mapping.
 - Confirm, explicitly replace, list, and unlink local mappings through the CLI
   or a foreground HTTP server with a local mapping interface.
 - Keep confirmed mappings in a private, versioned SQLite database shared by
@@ -24,14 +26,16 @@ The project does not synchronize reading status, add catalog entries, poll in
 background, import Kindle Unlimited books, or deploy a service. See the
 [matching-worklist plan](docs/plans/matching-worklist.md) for later matching
 work and the [HTTP server acceptance map](docs/plans/http-server.md) for the
-current server stories and executable evidence.
+current server stories and executable evidence. See the
+[community matching catalog contract](docs/plans/matching-catalogs.md) for
+source configuration, trust boundaries and limitations.
 
 ## Quick start
 
 Prerequisites: [mise](https://mise.jdx.dev/), Make, and a C compiler for the
-CGO-backed SQLite driver. The repository pins Go and Node for development; Go
-1.26 or the pinned toolchain is required to build. Node and the Playwright
-browser are needed only for browser tests.
+CGO-backed SQLite driver. The repository pins Go 1.27.2 and Node for development;
+the pinned Go toolchain is required to build. Node and the Playwright browser
+are needed only for browser tests.
 
 ```sh
 mise trust

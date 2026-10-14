@@ -26,6 +26,7 @@ import (
 
 	"github.com/azusachino/drifter/internal/companion"
 	"github.com/azusachino/drifter/internal/probes"
+	"github.com/go-chi/chi/v5"
 )
 
 const maxRequestBody = 8 << 10
@@ -93,7 +94,8 @@ func New(options Options) (*Server, error) {
 	s := &Server{address: options.Address, database: options.Database, token: base64.RawURLEncoding.EncodeToString(tokenBytes),
 		logger: options.Logger, now: options.Now, source: options.Source, sourceFactory: options.SourceFactory,
 		target: options.Target, targetFactory: options.TargetFactory}
-	mux := http.NewServeMux()
+	router := chi.NewRouter()
+	router.Use(requestRouteLogAttribute)
 	ready := []probes.Readiness{{Name: "mapping_database", Check: func(r *http.Request) error {
 		store, err := companion.OpenOwnedStore(s.database, s.ownership)
 		if err != nil {
@@ -103,22 +105,28 @@ func New(options Options) (*Server, error) {
 		_, err = store.List(r.Context())
 		return err
 	}}}
-	for _, path := range []string{"/healthz", "/readyz"} {
-		path := path
-		mux.Handle(path, probesHandler(path, ready, options.Logger))
-	}
-	mux.HandleFunc("/", s.handleRoot)
-	mux.HandleFunc("/api/csrf", s.handleCSRF)
-	mux.HandleFunc("/api/mappings", s.handleMappings)
-	mux.HandleFunc("/api/mappings/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, false) })
-	mux.HandleFunc("/api/mappings/replace", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, true) })
-	mux.HandleFunc("/api/mappings/unlink", s.handleJSONUnlink)
-	mux.HandleFunc("/api/pending", s.handlePending)
-	mux.HandleFunc("/mappings/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, false) })
-	mux.HandleFunc("/mappings/replace", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, true) })
-	mux.HandleFunc("/mappings/unlink", s.handleFormUnlink)
+	router.Get("/", s.handleRoot)
+	router.Head("/", s.handleRoot)
+	router.Method(http.MethodGet, "/healthz", probesHandler("/healthz", ready, options.Logger))
+	router.Method(http.MethodHead, "/healthz", probesHandler("/healthz", ready, options.Logger))
+	router.Method(http.MethodGet, "/readyz", probesHandler("/readyz", ready, options.Logger))
+	router.Method(http.MethodHead, "/readyz", probesHandler("/readyz", ready, options.Logger))
+	router.Route("/api", func(api chi.Router) {
+		api.Get("/csrf", s.handleCSRF)
+		api.Get("/mappings", s.handleMappings)
+		api.Head("/mappings", s.handleMappings)
+		api.Get("/pending", s.handlePending)
+		api.Post("/mappings/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, false) })
+		api.Post("/mappings/replace", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, true) })
+		api.Delete("/mappings/unlink", s.handleJSONUnlink)
+	})
+	router.Route("/mappings", func(mappings chi.Router) {
+		mappings.Post("/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, false) })
+		mappings.Post("/replace", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, true) })
+		mappings.Post("/unlink", s.handleFormUnlink)
+	})
 	s.http = &http.Server{
-		Addr: options.Address, Handler: mux, ReadHeaderTimeout: 5 * time.Second,
+		Addr: options.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second,
 	}
 	return s, nil
@@ -248,7 +256,6 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 		}
 		report, err := companion.PendingWorklistOwned(r.Context(), source, s.database, opts, s.ownership)
 		if err != nil {
-			s.logger.WarnContext(r.Context(), "pending request failed")
 			http.Error(w, "pending request failed", http.StatusBadGateway)
 			return
 		}
@@ -852,7 +859,7 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		_, actualPort, _ := net.SplitHostPort(listener.Addr().String())
 		port = actualPort
 	}
-	s.http.Handler = hostAndBrowserBoundary(net.JoinHostPort(host, port), s.http.Handler)
+	s.http.Handler = requestLoggingMiddleware(s.logger)(hostAndBrowserBoundary(net.JoinHostPort(host, port), s.http.Handler))
 	s.http.BaseContext = func(net.Listener) context.Context { return ctx }
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.http.Serve(listener) }()

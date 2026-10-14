@@ -3,8 +3,12 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/azusachino/drifter/internal/matchingcatalog"
 )
 
 func write(t *testing.T, content string) string {
@@ -21,7 +25,7 @@ func TestLoadDefaultsWhenFileMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg != Defaults() {
+	if !reflect.DeepEqual(cfg, Defaults()) {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 	if cfg.Log.Level != LevelInfo || cfg.Probes.Addr != "127.0.0.1:8080" || cfg.Server.Addr != "127.0.0.1:8081" || cfg.Probes.Enabled {
@@ -77,6 +81,55 @@ func TestLoadRejectsInvalidOrUnsafeConfiguration(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), "synthetic-secret") {
 				t.Fatal("error echoed secret")
+			}
+		})
+	}
+}
+
+func TestLoadMatchingCatalogSubscriptions(t *testing.T) {
+	catalogPath := filepath.Join(t.TempDir(), "$HOME", "catalog.json")
+	contents := "[[matching.catalogs]]\nid = \"local-crosswalk\"\nfile = " + strconv.Quote(catalogPath) + "\n\n" + `[[matching.catalogs]]
+id = "community-crosswalk"
+url = "https://catalog.example.org/drifter/v1.json"
+`
+	cfg, err := Load(write(t, contents))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Matching.Catalogs) != 2 || cfg.Matching.Catalogs[0] != (matchingcatalog.Subscription{ID: "local-crosswalk", File: catalogPath}) || cfg.Matching.Catalogs[1].URL != "https://catalog.example.org/drifter/v1.json" {
+		t.Fatalf("matching catalog subscriptions were not loaded literally: %+v", cfg.Matching.Catalogs)
+	}
+}
+
+func TestLoadRejectsInvalidMatchingCatalogSubscriptions(t *testing.T) {
+	for name, content := range map[string]string{
+		"relative-file": `[[matching.catalogs]]
+id = "local"
+file = "catalog.json"
+`,
+		"query-url": `[[matching.catalogs]]
+id = "remote"
+url = "https://catalog.example.org/catalog.json?token=secret"
+`,
+		"duplicate-alias": `[[matching.catalogs]]
+id = "same"
+file = "/tmp/a.json"
+[[matching.catalogs]]
+id = "same"
+file = "/tmp/b.json"
+`,
+		"both-source-types": `[[matching.catalogs]]
+id = "same"
+file = "/tmp/a.json"
+url = "https://catalog.example.org/catalog.json"
+`,
+		"no-source": `[[matching.catalogs]]
+id = "same"
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(write(t, content)); err == nil {
+				t.Fatal("invalid matching catalog subscription accepted")
 			}
 		})
 	}

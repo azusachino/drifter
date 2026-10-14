@@ -1,0 +1,28 @@
+{
+  "catalog_schema_version": 1,
+  "catalog_id": "example.synthetic-crosswalk",
+  "publisher": "Synthetic example",
+  "assertions": [
+    {
+      "record_id": "synthetic-record-42",
+      "source": {"provider": "weread", "id": "42"},
+      "target": {"provider": "hardcover", "work_id": 77, "edition_id": 88},
+      "provenance": [
+        {"source": "synthetic fixture", "reference": "example row 1"}
+      ]
+    }
+  ],
+  "hints": [
+    {
+      "record_id": "synthetic-hint-42",
+      "source": {"provider": "weread", "id": "42"},
+      "title": "Synthetic example title",
+      "original_author": "Synthetic Author",
+      "isbn": "9780306406157",
+      "confidence": 0.8,
+      "provenance": [
+        {"source": "synthetic fixture", "reference": "example hint 1"}
+      ]
+    }
+  ]
+}

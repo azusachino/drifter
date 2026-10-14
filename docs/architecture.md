@@ -19,6 +19,7 @@ implemented.
 | Mapping store and ownership | `internal/companion/store.go`, `ownership*.go` | Versioned SQLite, private-file validation, schema initialization, confirmed mappings, sidecar process lock and owned-operation lifetime. |
 | Local HTTP server | `internal/httpserver` | Foreground listener, server-rendered mapping interface, request boundary, read routes and explicit mapping mutations through shared core. |
 | Configuration | `internal/config` | Settings-only TOML with full validation, unknown-key rejection and refusal of credential-like settings. |
+| Matching catalogs | `internal/matchingcatalog`, called by `internal/companion` | Bounded, request-triggered local/HTTPS loading, v1 schema validation and untrusted evidence for shared matching. |
 | Logging and probes | `internal/logging`, `internal/probes` | JSON `slog` output and local `/healthz`/`/readyz` checks. |
 
 ## Domain and authority
@@ -60,9 +61,11 @@ HTTP request ──────┘                  │
 ```
 
 Matching performs bounded exact-edition lookup first, then bounded candidate
-search; the operator reviews and confirms. Pending reads use WeRead and SQLite
-only. The local page and mapping list read SQLite only; provider construction
-is lazy and shared by each server instance.
+search; configured catalogs load only during the shared core `Match` operation
+and return separate, untrusted assertions and hints. They do not alter provider
+search or confirmation. Pending reads use WeRead and SQLite only. The local page
+and mapping list read SQLite only; provider construction is lazy and shared by
+each server instance.
 
 ## CLI and HTTP interfaces
 
@@ -96,6 +99,11 @@ there is no parallel mapping policy in the handler.
 
 ## Browser and request boundary
 
+Chi routes are grouped into page/probe, API and native mapping-action routes;
+handlers remain ordinary `net/http` handlers over the shared core. One
+`httplog` request middleware wraps the Host/Origin boundary and router, so
+security rejections are observed without adding a second request logger.
+
 The server checks Host against its configured listener and rejects cross-origin
 Origin and cross-site Fetch Metadata on browser requests. Mutation JSON must
 use `application/json`, stay within the body bound, decode strictly (unknown,
@@ -118,7 +126,11 @@ Default loopback binding is the supported safe mode. The server has no user
 authentication. Explicit non-loopback binding is unauthenticated and requires
 an independently protected network boundary; the CSRF token does not change
 that fact. Provider errors and mutation responses are sanitized. Request
-payloads, credentials, source titles and CSRF tokens are not logged.
+records contain only method, allowlisted route pattern, status and processing
+duration, in addition to standard time/level fields and a constant message. The
+logger replaces the middleware's URL-bearing message and drops all other
+attributes, including headers, remote address, body, query, provider errors,
+and panic text/stack. Request and response body capture is off.
 
 ## SQLite and ownership lifecycle
 
@@ -141,9 +153,10 @@ lease, but does not migrate it.
 ## Configuration and credentials
 
 `config.toml` contains validated settings (log level, probe address, HTTP
-listener address and optional database path), never secrets. Missing settings
-use defaults; unknown keys and credential-like keys fail closed. Changes apply
-at process startup, not live reload. Credentials come from
+listener address, optional database path and explicit matching catalog sources),
+never secrets. Missing settings use defaults; unknown keys and credential-like
+keys fail closed. Catalog files/URLs are literal and load only during `match`.
+Changes apply at process startup, not live reload. Credentials come from
 `WEREAD_API_KEY` and `HARDCOVER_API_KEY` in the invoking process environment.
 Provider endpoints are fixed HTTPS URLs. The clients reject redirects, bound
 response size and timeout, pace their own calls, and do not automatically
@@ -156,8 +169,9 @@ server. `/readyz` checks local database access and makes no provider requests.
 
 The supported local gates are `make check`, pinned Markdown lint for changed
 docs, and synthetic Playwright journeys via `make e2e`. Make and a C compiler
-are required because the SQLite driver uses CGO. `.mise.toml` pins development
-tools; `go.mod` declares the Go version. Tests use synthetic provider
+are required because the SQLite driver uses CGO. `.mise.toml` pins Go 1.27.2,
+Node and rumdl; `go.mod` requires Go 1.27.0. CI's mise action installs the same
+toolchain before running Make gates. Tests use synthetic provider
 implementations and temporary SQLite, never live credentials.
 
 The [HTTP acceptance plan](plans/http-server.md) maps user stories to CLI, HTTP,
@@ -169,10 +183,19 @@ that status synchronization or the full broader milestone is complete.
 
 | Dependency | Rationale |
 | --- | --- |
-| Go standard library (`net/http`, JSON, `flag`, `log/slog`, crypto) | Small audit surface for a credential-holding local tool. |
+| Go standard library (`net/http`, JSON, `flag`, `log/slog`, crypto) | Small audit surface and standard-handler boundary. |
+| [`github.com/go-chi/chi/v5` v5.5.0](https://pkg.go.dev/github.com/go-chi/chi/v5@v5.5.0) | Method-aware route groups while retaining standard `http.Handler` composition. |
+| [`github.com/go-chi/httplog/v3` v3.5.0](https://pkg.go.dev/github.com/go-chi/httplog/v3@v3.5.0) | Structured request logging on `log/slog`; Drifter wraps it with a strict field/message allowlist. |
+| [`github.com/santhosh-tekuri/jsonschema/v6` v6.0.3](https://pkg.go.dev/github.com/santhosh-tekuri/jsonschema/v6@v6.0.3) | Draft 2020-12 validation for the closed, versioned catalog schema; schema references remain bundled. |
 | `github.com/mattn/go-sqlite3` | Durable local state with explicit CGO tradeoff. |
 | `github.com/BurntSushi/toml` | Small settings-only configuration with unknown-key detection. |
 | GitHub Actions and pinned `govulncheck` | Owning CI checks and advisory vulnerability scanning. |
+
+Chi documents route composition and `http.Handler` interoperability in its
+[official README](https://github.com/go-chi/chi/tree/v5.5.0). The request
+logger's defaults include URL and panic fields; its [official options/API
+documentation](https://pkg.go.dev/github.com/go-chi/httplog/v3@v3.5.0) informed
+the explicit safe schema and handler filter in `internal/httpserver/requestlog.go`.
 
 Deliberately absent are a CLI framework, ORM, frontend framework/build chain,
 retry library, telemetry SDK, user-authentication system and background job

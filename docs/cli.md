@@ -64,6 +64,11 @@ addr = "127.0.0.1:8081"  # local HTTP server; loopback by default
 
 [database]
 # path = "/var/lib/drifter/mappings.sqlite"  # optional absolute override
+
+# Matching catalogs are opt-in and fetched only by an explicit `match` command.
+[[matching.catalogs]]
+id = "local-crosswalk"
+file = "/tmp/drifter-matching-catalog.json"
 ```
 
 Credential-like keys (`api_key`, `token`, `secret`, `password`, `credential`)
@@ -144,6 +149,7 @@ bin/drifter inspect --book-id 123
 bin/drifter inspect --book-id 123 --progress
 bin/drifter match --book-id 123
 bin/drifter match --book-id 123 --query 'Original-language title'
+bin/drifter match --book-id 123 --config config.toml
 bin/drifter pending --account my-weread --target-account my-hardcover
 ```
 
@@ -159,11 +165,44 @@ unique exact edition is still only a proposal; duplicate identifier results are
 ambiguous. Without an exact edition, supply an original-language query when
 appropriate. Title similarity or search ranking never creates a mapping.
 
+### Community matching catalogs
+
+`match --config PATH` may load explicitly subscribed local JSON files or HTTPS
+URLs from `[[matching.catalogs]]` TOML entries. Each entry has a unique safe
+`id` and exactly one of an absolute `file` or `url`. No environment or shell
+expansion occurs. The [synthetic JSON sample](../examples/matching-catalog.json)
+and [local TOML example](../examples/matching-catalogs.toml) can be exercised
+with:
+
+```sh
+cp examples/matching-catalog.json /tmp/drifter-matching-catalog.json
+bin/drifter match --book-id 42 --config examples/matching-catalogs.toml
+```
+
+The example IDs and book metadata are synthetic. A catalog can assert a
+WeRead-ID-to-Hardcover-work/optional-edition claim or provide separate title,
+author and ISBN hints with provenance. Assertions, hints and conflicting
+claims appear separately in the core match report; they never select a result
+or create a mapping. The existing explicit `link` operation still validates
+Hardcover membership and requires your decision.
+
+Catalog requests occur only during `match`, not server startup, browser pages,
+probes, pending or mapping operations. Each document is limited to 1 MiB, total
+catalog input to 4 MiB per match, and loading to eight sources/fifteen seconds.
+Remote HTTPS is restricted to DNS hostnames on port 443, rejects credentials,
+queries and fragments, refuses redirects and proxies, validates and pins only
+public global addresses, and bounds both compressed and decompressed bodies.
+Failed sources are atomic: successful provider results remain in the JSON
+report with `catalogs_complete: false`, a safe alias/code issue, and a nonzero
+CLI exit. With no subscriptions, the legacy match report and provider search
+are unchanged.
+
 Hardcover title search is limited to the first ten candidates; candidate edition
 lists show at most ten editions each. Exact ISBN lookup is capped at 100 rows.
 These bounded views do not prove that an absent title/edition is missing from
-the whole catalog. Every result requires owner confirmation. No catalog
-enrichment or automatic English-edition substitution is attempted.
+the whole catalog. Every result requires owner confirmation. Catalog claims are
+shown separately and do not alter provider search, automatic English-edition
+substitution or confirmation.
 
 ## Pending matching worklist
 
@@ -196,8 +235,8 @@ Incomplete output exits nonzero so a partial list cannot look like success.
 Shelf facts, progress and raw responses are never persisted. Opening the local
 mapping database may initialize or migrate it as documented below.
 
-Saved review decisions, external hints and interactive review are subsequent
-issue #7 slices; this command does not yet filter decisions or synchronize status.
+Saved review decisions and interactive review remain subsequent issue #7
+slices; this command does not filter decisions or synchronize status.
 
 ## Confirm local mappings
 

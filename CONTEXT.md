@@ -52,8 +52,9 @@ and target account pair. It makes no claim about target catalog coverage.
 _Avoid_: Deleted source book, global exclusion
 
 **Matching hint**:
-An unconfirmed suggestion about a source book's original title or author.
-Confidence describes uncertainty, not identity confirmation or permission to link.
+An unconfirmed suggestion about a source book's original title, author or ISBN.
+Provenance records its unverified origin; confidence describes uncertainty, not
+identity confirmation or permission to link.
 _Avoid_: Verified metadata, automatic mapping
 
 **Skip**:

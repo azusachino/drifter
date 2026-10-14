@@ -5,20 +5,26 @@
 Keep [issue #7](https://github.com/azusachino/drifter/issues/7)'s matching
 worklist goal, but deliver it through five independently verified slices. The
 owner selected smaller slices and confirmed the behavior below through a design
-interview on 2026-10-13. Approval covers recording the plan, not implementation
-or merging either PR. Issue #7 remains the acceptance and
-live-work ledger. This document records ordering and rationale, not completion
-status. The delivered first slice's [plan](read-only-matching.md) remains
-historical; it is not overwritten.
-
-Matching hints are search inputs. Only explicit owner selection may create a
-local mapping. No LLM calls, new credentials, automatic linking, remote status
-writes, catalog creation, HTTP server work (#6), deployment or whole-backlog
-bootstrap enters this scope. No agent reviewer or coordination service is
-needed for this planning pass. Pi-subagents may be used if agent review is
-actually needed; no delegation has occurred. Continue in this session on this
-device, without a handoff unless the owner explicitly requests one.
-Implementation requires separate approval.
+interview on 2026-10-13. That original approval covered recording the plan, not
+implementation or merging either PR. The parent has since approved the bounded
+catalog slice under the owner's existing authorization. Issue #7 remains the
+acceptance and live-work ledger. This document records ordering and rationale,
+not completion status. The delivered first slice's [plan](read-only-matching.md) remains
+historical; it is not overwritten. The owner replaced the earlier single-file
+`--hints` proposal with the
+[community catalog contract](matching-catalogs.md). Parent approved the
+bounded schema/loader/core/CLI slice under the existing owner authorization;
+that slice is implemented and passed its owning gates on this branch. It does
+not authorize catalog authoring or any deferred behavior. Only
+explicit owner selection may create a local mapping. No LLM calls, new
+credentials, automatic linking, remote status writes, catalog
+authoring/contribution service, HTTP server work (#6),
+deployment or whole-backlog bootstrap enters this scope. No agent reviewer or
+coordination service is needed for this planning pass. Pi-subagents may be
+used if agent review is actually needed; no delegation has occurred. Continue in
+this session on this device, without a handoff unless the owner explicitly
+requests one. Remaining slices and any scope beyond the approved catalog
+contract require separate approval.
 
 ## Revalidated starting point
 
@@ -69,13 +75,14 @@ for this plan.
   A successful link is hidden by its mapping; lookup failures and EOF/cancel
   save no terminal decision. Provide an explicit local reset of a decision so
   catalog changes or accidental exclusion do not require manual SQL.
-- **Hints:** one bounded JSON file with unique book IDs and typed fields
-  `book_id`, `original_title`, `original_author`, `confidence`. Validate the file
-  before provider requests. Missing hints fall back to normal matching; wrong
-  hints remain untrusted suggestions. Confidence is a required finite JSON
-  number from 0 through 1, displayed as uncalibrated metadata; it never filters
-  candidates or authorizes a link. Reject simultaneous `--query` and `--hints`
-  before provider requests instead of applying implicit precedence.
+- **Hints and catalogs:** the earlier single-file `--hints FILE` proposal is
+  superseded by the implemented
+  [catalog contract](matching-catalogs.md): explicit TOML-selected local/HTTPS
+  documents, stable provider IDs, separate assertions and title/ISBN hints,
+  provenance, and conflict reporting. The core match report surfaces untrusted
+  evidence without selecting a target or silently replacing `--query`. Preserve
+  the uncalibrated-confidence rule if later work uses hints for ranking:
+  confidence never filters, ranks or authorizes a link.
 - **Ranking:** stable partition by normalized contributor-name equality
   (trim, collapse whitespace, case-fold), not transliteration or fuzzy scores.
   Keep the same candidate IDs and preserve provider order within both groups.
@@ -142,25 +149,26 @@ race tests, then `make check`. No private captures enter fixtures.
 
 ### 3. Improve suggestions with external hints
 
-**Outcome:** `match --hints FILE` uses the selected book's hinted title and
-stably re-ranks only the resulting work candidates by author match. `pending`
-and standalone `link` remain usable without hints.
+**Outcome:** the catalog slice loads explicitly selected catalogs through the
+shared core `Match` operation and surfaces exact assertions and title/ISBN
+hints with provenance and conflicts. It does not replace the current search
+query or choose a mapping. `pending` and standalone `link` remain usable without
+catalogs.
 
-**Acceptance:** the candidate set equals `match --query HINTED_TITLE`, including
-ISBN-first behavior; only author grouping changes order. Missing/wrong hints
-never link anything. Malformed, duplicate, oversized and conflicting inputs
-fail safely without echoing file contents; confidence boundaries and rejection
-of combined query/hints flags are tested before any request. Low-confidence
-hints still produce suggestions, never automatic mappings.
+**Acceptance:** use the catalog contract's loader/security and core/CLI tests,
+then the existing HTTP/browser regression gates. Preserve legacy matching with
+no configured catalogs. Invalid or unavailable sources are reported incomplete
+without echoing source URLs or contents; conflicts retain all alternatives; no
+hint creates a mapping or provider write. Further use of hints to alter
+candidate searches or ranking needs separate parent review and approval.
 
 **Likely paths:** `cmd/drifter/cli.go`, `cli_test.go`,
 `internal/companion/hardcover.go`, `hardcover_test.go`, `README.md`.
-**Dependency:** slice 2 for the worklist workflow; the matcher itself needs no
-new stored state.
-**Verification:** compare hinted and explicit-query reports against identical
-synthetic HTTP responses, including missing author, equal-rank stability,
-ambiguous ISBN and same-title/different-author cases; assert no local mapping
-writes; focused core/CLI race tests, then `make check`.
+**Dependency:** slice 2 for the worklist workflow; catalogs add no stored state.
+**Verification:** synthetic core and CLI fixtures prove source-ID matching,
+separated assertions/hints, conflict preservation, incomplete-source reporting
+and no mapping/provider writes. Catalog transport tests use injected resolver
+and fetcher seams; run focused core/CLI race tests, then `make check`.
 
 ### 4. Persist review decisions without linking
 

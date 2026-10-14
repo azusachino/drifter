@@ -97,6 +97,9 @@ func TestCLIReadCommands(t *testing.T) {
 				if !reflect.DeepEqual(catalog.calls, []string{"match:Original title"}) {
 					t.Fatalf("unexpected target calls: %v", catalog.calls)
 				}
+				if strings.Contains(out.String(), "catalogs_complete") || strings.Contains(out.String(), "catalog_assertions") {
+					t.Fatalf("no-source match changed the legacy report: %s", out.String())
+				}
 			} else if len(catalog.calls) != 0 {
 				t.Fatal("inspection contacted Hardcover")
 			}

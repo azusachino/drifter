@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/azusachino/drifter/internal/matchingcatalog"
 )
 
 // Level is a logging severity threshold.
@@ -45,6 +46,9 @@ type Config struct {
 		// Path overrides the CLI default mapping database location.
 		Path string `toml:"path"`
 	} `toml:"database"`
+	Matching struct {
+		Catalogs []matchingcatalog.Subscription `toml:"catalogs"`
+	} `toml:"matching"`
 }
 
 // Defaults returns the configuration used when no file is present.
@@ -143,6 +147,9 @@ func (c Config) validate() error {
 	}
 	if strings.TrimSpace(c.Database.Path) != "" && !filepath.IsAbs(c.Database.Path) {
 		return fmt.Errorf("database.path must be absolute")
+	}
+	if err := matchingcatalog.ValidateSubscriptions(c.Matching.Catalogs); err != nil {
+		return err
 	}
 	return nil
 }

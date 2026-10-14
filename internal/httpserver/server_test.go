@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/azusachino/drifter/internal/companion"
+	"github.com/go-chi/chi/v5"
 )
 
 type sourceStub struct {
@@ -36,6 +38,14 @@ func (source *sourceStub) Book(_ context.Context, id string) (companion.Book, er
 	return companion.Book{ID: id, Title: "Core book", TranslatorKnown: true}, nil
 }
 func (*sourceStub) Progress(context.Context, string) (companion.Progress, error) { panic("unused") }
+
+type failingSource struct {
+	sourceStub
+}
+
+func (*failingSource) Shelf(context.Context) (companion.ShelfResult, error) {
+	return companion.ShelfResult{}, fmt.Errorf("provider-error-private-marker")
+}
 
 type targetStub struct {
 	calls         atomic.Int32
@@ -156,6 +166,113 @@ func TestRootRendersMappingInterface(t *testing.T) {
 	legacy := request(t, base, http.MethodGet, "/admin", nil, nil)
 	if legacy.StatusCode != http.StatusNotFound {
 		t.Fatalf("legacy /admin path remained available: status=%d", legacy.StatusCode)
+	}
+	matchRoute := request(t, base, http.MethodGet, "/api/match", nil, nil)
+	if matchRoute.StatusCode != http.StatusNotFound || source.calls != 0 || source.bookCalls.Load() != 0 {
+		t.Fatalf("HTTP matching route was added or contacted providers: status=%d", matchRoute.StatusCode)
+	}
+}
+
+func TestHTTPRequestsLogOnlySanitizedMetadata(t *testing.T) {
+	now := time.Now()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	source := &failingSource{sourceStub: sourceStub{now: now}}
+	server, err := New(Options{Address: "127.0.0.1:0", Database: filepath.Join(t.TempDir(), "db.sqlite"),
+		Source: source, Target: &targetStub{}, Logger: logger, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router, ok := server.http.Handler.(chi.Router)
+	if !ok {
+		t.Fatal("server handler is not a Chi router")
+	}
+	router.Get("/test-panic/{recordID}", func(http.ResponseWriter, *http.Request) {
+		panic("panic-payload-private-marker")
+	})
+	listener, err := server.Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(ctx, listener) }()
+	base := "http://" + listener.Addr().String()
+	query := url.Values{"account": {"account-private-marker"}, "target_account": {"target-private-marker"}}
+	headers := map[string]string{
+		"User-Agent": "user-agent-private-marker",
+		"Referer":    base + "/?referer-private-marker",
+	}
+	response := request(t, base, http.MethodGet, "/api/pending?"+query.Encode(), headers, nil)
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != http.StatusBadGateway || strings.Contains(string(responseBody), "provider-error-private-marker") {
+		t.Fatalf("pending error response was not sanitized: status=%d read error=%v", response.StatusCode, err)
+	}
+	mutationHeaders := map[string]string{
+		"Origin": base, "Content-Type": "application/json", "X-Drifter-CSRF": "csrf-token-private-marker",
+		"User-Agent": "user-agent-private-marker", "Referer": base + "/?referer-private-marker",
+	}
+	body := `{"source_account":"account-private-marker","book_id":"book-id-private-marker","target_account":"target-private-marker","work_id":7,"edition_id":0}`
+	response = request(t, base, http.MethodPost, "/api/mappings/confirm?query-private-marker=1", mutationHeaders, strings.NewReader(body))
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unexpected mutation response status=%d", response.StatusCode)
+	}
+	response = request(t, base, http.MethodGet, "/test-panic/panic-path-private-marker", nil, nil)
+	if response.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("panic response status=%d", response.StatusCode)
+	}
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("request log records=%d, want one per request: %s", len(lines), logs.String())
+	}
+	for _, marker := range []string{
+		"account-private-marker", "target-private-marker", "book-id-private-marker", "query-private-marker",
+		"csrf-token-private-marker", "user-agent-private-marker", "referer-private-marker", "provider-error-private-marker",
+		"panic-payload-private-marker", "panic-path-private-marker",
+	} {
+		if strings.Contains(logs.String(), marker) {
+			t.Fatalf("request log disclosed %q: %s", marker, logs.String())
+		}
+	}
+	statuses := []int{http.StatusBadGateway, http.StatusBadRequest, http.StatusInternalServerError}
+	methods := []string{http.MethodGet, http.MethodPost, http.MethodGet}
+	for i, line := range lines {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(line), &fields); err != nil {
+			t.Fatalf("request log is not JSON: %v", err)
+		}
+		var message, method string
+		var status int
+		if err := json.Unmarshal(fields["msg"], &message); err != nil || message != "HTTP request" {
+			t.Fatalf("request log message was not sanitized: %s", line)
+		}
+		if err := json.Unmarshal(fields["http.request.method"], &method); err != nil || method != methods[i] {
+			t.Fatalf("request method log=%q: %s", method, line)
+		}
+		if err := json.Unmarshal(fields["http.response.status_code"], &status); err != nil || status != statuses[i] {
+			t.Fatalf("request status log=%d: %s", status, line)
+		}
+		if _, ok := fields["event.duration"]; !ok {
+			t.Fatalf("request duration missing: %s", line)
+		}
+		if i < 2 {
+			var route string
+			if err := json.Unmarshal(fields["http.route"], &route); err != nil || route != []string{"/api/pending", "/api/mappings/confirm"}[i] {
+				t.Fatalf("request route log=%q: %s", route, line)
+			}
+		}
+		for key := range fields {
+			switch key {
+			case "time", "level", "msg", "http.request.method", "http.route", "http.response.status_code", "event.duration":
+			default:
+				t.Fatalf("unexpected request log field %q: %s", key, line)
+			}
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

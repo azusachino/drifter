@@ -1,0 +1,3 @@
+[[matching.catalogs]]
+id = "synthetic-example"
+file = "/tmp/drifter-matching-catalog.json"
