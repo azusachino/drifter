@@ -1,4 +1,5 @@
-GO ?= go
+GO = mise exec -- go
+GOFMT = mise exec -- gofmt
 
 .PHONY: check fmt fmt-check test build
 
@@ -9,10 +10,10 @@ check: fmt-check
 	$(MAKE) build
 
 fmt:
-	gofmt -w cmd internal
+	$(GOFMT) -w cmd internal
 
 fmt-check:
-	@files="$$(gofmt -l cmd internal)" || exit $$?; if [ -n "$$files" ]; then printf '%s\n' "$$files"; exit 1; fi
+	@files="$$($(GOFMT) -l cmd internal)" || exit $$?; if [ -n "$$files" ]; then printf '%s\n' "$$files"; exit 1; fi
 
 test:
 	$(GO) test -race ./...

@@ -13,16 +13,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
+      - uses: jdx/mise-action@v3
       - name: Ensure C toolchain for CGO (go-sqlite3)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libc6-dev
       - name: Owning gate (fmt, vet, mod verify, race tests, build)
         run: make check
       - name: govulncheck (advisory)
         continue-on-error: true
-        uses: golang/govulncheck-action@v1
-        with:
-          go-version-input: ''
-          go-package: ./...
+        run: mise exec -- go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...

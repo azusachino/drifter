@@ -38,9 +38,20 @@ plugin registry or additional service layer is introduced by this separation.
 
 ## Data flow (implemented)
 
-An interactive rendered version of the confirmation workflow lives at
-[docs/diagrams/cli-mapping-workflow.html](diagrams/cli-mapping-workflow.html)
-(generated with archify; validate/deliver/check/browser gates all passed).
+The [interactive workflow diagram](diagrams/cli-mapping-workflow.html) separates
+pending, matching and explicit confirmation. Its
+[editable specification](diagrams/cli-mapping-workflow.json) pins the implemented
+source revision. These are independent commands, not an automatic linking loop.
+The [current verification receipt](diagrams/core-workflow-check/cli-mapping-workflow.finalize-summary.json)
+binds this specification and HTML to passing artifact and browser checks.
+Older adjacent receipts describe the previous diagram; browser checks are
+distinct from optional visual review.
+
+Pending reads mappings through core, fetches the WeRead shelf, filters privacy,
+activity and mapped identities, then enriches eligible rows. It returns JSON
+with explicit completeness and issue codes, never invokes Hardcover and never
+creates a mapping. Full limits and opt-in behavior live in the
+[CLI reference](cli.md#pending-matching-worklist).
 
 ```text
 WeRead gateway ──▶ source client ──▶ normalized Book/Progress
@@ -89,6 +100,15 @@ change underneath it. `serve-probes` exposes honest liveness/readiness for a
 future container Deployment: `/readyz` opens and lists the mapping database
 per request, and optionally requires provider environment variables to be
 present (without contacting providers).
+
+## Development tooling
+
+`.mise.toml` pins Go and rumdl. Make executes Go and gofmt through mise;
+GitHub Actions installs the same tools with `jdx/mise-action`. The Go language
+requirement remains in `go.mod`. Make and a C compiler are host prerequisites
+because the SQLite driver requires CGO. The advisory vulnerability scan runs a
+pinned govulncheck with the same Go toolchain; it does not select another Go
+version. See the [quick start](../README.md#quick-start).
 
 ## OSS component inventory and rationale
 
