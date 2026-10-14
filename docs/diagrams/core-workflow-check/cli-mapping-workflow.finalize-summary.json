@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "workflow",
+  "quality": "showcase",
+  "specification": {
+    "path": "/Users/azusachino/Projects/project-github/harus-workstation/vendor/drifter/docs/diagrams/cli-mapping-workflow.json",
+    "sha256": "0d0afaca01c2c66df4366cd40e686e98e0edc186130a39dbd47fc810b195bd26",
+    "bytes": 4654
+  },
+  "artifact": {
+    "path": "/Users/azusachino/Projects/project-github/harus-workstation/vendor/drifter/docs/diagrams/cli-mapping-workflow.html",
+    "sha256": "6da65e6566a4c8ab475579c1ceed6ab1b4caee80506aa5b679d332c2c47bf5ce",
+    "bytes": 762745
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/azusachino/Projects/project-github/harus-workstation/vendor/drifter/docs/diagrams/core-workflow-check/cli-mapping-workflow.finalize.json",
+    "summaryReceipt": "/Users/azusachino/Projects/project-github/harus-workstation/vendor/drifter/docs/diagrams/core-workflow-check/cli-mapping-workflow.finalize-summary.json",
+    "browserCheckReceipt": "/Users/azusachino/Projects/project-github/harus-workstation/vendor/drifter/docs/diagrams/core-workflow-check/cli-mapping-workflow.browser-check.json"
+  },
+  "update": {
+    "status": "unavailable",
+    "installedVersion": null,
+    "availableVersion": null,
+    "releaseNotes": null,
+    "checkedAt": null,
+    "source": null,
+    "noticeRequired": false,
+    "noticeText": null,
+    "reason": "disabled"
+  },
+  "visualReview": "not-requested",
+  "durationMs": 3583
+}

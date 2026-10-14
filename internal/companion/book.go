@@ -12,9 +12,11 @@ type Book struct {
 	Title      string `json:"title"`
 	Author     string `json:"author"`
 	Translator string `json:"translator,omitempty"`
-	ISBN       string `json:"isbn,omitempty"`
-	Publisher  string `json:"publisher,omitempty"`
-	ReaderURL  string `json:"reader_url,omitempty"`
+	// TranslatorKnown distinguishes an explicit empty field from missing evidence.
+	TranslatorKnown bool   `json:"-"`
+	ISBN            string `json:"isbn,omitempty"`
+	Publisher       string `json:"publisher,omitempty"`
+	ReaderURL       string `json:"reader_url,omitempty"`
 }
 
 type Progress struct {

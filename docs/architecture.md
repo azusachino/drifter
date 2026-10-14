@@ -2,7 +2,7 @@
 
 Drifter relates reading facts from source services (WeRead today; Kindle
 Unlimited later) to Hardcover reading status. This document describes the
-system as implemented on `feat/oss-foundation`; future behavior (status
+current core and CLI, including the pending-worklist slice; future behavior (status
 writes, daemon scheduling, deployment) is labeled as planned, not built.
 
 ## Components
@@ -10,20 +10,48 @@ writes, daemon scheduling, deployment) is labeled as planned, not built.
 | Component | Location | Responsibility |
 | --- | --- | --- |
 | CLI | `cmd/drifter` | Argument parsing, command routing, JSON output, wiring config/logging/probes |
-| Source client (WeRead) | `internal/companion/weread.go` | Read-only gateway calls: search, book info, personal progress |
+| Core operations | `internal/companion/operations.go` | Provider contracts and shared inspect, match, validated confirmation and stored-mapping worklist orchestration |
+| Worklist selection | `internal/companion/pending.go` | Privacy/activity/account filtering, bounded enrichment, classification and partial-result reporting |
+| Source client (WeRead) | `internal/companion/weread.go` | Read-only gateway calls: shelf, search, book info, personal progress |
 | Target client (Hardcover) | `internal/companion/hardcover.go` | Read-only GraphQL: exact-edition lookup, bounded candidate search, work/edition membership validation |
 | Transport | `internal/companion/http.go` | Shared hardened HTTP: fixed HTTPS destinations, no redirects, 30 s timeout, 2 MiB cap, per-client pacing, no retries, sanitized errors |
 | Identity normalization | `internal/companion/book.go` | ISBN checksum/10↔13 conversion, book-ID validation, conservative status inference |
-| Mapping store | `internal/companion/store.go` | SQLite confirmed mappings; account-scoped keys, mode-600 file checks, secure-delete |
+| Mapping store | `internal/companion/store.go` | Versioned SQLite confirmed mappings; transactional initialization, account-scoped keys, mode-600 file checks, secure-delete |
 | Configuration | `internal/config` | Settings-only TOML: full validation at load, unknown keys rejected, credential-like keys refused, restart-applied |
 | Logging | `internal/logging` | stdlib `slog` JSON to stdout, level from config, random run IDs, no payloads or secrets |
 | Health probes | `internal/probes` | Read-only `/healthz` and `/readyz` over stdlib `net/http`; local dependency checks only |
 
+## Core and adapter responsibilities
+
+Core owns feature operations and their provider contracts (`Source`, `Target`).
+`PendingWorklist` reads mappings and selects eligible books; `ConfirmLink` fetches
+source metadata, validates work/edition membership and persists only the explicit
+selection. CLI and a future server call these same operations, not each other.
+The existing `Pending` selector has a narrower internal source dependency for
+focused tests; it does not define a separate CLI feature contract.
+
+Adapters own credentials/configuration wiring, argument or request decoding,
+output formatting and translation of core results into exit codes or HTTP
+responses. Store lifetime for simple local listing/removal is adapter wiring;
+`Store.List` and `Store.Unlink` already own those operations. No server, cache,
+plugin registry or additional service layer is introduced by this separation.
+
 ## Data flow (implemented)
 
-An interactive rendered version of the confirmation workflow lives at
-[docs/diagrams/cli-mapping-workflow.html](diagrams/cli-mapping-workflow.html)
-(generated with archify; validate/deliver/check/browser gates all passed).
+The [interactive workflow diagram](diagrams/cli-mapping-workflow.html) separates
+pending, matching and explicit confirmation. Its
+[editable specification](diagrams/cli-mapping-workflow.json) pins the implemented
+source revision. These are independent commands, not an automatic linking loop.
+The [current verification receipt](diagrams/core-workflow-check/cli-mapping-workflow.finalize-summary.json)
+binds this specification and HTML to passing artifact and browser checks.
+Older adjacent receipts describe the previous diagram; browser checks are
+distinct from optional visual review.
+
+Pending reads mappings through core, fetches the WeRead shelf, filters privacy,
+activity and mapped identities, then enriches eligible rows. It returns JSON
+with explicit completeness and issue codes, never invokes Hardcover and never
+creates a mapping. Full limits and opt-in behavior live in the
+[CLI reference](cli.md#pending-matching-worklist).
 
 ```text
 WeRead gateway ──▶ source client ──▶ normalized Book/Progress
@@ -72,6 +100,15 @@ change underneath it. `serve-probes` exposes honest liveness/readiness for a
 future container Deployment: `/readyz` opens and lists the mapping database
 per request, and optionally requires provider environment variables to be
 present (without contacting providers).
+
+## Development tooling
+
+`.mise.toml` pins Go and rumdl. Make executes Go and gofmt through mise;
+GitHub Actions installs the same tools with `jdx/mise-action`. The Go language
+requirement remains in `go.mod`. Make and a C compiler are host prerequisites
+because the SQLite driver requires CGO. The advisory vulnerability scan runs a
+pinned govulncheck with the same Go toolchain; it does not select another Go
+version. See the [quick start](../README.md#quick-start).
 
 ## OSS component inventory and rationale
 
