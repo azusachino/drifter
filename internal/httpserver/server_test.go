@@ -3,6 +3,7 @@ package httpserver
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -538,11 +539,26 @@ func TestConcurrentPendingRequestsShareOneProviderClient(t *testing.T) {
 	}
 }
 
+func TestPendingOptionsAcceptsOnlyOneOpaqueAfterCursor(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	cursor, _ := json.Marshal(map[string]any{"v": 1, "as_of": now.Unix(), "days": 90, "source_account": "source", "target_account": "target", "last_opened": now.Unix(), "book_id": "123"})
+	opaque := base64.RawURLEncoding.EncodeToString(cursor)
+	values := url.Values{"account": {"source"}, "target_account": {"target"}, "after": {opaque}}
+	options, err := pendingOptions(values, now)
+	if err != nil || options.After != opaque {
+		t.Fatalf("after not propagated: %+v %v", options, err)
+	}
+	values.Add("after", "duplicate")
+	if _, err := pendingOptions(values, now); err == nil || strings.Contains(err.Error(), opaque) {
+		t.Fatal("duplicate or cursor details accepted/leaked")
+	}
+}
+
 func TestPendingRejectsInvalidParametersWithoutProviderCalls(t *testing.T) {
 	now := time.Now()
 	source := &sourceStub{now: now}
 	_, base, _, _ := newTestServer(t, source, filepath.Join(t.TempDir(), "db.sqlite"), now)
-	for _, path := range []string{"/api/pending", "/api/pending?account=a&target_account=b&days=0", "/api/pending?account=a&account=b&target_account=c", "/api/pending?account=a&target_account=b&include_private=true"} {
+	for _, path := range []string{"/api/pending", "/api/pending?account=a&target_account=b&days=0", "/api/pending?account=a&account=b&target_account=c", "/api/pending?account=a&target_account=b&include_private=true", "/api/pending?account=a&target_account=b&after=bad&after=again", "/api/pending?account=a&target_account=b&unknown=x"} {
 		response := request(t, base, http.MethodGet, path, nil, nil)
 		if response.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s status=%d", path, response.StatusCode)

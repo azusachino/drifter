@@ -112,6 +112,14 @@ func encodePendingCursor(c pendingCursor) string {
 	return base64.RawURLEncoding.EncodeToString(data)
 }
 
+func ValidatePendingCursor(options PendingOptions) error {
+	if options.After == "" {
+		return nil
+	}
+	_, err := decodePendingCursor(options.After, options)
+	return err
+}
+
 func decodePendingCursor(raw string, options PendingOptions) (pendingCursor, error) {
 	var c pendingCursor
 	if len(raw) > 2048 {

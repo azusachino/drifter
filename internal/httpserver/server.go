@@ -931,7 +931,7 @@ func setSecurityHeaders(w http.ResponseWriter) {
 
 func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, error) {
 	for key, values := range query {
-		if key != "account" && key != "target_account" && key != "days" || len(values) != 1 {
+		if key != "account" && key != "target_account" && key != "days" && key != "after" || len(values) != 1 {
 			return companion.PendingOptions{}, fmt.Errorf("invalid query")
 		}
 	}
@@ -947,7 +947,11 @@ func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, 
 	if !companion.ValidLabel(account) || !companion.ValidLabel(target) || days < 1 || days > 36500 {
 		return companion.PendingOptions{}, fmt.Errorf("invalid options")
 	}
-	return companion.PendingOptions{SourceAccount: account, TargetAccount: target, Days: days, Now: now}, nil
+	options := companion.PendingOptions{SourceAccount: account, TargetAccount: target, Days: days, After: query.Get("after"), Now: now}
+	if err := companion.ValidatePendingCursor(options); err != nil {
+		return companion.PendingOptions{}, err
+	}
+	return options, nil
 }
 
 func writeJSON(w http.ResponseWriter, r *http.Request, value any) {

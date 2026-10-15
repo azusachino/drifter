@@ -213,7 +213,7 @@ func (app *cliApp) matchCommand() *cobra.Command {
 }
 
 func (app *cliApp) pendingCommand() *cobra.Command {
-	var account, targetAccount, dbPath string
+	var account, targetAccount, dbPath, after string
 	var days int
 	var includePrivate, includeImported bool
 	command := &cobra.Command{Use: "pending", Short: "List recently opened eligible WeRead books"}
@@ -223,6 +223,7 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 	flags.IntVar(&days, "days", 90, "recently opened window in days (1–36500; browsing counts)")
 	flags.BoolVar(&includePrivate, "include-private", false, "explicitly include privacy-marked books (unknown privacy remains excluded)")
 	flags.BoolVar(&includeImported, "include-imported", false, "include imported books for inspection only; match/link remain unsupported")
+	flags.StringVar(&after, "after", "", "continue a pending worklist using its next_cursor")
 	flags.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
 	markRequiredFlags(command, "account", "target-account")
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
@@ -231,6 +232,11 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 		}
 		if days < 1 || days > 36500 {
 			return fmt.Errorf("--days must be between 1 and 36500")
+		}
+		options := companion.PendingOptions{SourceAccount: account, TargetAccount: targetAccount, Days: days,
+			IncludePrivate: includePrivate, IncludeImported: includeImported, After: after, Now: time.Now()}
+		if err := companion.ValidatePendingCursor(options); err != nil {
+			return err
 		}
 		if dbPath == "" {
 			var err error
@@ -245,7 +251,7 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 		}
 		report, err := companion.PendingWorklist(cmd.Context(), reader, dbPath, companion.PendingOptions{
 			SourceAccount: account, TargetAccount: targetAccount, Days: days,
-			IncludePrivate: includePrivate, IncludeImported: includeImported, Now: time.Now(),
+			IncludePrivate: includePrivate, IncludeImported: includeImported, After: after, Now: time.Now(),
 		})
 		if err != nil {
 			return err

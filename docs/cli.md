@@ -111,9 +111,10 @@ bin/drifter-server --config config.toml [--db PATH]
 ```
 
 The server uses `server.addr` (default `127.0.0.1:8081`), provides the same
-health routes, a server-rendered mapping interface at `/`, read-only `/api/mappings`
-and `/api/pending?account=LABEL&target_account=LABEL[&days=N]`, and explicit
-local mapping maintenance. There is no `/admin` compatibility route. New
+health routes, a server-rendered mapping interface at `/`, read-only
+`/api/mappings` and `/api/pending` (account and target labels, optional `days`
+and continuation `after` query parameters), and explicit local mapping
+maintenance. There is no `/admin` compatibility route. New
 confirmations use `ConfirmLinkOwned`, including source book lookup and target
 work/edition membership validation. The HTML form and
 JSON routes support separate confirm, replace and scoped unlink actions; neither
@@ -328,14 +329,20 @@ approval. JSON containing opted-in private metadata must be protected by you.
 Output has `books`, `complete` and privacy-safe `issues` (book IDs and fixed
 codes, never provider error bodies). Shelf count mismatch/missing count or a
 more-results flag prevents claiming completeness. Eligible metadata lookups are
-capped at 100 books per invocation. A lookup failure leaves other valid books in
-the output; narrowing the window or confirming mappings makes reruns useful.
-Incomplete output exits nonzero so a partial list cannot look like success.
-Shelf facts, progress and raw responses are never persisted. Opening the local
-mapping database may initialize or migrate it as documented below.
+capped at 100 attempted books per invocation. When more eligible rows remain,
+JSON includes `next_cursor`; continue with `pending --after CURSOR` or HTTP
+`after=CURSOR`, keeping account labels, window and inclusion flags unchanged.
+Cursors bind those settings and the original scan time; treat them as private
+input and never log or share them. This is a live shelf scan, not a snapshot.
+Continuation advances past attempted failures, so omit `--after` for a fresh
+scan or explicitly retry to revisit failures. More work and other incomplete
+reports print JSON and exit nonzero. Shelf incompleteness remains incomplete
+across pages. Shelf facts, progress and raw responses are never persisted.
+Opening the local mapping database may initialize or migrate it as documented
+below.
 
-Saved review decisions and interactive review remain subsequent issue #7
-slices; this command does not filter decisions or synchronize status.
+Saved review decisions and interactive review are separate matching slices;
+this command does not synchronize status.
 
 ## Confirm local mappings
 

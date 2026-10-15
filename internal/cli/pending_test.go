@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -72,6 +73,42 @@ func TestCLIPendingDefaultWindowAndAccountScope(t *testing.T) {
 	rows, err := store.List(ctx)
 	if err != nil || len(rows) != 3 {
 		t.Fatal("pending changed mappings", rows, err)
+	}
+}
+
+func TestCLIPendingAfterCursorContinuesAndPreservesIncompleteExit(t *testing.T) {
+	public := 0
+	now := time.Now().Truncate(time.Second)
+	shelf := &companion.ShelfResult{Complete: true}
+	for i := 1; i <= 102; i++ {
+		opened := now.Add(-time.Duration(i) * time.Hour).Unix()
+		shelf.Books = append(shelf.Books, companion.ShelfBook{ID: fmt.Sprint(i), Secret: &public, LastOpened: &opened})
+	}
+	reader := &fakeReader{shelf: shelf}
+	providers := clients{source: func() (source, error) { return reader, nil }}
+	base := []string{"pending", "--account", "source", "--target-account", "target", "--days", "90"}
+	var out, stderr bytes.Buffer
+	if err := run(context.Background(), base, &out, &stderr, providers); err == nil {
+		t.Fatal("first page should be incomplete")
+	}
+	var first companion.PendingReport
+	if err := json.Unmarshal(out.Bytes(), &first); err != nil || first.NextCursor == "" || len(first.Books) != 100 {
+		t.Fatalf("bad first page: %+v %v", first, err)
+	}
+	out.Reset()
+	args := append(append([]string{}, base...), "--after", first.NextCursor)
+	if err := run(context.Background(), args, &out, &stderr, providers); err != nil {
+		t.Fatalf("last page should be complete: %v", err)
+	}
+	var second companion.PendingReport
+	if err := json.Unmarshal(out.Bytes(), &second); err != nil || len(second.Books) != 2 || second.NextCursor != "" || second.Books[0].ID != "101" {
+		t.Fatalf("bad continuation: %+v %v", second, err)
+	}
+	secret := "private-cursor-label"
+	out.Reset()
+	bad := append(append([]string{}, base...), "--after", secret)
+	if err := run(context.Background(), bad, &out, &stderr, providers); err == nil || strings.Contains(out.String()+stderr.String(), secret) {
+		t.Fatal("invalid cursor accepted or echoed")
 	}
 }
 
