@@ -206,16 +206,24 @@ bin/drifter review --account my-weread --target-account my-hardcover
 It lists eligible books using the same privacy, mapping, decision and recent
 activity filters as `pending`. Enter `match` for provider-backed suggestions,
 or `skip`, `exclude`, `not-in-catalog`, or `quit`. Suggestions are not accepted
-automatically: choose a displayed work or enter a manual work ID, optionally
-enter an edition ID, then confirm the displayed tuple. Shared source and target
-validation is required before a local link is stored. Imported rows remain
-inspection-only. Blank input is reprompted; EOF and cancellation save nothing.
+automatically: choose a displayed work by suggestion number or enter a manual
+work ID as `work ID` (for example, `work 1`; this avoids ambiguity with
+suggestion number `1`), optionally enter an edition ID, then confirm the
+displayed tuple with `yes`. Blank edition input selects work-only even when an
+exact edition is displayed; suggestions never select an edition automatically.
+Shared source and target validation is required before a local link is stored.
+Imported rows remain inspection-only. Blank decision input is reprompted; EOF
+and cancellation never confirm a link or save a new decision. Earlier completed
+choices remain saved.
 Metadata is stripped of terminal control characters. Provider lookup and final
 confirmation each have a 60-second deadline; owner input has no provider
-deadline. Lookup failure saves no decision and review continues. Review takes
-exclusive database ownership before constructing the WeRead client and holds
-it until exit; the server or another review must be stopped first. Credential-
-free `links` and `decisions` reads remain available against current-schema state.
+deadline. Lookup or link failure saves no decision and review continues, then
+returns nonzero with failed source IDs, even if later books succeed. Replacing
+a mapping requires a separate `yes` and refuses a changed expected target.
+Review takes exclusive database ownership before constructing the WeRead client
+and holds it until exit; the server or another review must be stopped first.
+Credential-free `links` and `decisions` reads remain available against
+current-schema state.
 
 `review` accepts `--days` (default 90), `--include-private`,
 `--include-imported`, `--db`, and `--config`. The strict settings-only config

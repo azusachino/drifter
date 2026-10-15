@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/azusachino/drifter/internal/companion"
 	"github.com/azusachino/drifter/internal/config"
@@ -31,7 +32,7 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 	f.BoolVar(&includePrivate, "include-private", false, "explicitly include privacy-marked books")
 	f.BoolVar(&includeImported, "include-imported", false, "inspect imported books (linking unsupported)")
 	markRequiredFlags(cmd, "account", "target-account")
-	return app.command(cmd, func(c *cobra.Command, _ []string) error {
+	return app.command(cmd, func(c *cobra.Command, _ []string) (reviewErr error) {
 		if !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) || days < 1 || days > 36500 {
 			return fmt.Errorf("valid account labels and --days between 1 and 36500 required")
 		}
@@ -65,6 +66,22 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 		}
 		defer store.Close()
 		terminal := bufio.NewReader(app.input)
+		var failedBooks []string
+		defer func() {
+			if len(failedBooks) > 0 {
+				reviewErr = errors.Join(reviewErr, fmt.Errorf("review failed for source books: %s; no decisions saved for failures", strings.Join(failedBooks, ", ")))
+			}
+		}()
+		var reviewTarget target
+		var reviewTargetErr error
+		targetLoaded := false
+		loadTarget := func() (target, error) {
+			if !targetLoaded {
+				reviewTarget, reviewTargetErr = app.providers.target()
+				targetLoaded = true
+			}
+			return reviewTarget, reviewTargetErr
+		}
 		after := ""
 		for {
 			report, err := companion.PendingWorklistOwned(c.Context(), source, dbPath, companion.PendingOptions{SourceAccount: account, TargetAccount: targetAccount, Days: days, IncludePrivate: includePrivate, IncludeImported: includeImported, After: after, Now: now}, owner)
@@ -105,19 +122,15 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 					}
 					if choice == "match" && !strings.HasPrefix(book.ID, "CB_") {
 						lookupCtx, cancel := context.WithTimeout(c.Context(), reviewProviderTimeout)
-						candidateSource, sourceErr := app.providers.source()
+						targetClient, sourceErr := loadTarget()
 						var report companion.MatchReport
 						if sourceErr == nil {
-							targetClient, targetErr := app.providers.target()
-							if targetErr != nil {
-								sourceErr = targetErr
-							} else {
-								report, sourceErr = companion.Match(lookupCtx, candidateSource, targetClient, book.ID, "")
-							}
+							report, sourceErr = companion.Match(lookupCtx, source, targetClient, book.ID, "")
 						}
 						cancel()
 						if sourceErr != nil {
-							fmt.Fprintln(c.ErrOrStderr(), "Book lookup failed; no decision saved.")
+							failedBooks = append(failedBooks, book.ID)
+							fmt.Fprintf(c.ErrOrStderr(), "Book %s lookup failed; no decision saved.\n", book.ID)
 							break
 						}
 						candidates := report.Candidates
@@ -139,7 +152,7 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 							fmt.Fprintf(c.OutOrStdout(), "Exact edition: %s [edition %d, work %d]\n", terminalText(edition.Title), edition.ID, edition.WorkID)
 							shownEditions++
 						}
-						fmt.Fprint(c.OutOrStdout(), "Choose suggestion number, manual work ID, or none: ")
+						fmt.Fprint(c.OutOrStdout(), "Choose suggestion number, manual work ID (work ID), or none: ")
 						selection, inputErr := readReviewLine(c.Context(), terminal)
 						if inputErr != nil {
 							if errors.Is(inputErr, io.EOF) {
@@ -152,7 +165,10 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 							break
 						}
 						var chosen int64
-						if n, parseErr := strconv.Atoi(selection); parseErr == nil && n > 0 && n <= len(candidates) {
+						manual := strings.HasPrefix(selection, "work ")
+						if manual {
+							chosen, _ = strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(selection, "work ")), 10, 64)
+						} else if n, parseErr := strconv.Atoi(selection); parseErr == nil && n > 0 && n <= len(candidates) {
 							chosen = candidates[n-1].ID
 						} else {
 							chosen, _ = strconv.ParseInt(selection, 10, 64)
@@ -216,23 +232,17 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 							break
 						}
 						finalCtx, finalCancel := context.WithTimeout(c.Context(), reviewProviderTimeout)
-						finalSource, finalErr := app.providers.source()
-						if finalErr == nil {
-							finalTarget, targetErr := app.providers.target()
-							if targetErr != nil {
-								finalErr = targetErr
-							} else {
-								mapping := companion.Mapping{Provider: "weread", SourceAccount: account, BookID: book.ID, TargetAccount: targetAccount, WorkID: chosen, EditionID: editionID}
-								if expected != nil {
-									finalErr = companion.ConfirmLinkExpectedOwned(finalCtx, finalSource, finalTarget, dbPath, mapping, *expected, owner)
-								} else if replaceAllowed {
-									finalErr = companion.ConfirmLinkOwned(finalCtx, finalSource, finalTarget, dbPath, mapping, false, owner)
-								}
-							}
+						mapping := companion.Mapping{Provider: "weread", SourceAccount: account, BookID: book.ID, TargetAccount: targetAccount, WorkID: chosen, EditionID: editionID}
+						var finalErr error
+						if expected != nil {
+							finalErr = companion.ConfirmLinkExpectedOwned(finalCtx, source, targetClient, dbPath, mapping, *expected, owner)
+						} else {
+							finalErr = companion.ConfirmLinkOwned(finalCtx, source, targetClient, dbPath, mapping, false, owner)
 						}
 						finalCancel()
 						if finalErr != nil {
-							fmt.Fprintln(c.ErrOrStderr(), "Link failed; no decision saved.")
+							failedBooks = append(failedBooks, book.ID)
+							fmt.Fprintf(c.ErrOrStderr(), "Book %s link failed; no decision saved.\n", book.ID)
 						}
 						break
 					}
@@ -258,7 +268,7 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 func terminalText(s string) string {
 	var b strings.Builder
 	for _, r := range s {
-		if r >= ' ' && r != 0x7f && r != 0x1b {
+		if !unicode.IsControl(r) {
 			b.WriteRune(r)
 		}
 	}
@@ -278,10 +288,16 @@ func readReviewLine(ctx context.Context, input *bufio.Reader) (string, error) {
 			err  error
 		}{strings.TrimRight(line, "\r\n"), err}
 	}()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
 	case r := <-result:
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		return r.line, r.err
 	}
 }
