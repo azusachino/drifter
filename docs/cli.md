@@ -215,6 +215,25 @@ Shared source and target validation is required before a local link is stored.
 Imported rows remain inspection-only. Blank decision input is reprompted; EOF
 and cancellation never confirm a link or save a new decision. Earlier completed
 choices remain saved.
+
+After `match`, configured catalog hints show unverified title, author, ISBN and
+provenance. Conflicting assertions show every alternative, but their targets are
+not selectable suggestions. At the suggestion prompt, `title N` explicitly
+searches hint N's title; it does not select its author. `author N` explicitly
+reruns the current query with hint N's author for stable contributor-name
+ordering only. Enter `title N` then `author N` to use both, with one bounded
+lookup per action. `query TEXT` searches an alternate title and clears any
+selected author. A new title also clears the selected author. Native-title
+matching remains the initial default, and missing hints do not change it.
+These searches use the same shared matcher as `match --query`: native exact-ISBN
+results still short-circuit title search. Hint ISBNs are displayed only; they
+never replace native identity. No hint is searched automatically, no confidence
+ranks results, and none of these actions saves a mapping or review decision.
+An unavailable hint field or invalid query issues no new search and ends that
+book's review without saving a choice. Catalog failures remain visibly
+incomplete and cause a nonzero exit while preserving usable provider results
+and valid catalog evidence. EOF never means consent.
+
 Metadata is stripped of terminal control characters. Provider lookup and final
 confirmation each have a 60-second deadline; owner input has no provider
 deadline. Lookup or link failure saves no decision and review continues, then

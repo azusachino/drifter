@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/azusachino/drifter/internal/catalog"
 	"github.com/azusachino/drifter/internal/companion"
 	"github.com/azusachino/drifter/internal/config"
 	"github.com/spf13/cobra"
@@ -37,6 +38,10 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 			return fmt.Errorf("valid account labels and --days between 1 and 36500 required")
 		}
 		cfg, err := config.Load(configPath)
+		if err != nil {
+			return err
+		}
+		loader, err := catalog.NewLoader(cfg.Matching.Catalogs, catalog.LoaderOptions{})
 		if err != nil {
 			return err
 		}
@@ -67,7 +72,11 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 		defer store.Close()
 		terminal := bufio.NewReader(app.input)
 		var failedBooks []string
+		catalogsIncomplete := false
 		defer func() {
+			if catalogsIncomplete {
+				reviewErr = errors.Join(reviewErr, fmt.Errorf("matching catalogs incomplete; see issue codes"))
+			}
 			if len(failedBooks) > 0 {
 				reviewErr = errors.Join(reviewErr, fmt.Errorf("review failed for source books: %s; no decisions saved for failures", strings.Join(failedBooks, ", ")))
 			}
@@ -121,128 +130,167 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 						return nil
 					}
 					if choice == "match" && !strings.HasPrefix(book.ID, "CB_") {
-						lookupCtx, cancel := context.WithTimeout(c.Context(), reviewProviderTimeout)
-						targetClient, sourceErr := loadTarget()
-						var report companion.MatchReport
-						if sourceErr == nil {
-							report, sourceErr = companion.Match(lookupCtx, source, targetClient, book.ID, "")
-						}
-						cancel()
-						if sourceErr != nil {
-							failedBooks = append(failedBooks, book.ID)
-							fmt.Fprintf(c.ErrOrStderr(), "Book %s lookup failed; no decision saved.\n", book.ID)
-							break
-						}
-						candidates := report.Candidates
-						if len(candidates) > 3 {
-							candidates = candidates[:3]
-						}
-						for i, candidate := range candidates {
-							author := ""
-							if len(candidate.Contributions) > 0 {
-								author = terminalText(candidate.Contributions[0].Author.Name)
+						query, expectedAuthor := "", ""
+						for {
+							lookupCtx, cancel := context.WithTimeout(c.Context(), reviewProviderTimeout)
+							targetClient, sourceErr := loadTarget()
+							var report companion.MatchReport
+							if sourceErr == nil {
+								report, sourceErr = companion.MatchWithOptions(lookupCtx, source, targetClient, book.ID, query, companion.MatchOptions{CatalogLoader: loader, ExpectedAuthor: expectedAuthor})
 							}
-							fmt.Fprintf(c.OutOrStdout(), "%d) %s — %s [work %d]\n", i+1, terminalText(candidate.Title), author, candidate.ID)
-						}
-						shownEditions := 0
-						for _, edition := range report.ExactEditions {
-							if shownEditions >= 3 {
+							cancel()
+							if sourceErr != nil {
+								failedBooks = append(failedBooks, book.ID)
+								fmt.Fprintf(c.ErrOrStderr(), "Book %s lookup failed; no decision saved.\n", book.ID)
 								break
 							}
-							fmt.Fprintf(c.OutOrStdout(), "Exact edition: %s [edition %d, work %d]\n", terminalText(edition.Title), edition.ID, edition.WorkID)
-							shownEditions++
-						}
-						fmt.Fprint(c.OutOrStdout(), "Choose suggestion number, manual work ID (work ID), or none: ")
-						selection, inputErr := readReviewLine(c.Context(), terminal)
-						if inputErr != nil {
-							if errors.Is(inputErr, io.EOF) {
-								return nil
+							if report.CatalogsComplete != nil && !*report.CatalogsComplete {
+								catalogsIncomplete = true
 							}
-							return inputErr
-						}
-						selection = strings.TrimSpace(selection)
-						if selection == "none" || selection == "" {
-							break
-						}
-						var chosen int64
-						manual := strings.HasPrefix(selection, "work ")
-						if manual {
-							chosen, _ = strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(selection, "work ")), 10, 64)
-						} else if n, parseErr := strconv.Atoi(selection); parseErr == nil && n > 0 && n <= len(candidates) {
-							chosen = candidates[n-1].ID
-						} else {
-							chosen, _ = strconv.ParseInt(selection, 10, 64)
-						}
-						if chosen <= 0 {
-							fmt.Fprintln(c.OutOrStdout(), "No valid target selected.")
-							break
-						}
-						fmt.Fprint(c.OutOrStdout(), "Edition ID (blank for work only): ")
-						editionText, inputErr := readReviewLine(c.Context(), terminal)
-						if inputErr != nil {
-							if errors.Is(inputErr, io.EOF) {
-								return nil
+							showReviewCatalogs(c.OutOrStdout(), report)
+							candidates := report.Candidates
+							if len(candidates) > 3 {
+								candidates = candidates[:3]
 							}
-							return inputErr
-						}
-						editionID := int64(0)
-						if strings.TrimSpace(editionText) != "" {
-							editionID, _ = strconv.ParseInt(strings.TrimSpace(editionText), 10, 64)
-							if editionID <= 0 {
-								fmt.Fprintln(c.OutOrStdout(), "Invalid edition ID.")
-								break
-							}
-						}
-						fmt.Fprintf(c.OutOrStdout(), "Confirm work %d edition %d? [yes/no]: ", chosen, editionID)
-						confirm, inputErr := readReviewLine(c.Context(), terminal)
-						if inputErr != nil {
-							if errors.Is(inputErr, io.EOF) {
-								return nil
-							}
-							return inputErr
-						}
-						if strings.TrimSpace(confirm) != "yes" {
-							break
-						}
-						var expected *companion.MappingTarget
-						replaceAllowed := true
-						mappings, listErr := store.List(c.Context())
-						if listErr != nil {
-							return listErr
-						}
-						for _, existing := range mappings {
-							if existing.Provider == "weread" && existing.SourceAccount == account && existing.BookID == book.ID && existing.TargetAccount == targetAccount {
-								fmt.Fprintf(c.OutOrStdout(), "Existing mapping: work %d edition %d. Replace? [yes/no]: ", existing.WorkID, existing.EditionID)
-								answer, readErr := readReviewLine(c.Context(), terminal)
-								if readErr != nil {
-									if errors.Is(readErr, io.EOF) {
-										return nil
-									}
-									return readErr
+							for i, candidate := range candidates {
+								author := ""
+								if len(candidate.Contributions) > 0 {
+									author = terminalText(candidate.Contributions[0].Author.Name)
 								}
-								if strings.TrimSpace(answer) != "yes" {
-									replaceAllowed = false
+								fmt.Fprintf(c.OutOrStdout(), "%d) %s — %s [work %d]\n", i+1, terminalText(candidate.Title), author, candidate.ID)
+							}
+							shownEditions := 0
+							for _, edition := range report.ExactEditions {
+								if shownEditions >= 3 {
 									break
 								}
-								expected = &companion.MappingTarget{WorkID: existing.WorkID, EditionID: existing.EditionID}
+								fmt.Fprintf(c.OutOrStdout(), "Exact edition: %s [edition %d, work %d]\n", terminalText(edition.Title), edition.ID, edition.WorkID)
+								shownEditions++
+							}
+							fmt.Fprint(c.OutOrStdout(), "Choose suggestion number, manual work ID (work ID), none, query TEXT, title N, or author N: ")
+							selection, inputErr := readReviewLine(c.Context(), terminal)
+							if inputErr != nil {
+								if errors.Is(inputErr, io.EOF) {
+									return nil
+								}
+								return inputErr
+							}
+							selection = strings.TrimSpace(selection)
+							if strings.HasPrefix(selection, "query ") {
+								query = strings.TrimSpace(strings.TrimPrefix(selection, "query "))
+								if query == "" || len(query) > 1024 {
+									fmt.Fprintln(c.OutOrStdout(), "Query must contain 1–1024 bytes; no search issued.")
+									break
+								}
+								expectedAuthor = ""
+								continue
+							}
+							if strings.HasPrefix(selection, "title ") || strings.HasPrefix(selection, "author ") {
+								parts := strings.Fields(selection)
+								n := 0
+								if len(parts) == 2 {
+									n, _ = strconv.Atoi(parts[1])
+								}
+								if n < 1 || n > len(report.CatalogHints) {
+									fmt.Fprintln(c.OutOrStdout(), "No such hint; no search issued.")
+									break
+								}
+								hint := report.CatalogHints[n-1]
+								if parts[0] == "title" && hint.Title != "" && len(hint.Title) <= 1024 {
+									query = hint.Title
+									expectedAuthor = ""
+								} else if parts[0] == "author" && strings.TrimSpace(hint.OriginalAuthor) != "" {
+									expectedAuthor = hint.OriginalAuthor
+								} else {
+									fmt.Fprintln(c.OutOrStdout(), "Hint field unavailable; no search issued.")
+									break
+								}
+								continue
+							}
+							if selection == "none" || selection == "" {
 								break
 							}
-						}
-						if !replaceAllowed {
+							var chosen int64
+							manual := strings.HasPrefix(selection, "work ")
+							if manual {
+								chosen, _ = strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(selection, "work ")), 10, 64)
+							} else if n, parseErr := strconv.Atoi(selection); parseErr == nil && n > 0 && n <= len(candidates) {
+								chosen = candidates[n-1].ID
+							} else {
+								chosen, _ = strconv.ParseInt(selection, 10, 64)
+							}
+							if chosen <= 0 {
+								fmt.Fprintln(c.OutOrStdout(), "No valid target selected.")
+								break
+							}
+							fmt.Fprint(c.OutOrStdout(), "Edition ID (blank for work only): ")
+							editionText, inputErr := readReviewLine(c.Context(), terminal)
+							if inputErr != nil {
+								if errors.Is(inputErr, io.EOF) {
+									return nil
+								}
+								return inputErr
+							}
+							editionID := int64(0)
+							if strings.TrimSpace(editionText) != "" {
+								editionID, _ = strconv.ParseInt(strings.TrimSpace(editionText), 10, 64)
+								if editionID <= 0 {
+									fmt.Fprintln(c.OutOrStdout(), "Invalid edition ID.")
+									break
+								}
+							}
+							fmt.Fprintf(c.OutOrStdout(), "Confirm work %d edition %d? [yes/no]: ", chosen, editionID)
+							confirm, inputErr := readReviewLine(c.Context(), terminal)
+							if inputErr != nil {
+								if errors.Is(inputErr, io.EOF) {
+									return nil
+								}
+								return inputErr
+							}
+							if strings.TrimSpace(confirm) != "yes" {
+								break
+							}
+							var expected *companion.MappingTarget
+							replaceAllowed := true
+							mappings, listErr := store.List(c.Context())
+							if listErr != nil {
+								return listErr
+							}
+							for _, existing := range mappings {
+								if existing.Provider == "weread" && existing.SourceAccount == account && existing.BookID == book.ID && existing.TargetAccount == targetAccount {
+									fmt.Fprintf(c.OutOrStdout(), "Existing mapping: work %d edition %d. Replace? [yes/no]: ", existing.WorkID, existing.EditionID)
+									answer, readErr := readReviewLine(c.Context(), terminal)
+									if readErr != nil {
+										if errors.Is(readErr, io.EOF) {
+											return nil
+										}
+										return readErr
+									}
+									if strings.TrimSpace(answer) != "yes" {
+										replaceAllowed = false
+										break
+									}
+									expected = &companion.MappingTarget{WorkID: existing.WorkID, EditionID: existing.EditionID}
+									break
+								}
+							}
+							if !replaceAllowed {
+								break
+							}
+							finalCtx, finalCancel := context.WithTimeout(c.Context(), reviewProviderTimeout)
+							mapping := companion.Mapping{Provider: "weread", SourceAccount: account, BookID: book.ID, TargetAccount: targetAccount, WorkID: chosen, EditionID: editionID}
+							var finalErr error
+							if expected != nil {
+								finalErr = companion.ConfirmLinkExpectedOwned(finalCtx, source, targetClient, dbPath, mapping, *expected, owner)
+							} else {
+								finalErr = companion.ConfirmLinkOwned(finalCtx, source, targetClient, dbPath, mapping, false, owner)
+							}
+							finalCancel()
+							if finalErr != nil {
+								failedBooks = append(failedBooks, book.ID)
+								fmt.Fprintf(c.ErrOrStderr(), "Book %s link failed; no decision saved.\n", book.ID)
+							}
 							break
-						}
-						finalCtx, finalCancel := context.WithTimeout(c.Context(), reviewProviderTimeout)
-						mapping := companion.Mapping{Provider: "weread", SourceAccount: account, BookID: book.ID, TargetAccount: targetAccount, WorkID: chosen, EditionID: editionID}
-						var finalErr error
-						if expected != nil {
-							finalErr = companion.ConfirmLinkExpectedOwned(finalCtx, source, targetClient, dbPath, mapping, *expected, owner)
-						} else {
-							finalErr = companion.ConfirmLinkOwned(finalCtx, source, targetClient, dbPath, mapping, false, owner)
-						}
-						finalCancel()
-						if finalErr != nil {
-							failedBooks = append(failedBooks, book.ID)
-							fmt.Fprintf(c.ErrOrStderr(), "Book %s link failed; no decision saved.\n", book.ID)
 						}
 						break
 					}
@@ -299,5 +347,40 @@ func readReviewLine(ctx context.Context, input *bufio.Reader) (string, error) {
 			return "", err
 		}
 		return r.line, r.err
+	}
+}
+
+// Catalog targets are evidence only; they never enter the candidate selection list.
+func showReviewCatalogs(out io.Writer, report companion.MatchReport) {
+	if report.CatalogsComplete == nil {
+		return
+	}
+	fmt.Fprintln(out, "Unverified catalog evidence (not mapping selections):")
+	if !*report.CatalogsComplete {
+		fmt.Fprintln(out, "Catalogs incomplete; missing evidence does not establish absence.")
+		for _, issue := range report.CatalogIssues {
+			fmt.Fprintf(out, "Catalog issue: %s %s\n", terminalText(issue.SubscriptionID), terminalText(string(issue.Code)))
+		}
+	}
+	if len(report.CatalogConflicts) > 0 {
+		fmt.Fprintln(out, "Conflicting assertions; all alternatives remain unverified.")
+	}
+	provenance := func(subscription, catalogID, publisher, record string, entries []catalog.Provenance) {
+		fmt.Fprintf(out, "  Subscription %s; catalog %s; publisher %s; record %s\n", terminalText(subscription), terminalText(catalogID), terminalText(publisher), terminalText(record))
+		for _, entry := range entries {
+			fmt.Fprintf(out, "  Provenance: %s — %s\n", terminalText(entry.Source), terminalText(entry.Reference))
+		}
+	}
+	for _, assertion := range report.CatalogAssertions {
+		edition := int64(0)
+		if assertion.Target.EditionID != nil {
+			edition = *assertion.Target.EditionID
+		}
+		fmt.Fprintf(out, "Assertion: work %d edition %d\n", assertion.Target.WorkID, edition)
+		provenance(assertion.SubscriptionID, assertion.CatalogID, assertion.Publisher, assertion.RecordID, assertion.Provenance)
+	}
+	for i, hint := range report.CatalogHints {
+		fmt.Fprintf(out, "Hint %d: title %s; author %s; ISBN %s\n", i+1, terminalText(hint.Title), terminalText(hint.OriginalAuthor), terminalText(hint.ISBN))
+		provenance(hint.SubscriptionID, hint.CatalogID, hint.Publisher, hint.RecordID, hint.Provenance)
 	}
 }
