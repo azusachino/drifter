@@ -303,11 +303,22 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		report, err := companion.PendingWorklistOwned(ctx, source, s.database, opts, s.ownership)
+		if report.Books == nil {
+			report.Books = []companion.PendingBook{}
+		}
+		if report.Issues == nil {
+			report.Issues = []companion.PendingIssue{}
+		}
 		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				report.Complete = false
-				report.Issues = append(report.Issues, companion.PendingIssue{Code: "operation_timeout"})
-				writeJSON(w, r, report)
+				code := "operation_canceled"
+				status := http.StatusGatewayTimeout
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					code = "operation_timeout"
+				}
+				report.Issues = append(report.Issues, companion.PendingIssue{Code: code})
+				writeJSONStatus(w, r, status, report)
 				return
 			}
 			http.Error(w, "pending request failed", http.StatusBadGateway)
@@ -387,10 +398,6 @@ func (s *Server) handleJSONMapping(w http.ResponseWriter, r *http.Request, repla
 		apiError(w, status, code)
 		return
 	}
-	if err := ctx.Err(); err != nil {
-		apiError(w, http.StatusGatewayTimeout, "provider_operation_timeout")
-		return
-	}
 	writeJSONStatus(w, r, http.StatusOK, map[string]bool{"confirmed": true, "replaced": replace})
 }
 
@@ -462,6 +469,9 @@ func (s *Server) handleFormMapping(w http.ResponseWriter, r *http.Request, repla
 	if err := s.confirmMapping(ctx, selection, replace); err != nil {
 		status, _ := mutationError(err, true)
 		message := "The source or target selection could not be validated."
+		if errors.Is(err, context.DeadlineExceeded) {
+			message = "Provider validation timed out. Reload mappings before retrying."
+		}
 		if errors.Is(err, companion.ErrMappingConflict) {
 			message = "A mapping already exists; choose Replace for an explicit change."
 		}
@@ -527,6 +537,8 @@ func mutationError(err error, confirming bool) (int, string) {
 		return http.StatusBadRequest, "invalid_mapping"
 	case errors.Is(err, companion.ErrMappingConflict):
 		return http.StatusConflict, "mapping_conflict"
+	case errors.Is(err, context.DeadlineExceeded):
+		return http.StatusGatewayTimeout, "provider_operation_timeout"
 	case errors.Is(err, errProviderUnavailable):
 		return http.StatusServiceUnavailable, "provider_unavailable"
 	case errors.Is(err, companion.ErrDatabaseOwned), errors.Is(err, companion.ErrOwnershipUnsupported):
