@@ -52,7 +52,13 @@ confirmation need both. Obtain keys through the providers' official account
 flows. Never pass them as flags, put them in TOML or commit them.
 
 Provider destinations are fixed HTTPS endpoints. Redirects are refused; requests
-have a 30-second timeout and a 2 MiB response limit. Errors omit response
+have a 30-second timeout and a 2 MiB response limit. The server admits one
+provider-backed pending or confirm/replace operation at a time; excess requests
+receive a sanitized 503 without provider calls. Admitted operations have a
+90-second deadline. Pending timeouts return an incomplete report with an
+`operation_timeout` issue and any completed rows; confirmation timeouts return
+a stable timeout error. Local listings, probes and unlink do not use the
+provider slot. Errors omit response
 bodies, headers and credentials. Requests are spaced per client (WeRead one
 second, Hardcover 1.1 seconds), without automatic retries. These are client
 safeguards, not proof of remaining account quota or a complete rate-limit

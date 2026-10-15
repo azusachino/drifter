@@ -30,6 +30,7 @@ import (
 )
 
 const maxRequestBody = 8 << 10
+const defaultOperationTimeout = 90 * time.Second
 
 var errProviderUnavailable = errors.New("provider unavailable")
 
@@ -49,32 +50,35 @@ var page = template.Must(template.ParseFS(htmlTemplates, "templates/index.html")
 
 // Server owns an HTTP listener and the shared core dependencies used by routes.
 type Server struct {
-	http          *http.Server
-	address       string
-	database      string
-	ownership     *companion.DatabaseOwnership
-	token         string
-	logger        *slog.Logger
-	now           func() time.Time
-	source        companion.Source
-	sourceFactory func() (companion.Source, error)
-	sourceOnce    sync.Once
-	sourceErr     error
-	target        companion.Target
-	targetFactory func() (companion.Target, error)
-	targetOnce    sync.Once
-	targetErr     error
+	http             *http.Server
+	address          string
+	database         string
+	ownership        *companion.DatabaseOwnership
+	token            string
+	logger           *slog.Logger
+	now              func() time.Time
+	source           companion.Source
+	sourceFactory    func() (companion.Source, error)
+	sourceOnce       sync.Once
+	sourceErr        error
+	target           companion.Target
+	targetFactory    func() (companion.Target, error)
+	targetOnce       sync.Once
+	targetErr        error
+	operationSlot    chan struct{}
+	operationTimeout time.Duration
 }
 
 type Options struct {
-	Address       string
-	Database      string
-	Source        companion.Source
-	SourceFactory func() (companion.Source, error)
-	Target        companion.Target
-	TargetFactory func() (companion.Target, error)
-	Logger        *slog.Logger
-	Now           func() time.Time
+	Address          string
+	Database         string
+	Source           companion.Source
+	SourceFactory    func() (companion.Source, error)
+	Target           companion.Target
+	TargetFactory    func() (companion.Target, error)
+	Logger           *slog.Logger
+	Now              func() time.Time
+	operationTimeout time.Duration
 }
 
 func New(options Options) (*Server, error) {
@@ -90,13 +94,17 @@ func New(options Options) (*Server, error) {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
+	if options.operationTimeout <= 0 {
+		options.operationTimeout = defaultOperationTimeout
+	}
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return nil, fmt.Errorf("cannot initialize request protection")
 	}
 	s := &Server{address: options.Address, database: options.Database, token: base64.RawURLEncoding.EncodeToString(tokenBytes),
 		logger: options.Logger, now: options.Now, source: options.Source, sourceFactory: options.SourceFactory,
-		target: options.Target, targetFactory: options.TargetFactory}
+		target: options.Target, targetFactory: options.TargetFactory,
+		operationSlot: make(chan struct{}, 1), operationTimeout: options.operationTimeout}
 	router := chi.NewRouter()
 	router.Use(requestRouteLogAttribute)
 	ready := []probes.Readiness{{Name: "mapping_database", Check: func(r *http.Request) error {
@@ -135,6 +143,16 @@ func New(options Options) (*Server, error) {
 		ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second,
 	}
 	return s, nil
+}
+
+func (s *Server) admit(parent context.Context) (context.Context, func(), bool) {
+	select {
+	case s.operationSlot <- struct{}{}:
+	default:
+		return nil, nil, false
+	}
+	ctx, cancel := context.WithTimeout(parent, s.operationTimeout)
+	return ctx, func() { cancel(); <-s.operationSlot }, true
 }
 
 func (s *Server) pendingSource() (companion.Source, error) {
@@ -273,13 +291,25 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid pending query", http.StatusBadRequest)
 			return
 		}
+		ctx, release, ok := s.admit(r.Context())
+		if !ok {
+			http.Error(w, "provider operation busy", http.StatusServiceUnavailable)
+			return
+		}
+		defer release()
 		source, err := s.pendingSource()
 		if err != nil {
 			http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		report, err := companion.PendingWorklistOwned(r.Context(), source, s.database, opts, s.ownership)
+		report, err := companion.PendingWorklistOwned(ctx, source, s.database, opts, s.ownership)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				report.Complete = false
+				report.Issues = append(report.Issues, companion.PendingIssue{Code: "operation_timeout"})
+				writeJSON(w, r, report)
+				return
+			}
 			http.Error(w, "pending request failed", http.StatusBadGateway)
 			return
 		}
@@ -346,9 +376,19 @@ func (s *Server) handleJSONMapping(w http.ResponseWriter, r *http.Request, repla
 	}
 	selection := companion.Mapping{Provider: "weread", SourceAccount: request.SourceAccount, BookID: request.BookID,
 		TargetAccount: request.TargetAccount, WorkID: request.WorkID, EditionID: request.EditionID.Value}
-	if err := s.confirmMapping(r.Context(), selection, replace); err != nil {
+	ctx, release, admitted := s.admit(r.Context())
+	if !admitted {
+		apiError(w, http.StatusServiceUnavailable, "provider_operation_busy")
+		return
+	}
+	defer release()
+	if err := s.confirmMapping(ctx, selection, replace); err != nil {
 		status, code := mutationError(err, true)
 		apiError(w, status, code)
+		return
+	}
+	if err := ctx.Err(); err != nil {
+		apiError(w, http.StatusGatewayTimeout, "provider_operation_timeout")
 		return
 	}
 	writeJSONStatus(w, r, http.StatusOK, map[string]bool{"confirmed": true, "replaced": replace})
@@ -413,7 +453,13 @@ func (s *Server) handleFormMapping(w http.ResponseWriter, r *http.Request, repla
 		s.renderFormFailure(w, r, http.StatusBadRequest, "The mapping request was invalid.")
 		return
 	}
-	if err := s.confirmMapping(r.Context(), selection, replace); err != nil {
+	ctx, release, admitted := s.admit(r.Context())
+	if !admitted {
+		s.renderFormFailure(w, r, http.StatusServiceUnavailable, "Another provider operation is in progress.")
+		return
+	}
+	defer release()
+	if err := s.confirmMapping(ctx, selection, replace); err != nil {
 		status, _ := mutationError(err, true)
 		message := "The source or target selection could not be validated."
 		if errors.Is(err, companion.ErrMappingConflict) {
