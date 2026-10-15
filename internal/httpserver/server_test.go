@@ -700,6 +700,14 @@ func TestMappingMutationHTTPUsesCoreValidationAndOwnedStore(t *testing.T) {
 	if status := post("/api/mappings/confirm", mappingBody("src", "123", "dst", 8, 0)); status != http.StatusConflict {
 		t.Fatalf("conflicting confirmation status=%d", status)
 	}
+	staleReplacement := `{"source_account":"src","book_id":"123","target_account":"dst","work_id":9,"edition_id":0,"expected_work_id":6,"expected_edition_id":0}`
+	if status := post("/api/mappings/replace", staleReplacement); status != http.StatusConflict {
+		t.Fatalf("stale replacement status=%d", status)
+	}
+	staleUnlink := `{"source_account":"src","book_id":"123","target_account":"dst","expected_work_id":6,"expected_edition_id":0}`
+	if response := request(t, base, http.MethodDelete, "/api/mappings/unlink", mutationHeaders(base, token), strings.NewReader(staleUnlink)); response.StatusCode != http.StatusConflict {
+		t.Fatalf("stale unlink status=%d", response.StatusCode)
+	}
 	replacement := `{"source_account":"src","book_id":"123","target_account":"dst","work_id":8,"edition_id":11,"expected_work_id":7,"expected_edition_id":0}`
 	if status := post("/api/mappings/replace", replacement); status != http.StatusOK {
 		t.Fatalf("explicit replacement status=%d", status)
@@ -711,6 +719,10 @@ func TestMappingMutationHTTPUsesCoreValidationAndOwnedStore(t *testing.T) {
 	if response := request(t, base, http.MethodDelete, "/api/mappings/unlink", mutationHeaders(base, token), strings.NewReader(unlink)); response.StatusCode != http.StatusOK {
 		t.Fatalf("unlink status=%d", response.StatusCode)
 	}
+	deletedReplace := `{"source_account":"src","book_id":"123","target_account":"dst","work_id":12,"edition_id":0,"expected_work_id":8,"expected_edition_id":11}`
+	if status := post("/api/mappings/replace", deletedReplace); status != http.StatusConflict {
+		t.Fatalf("replacement after deletion status=%d", status)
+	}
 	if response := request(t, base, http.MethodDelete, "/api/mappings/unlink", mutationHeaders(base, token), strings.NewReader(unlink)); response.StatusCode != http.StatusOK {
 		t.Fatalf("idempotent unlink status=%d", response.StatusCode)
 	}
@@ -718,7 +730,7 @@ func TestMappingMutationHTTPUsesCoreValidationAndOwnedStore(t *testing.T) {
 	if len(remaining) != 1 || remaining[0].TargetAccount != "other" || remaining[0].BookID != "456" {
 		t.Fatalf("unlink escaped its mapping scope: %+v", remaining)
 	}
-	if source.bookCalls.Load() != 6 || target.calls.Load() != 6 || targetFactoryCalls != 1 {
+	if source.bookCalls.Load() != 8 || target.calls.Load() != 8 || targetFactoryCalls != 1 {
 		t.Fatalf("provider calls/factory: source=%d target=%d target factory=%d", source.bookCalls.Load(), target.calls.Load(), targetFactoryCalls)
 	}
 }

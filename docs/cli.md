@@ -133,12 +133,22 @@ positive edition ID. Replace additionally requires `expected_work_id` and
 Confirm rejects these guard fields rather than ignoring them. Unlink with DELETE
 `/api/mappings/unlink` and JSON fields `source_account`, `book_id`,
 `target_account`, `expected_work_id` and `expected_edition_id`. Both guarded
-routes reject missing, null or invalid tuple members before provider work. A
-stale tuple returns HTTP 409; reload mappings and review the current target.
+routes reject missing, null, negative, zero-work, unknown and duplicate tuple
+members before provider work. The expected work ID must be
+positive; expected edition is zero for work-only or positive for a specific
+edition. A stale tuple returns HTTP 409; reload mappings and review the current
+target. Replace conflicts rather than recreating a mapping deleted since it was
+shown. An absent unlink is idempotent, while unlink conflicts if a different
+target now exists. Normal confirm remains unchanged and rejects guard fields.
 Native form posts use bounded URL-encoded `/mappings/confirm`,
 `/mappings/replace` and `/mappings/unlink` routes with the same Origin/Host and
-hidden-token checks. Replace and unlink forms carry the displayed old tuple. The
-page uses native forms and loads no JavaScript. Chromium sends the exact
+hidden-token checks. Confirm form fields are `source_account`, `book_id`,
+`target_account`, `work_id`, `edition_mode` (`work` or `edition`) and
+`edition_id` (required only for a specific edition). Replace adds hidden
+`expected_work_id` and `expected_edition_id`; unlink carries the source key and
+those same hidden expected-target fields. Stale native submissions show a
+reload-and-review instruction and do not mutate the newer mapping. The page
+uses native forms and loads no JavaScript. Chromium sends the exact
 same-origin Origin with `Referrer-Policy: strict-origin-when-cross-origin`; with
 `no-referrer` it sends `Origin: null`, which is correctly rejected. GET/HEAD
 never mutate, no CORS is enabled, and invalid/provider errors do not disclose

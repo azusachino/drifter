@@ -120,6 +120,18 @@ server: page rendering and mapping listing require no credentials/calls;
 pending and confirmation call providers only after explicit requests. Shared
 core owns validation, conflicts and unlink scope.
 
+Guarded replace and unlink require both `expected_work_id` and
+`expected_edition_id` from the displayed mapping; the expected work is positive
+and expected edition is zero (work-only) or positive. JSON replace sends those
+fields alongside `work_id` and required `edition_id`; JSON unlink sends them in
+the DELETE body. Native replace and unlink forms carry the same pair as hidden
+fields. Missing, null, negative, zero-work, unknown or duplicate guard fields
+are rejected before provider calls. A stale target returns 409 for JSON or a
+reload-and-review message for forms; neither operation changes the newer target.
+Guarded replacement cannot recreate a deleted mapping. Guarded unlink is
+idempotent when absent, but conflicts if another target is now present. Normal
+confirm remains unchanged and does not accept guard fields.
+
 The SQLite sidecar `flock` lease is held from initialization through graceful
 server drain. Owned initialization/migration and each owned mutation retain an
 in-process lease scope for their complete operation; `Close` rejects new scopes
