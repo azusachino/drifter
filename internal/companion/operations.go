@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/azusachino/drifter/internal/catalog"
 )
@@ -44,6 +45,9 @@ func Inspect(ctx context.Context, source Source, id string, progress bool) (Insp
 
 type MatchOptions struct {
 	CatalogLoader *catalog.Loader
+	// ExpectedAuthor optionally moves equal contributor names first without
+	// changing candidate membership or confirming identity. Empty preserves order.
+	ExpectedAuthor string
 }
 
 func Match(ctx context.Context, source Source, target Target, id, query string) (MatchReport, error) {
@@ -58,6 +62,18 @@ func MatchWithOptions(ctx context.Context, source Source, target Target, id, que
 	report, err := target.Match(ctx, book, query)
 	if err != nil {
 		return MatchReport{}, err
+	}
+	if author := strings.Join(strings.Fields(options.ExpectedAuthor), " "); author != "" && len(report.Candidates) > 1 {
+		matched := make([]Candidate, 0, len(report.Candidates))
+		var unmatched []Candidate
+		for _, candidate := range report.Candidates {
+			if candidateHasAuthor(candidate, author) {
+				matched = append(matched, candidate)
+			} else {
+				unmatched = append(unmatched, candidate)
+			}
+		}
+		report.Candidates = append(matched, unmatched...)
 	}
 	if options.CatalogLoader == nil {
 		return report, nil
@@ -117,6 +133,16 @@ func MatchWithOptions(ctx context.Context, source Source, target Target, id, que
 	}
 	report.RequiresConfirmation = true
 	return report, nil
+}
+
+func candidateHasAuthor(candidate Candidate, expected string) bool {
+	for _, contribution := range candidate.Contributions {
+		name := strings.Join(strings.Fields(contribution.Author.Name), " ")
+		if name != "" && strings.EqualFold(name, expected) {
+			return true
+		}
+	}
+	return false
 }
 
 func editionValue(editionID *int64) int64 {

@@ -56,7 +56,7 @@ func TestMatchCoreSurfacesExactCatalogEvidenceAndConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := &catalogMatchTarget{}
-	report, err := MatchWithOptions(context.Background(), operationSource{}, target, "42", "explicit query", MatchOptions{CatalogLoader: loader})
+	report, err := MatchWithOptions(context.Background(), operationSource{}, target, "42", "explicit query", MatchOptions{CatalogLoader: loader, ExpectedAuthor: "Explicit author"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestMatchKeepsProviderResultsWhenCatalogIsInvalid(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := &catalogMatchTarget{}
-	report, err := MatchWithOptions(context.Background(), operationSource{}, target, "42", "", MatchOptions{CatalogLoader: loader})
+	report, err := MatchWithOptions(context.Background(), operationSource{}, target, "42", "", MatchOptions{CatalogLoader: loader, ExpectedAuthor: "Explicit author"})
 	if err != nil {
 		t.Fatal(err)
 	}
