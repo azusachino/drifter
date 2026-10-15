@@ -5,20 +5,28 @@
 Keep [issue #7](https://github.com/azusachino/drifter/issues/7)'s matching
 worklist goal, but deliver it through five independently verified slices. The
 owner selected smaller slices and confirmed the behavior below through a design
-interview on 2026-10-13. Approval covers recording the plan, not implementation
-or merging either PR. Issue #7 remains the acceptance and
-live-work ledger. This document records ordering and rationale, not completion
-status. The delivered first slice's [plan](read-only-matching.md) remains
-historical; it is not overwritten.
-
-Matching hints are search inputs. Only explicit owner selection may create a
-local mapping. No LLM calls, new credentials, automatic linking, remote status
-writes, catalog creation, daemon/admin work (#6), deployment or whole-backlog
-bootstrap enters this scope. No agent reviewer or coordination service is
-needed for this planning pass. Pi-subagents may be used if agent review is
-actually needed; no delegation has occurred. Continue in this session on this
-device, without a handoff unless the owner explicitly requests one.
-Implementation requires separate approval.
+interview on 2026-10-13. That original approval covered recording the plan, not
+implementation or merging either PR. The parent has since approved the bounded
+catalog slice under the owner's existing authorization. Issue #7 remains the
+acceptance and live-work ledger. This document records ordering and rationale,
+not completion status. The delivered first slice's [plan](read-only-matching.md) remains
+historical; it is not overwritten. The owner replaced the earlier single-file
+`--hints` proposal with the
+[community catalog contract](matching-catalogs.md). Parent approved the
+bounded schema/loader/core/CLI slice under the existing owner authorization;
+that slice is implemented and passed its owning gates on this branch. It does
+not authorize automatic linking or any deferred behavior. Only
+explicit owner selection may create a local mapping. The parent-approved local
+export/merge extension for community catalogs is recorded as delivery 6 and is
+limited to the privacy, provenance and collision contract in
+[matching-catalogs.md](matching-catalogs.md). No LLM calls, new credentials,
+remote status writes, catalog contribution service, HTTP server work (#6),
+deployment or whole-backlog bootstrap enters this scope. No agent reviewer or
+coordination service is needed for this planning pass. Pi-subagents may be
+used if agent review is actually needed; no delegation has occurred. Continue in
+this session on this device, without a handoff unless the owner explicitly
+requests one. Remaining slices and any scope beyond the approved catalog
+contract require separate approval.
 
 ## Revalidated starting point
 
@@ -69,13 +77,17 @@ for this plan.
   A successful link is hidden by its mapping; lookup failures and EOF/cancel
   save no terminal decision. Provide an explicit local reset of a decision so
   catalog changes or accidental exclusion do not require manual SQL.
-- **Hints:** one bounded JSON file with unique book IDs and typed fields
-  `book_id`, `original_title`, `original_author`, `confidence`. Validate the file
-  before provider requests. Missing hints fall back to normal matching; wrong
-  hints remain untrusted suggestions. Confidence is a required finite JSON
-  number from 0 through 1, displayed as uncalibrated metadata; it never filters
-  candidates or authorizes a link. Reject simultaneous `--query` and `--hints`
-  before provider requests instead of applying implicit precedence.
+- **Hints and catalogs:** the earlier single-file `--hints FILE` proposal is
+  superseded by the implemented
+  [catalog contract](matching-catalogs.md): explicit TOML-selected local/HTTPS
+  documents, stable provider IDs, separate assertions and title/ISBN hints,
+  provenance, and conflict reporting. The core match report surfaces untrusted
+  evidence without selecting a target or silently replacing `--query`. Preserve
+  the uncalibrated-confidence rule if later work uses hints for ranking:
+  confidence never filters, ranks or authorizes a link. Delivery 6 extends this
+  with explicit local export and offline merge only; its user story and exact
+  flags, selection, privacy exclusions, lineage and collision rules are in the
+  catalog contract before implementation.
 - **Ranking:** stable partition by normalized contributor-name equality
   (trim, collapse whitespace, case-fold), not transliteration or fuzzy scores.
   Keep the same candidate IDs and preserve provider order within both groups.
@@ -133,7 +145,7 @@ claiming a complete worklist. Filter before per-book enrichment, bound requests,
 and report metadata failures without misclassifying rows.
 
 **Likely paths:** `internal/companion/weread.go`, `weread_test.go`,
-`cmd/drifter/cli.go`, `cli_test.go`, `README.md`.
+`internal/cli/cli.go`, `cli_test.go`, `README.md`.
 **Dependency:** slice 1; synthetic contract for shelf/privacy/activity fields.
 **Verification:** synthetic HTTP fixtures for cutoff, private/unknown privacy,
 translator/no-translator/imported, pagination, malformed fields and provider
@@ -142,25 +154,26 @@ race tests, then `make check`. No private captures enter fixtures.
 
 ### 3. Improve suggestions with external hints
 
-**Outcome:** `match --hints FILE` uses the selected book's hinted title and
-stably re-ranks only the resulting work candidates by author match. `pending`
-and standalone `link` remain usable without hints.
+**Outcome:** the catalog slice loads explicitly selected catalogs through the
+shared core `Match` operation and surfaces exact assertions and title/ISBN
+hints with provenance and conflicts. It does not replace the current search
+query or choose a mapping. `pending` and standalone `link` remain usable without
+catalogs.
 
-**Acceptance:** the candidate set equals `match --query HINTED_TITLE`, including
-ISBN-first behavior; only author grouping changes order. Missing/wrong hints
-never link anything. Malformed, duplicate, oversized and conflicting inputs
-fail safely without echoing file contents; confidence boundaries and rejection
-of combined query/hints flags are tested before any request. Low-confidence
-hints still produce suggestions, never automatic mappings.
+**Acceptance:** use the catalog contract's loader/security and core/CLI tests,
+then the existing HTTP/browser regression gates. Preserve legacy matching with
+no configured catalogs. Invalid or unavailable sources are reported incomplete
+without echoing source URLs or contents; conflicts retain all alternatives; no
+hint creates a mapping or provider write. Further use of hints to alter
+candidate searches or ranking needs separate parent review and approval.
 
-**Likely paths:** `cmd/drifter/cli.go`, `cli_test.go`,
+**Likely paths:** `internal/cli/cli.go`, `cli_test.go`,
 `internal/companion/hardcover.go`, `hardcover_test.go`, `README.md`.
-**Dependency:** slice 2 for the worklist workflow; the matcher itself needs no
-new stored state.
-**Verification:** compare hinted and explicit-query reports against identical
-synthetic HTTP responses, including missing author, equal-rank stability,
-ambiguous ISBN and same-title/different-author cases; assert no local mapping
-writes; focused core/CLI race tests, then `make check`.
+**Dependency:** slice 2 for the worklist workflow; catalogs add no stored state.
+**Verification:** synthetic core and CLI fixtures prove source-ID matching,
+separated assertions/hints, conflict preservation, incomplete-source reporting
+and no mapping/provider writes. Catalog transport tests use injected resolver
+and fetcher seams; run focused core/CLI race tests, then `make check`.
 
 ### 4. Persist review decisions without linking
 
@@ -176,7 +189,7 @@ back. Persist only decision kind and minimal keyed metadata, not provider bodies
 hints, progress or credentials.
 
 **Likely paths:** `internal/companion/store.go`, `store_test.go`,
-`cmd/drifter/cli.go`, `cli_test.go`, `README.md`.
+`internal/cli/cli.go`, `cli_test.go`, `README.md`.
 **Dependency:** slices 1 and 2. Exact local command syntax is settled before this
 slice; avoid a daemon-facing API or general decision framework.
 **Verification:** temp SQLite restart/reset/isolation and migration-chain tests,
@@ -199,7 +212,7 @@ selection never silently selects an edition. EOF/cancel never means consent.
 Titles/authors rendered interactively are terminal-safe;
 errors/logs contain no titles, tokens or raw bodies. No provider mutation exists.
 
-**Likely paths:** `cmd/drifter/cli.go`, a small review helper and its tests,
+**Likely paths:** `internal/cli/cli.go`, a small review helper and its tests,
 `cli_test.go`, `README.md`. Extract shared confirmation only as needed here;
 do not build a generic workflow engine in earlier slices.
 **Dependency:** slices 3 and 4.
@@ -208,6 +221,41 @@ wrong edition membership, differing mapping replacement refusal, explicit
 replacement, manual target ID entry, separate edition choice, failure in the
 middle of a batch with later successes and nonzero exit, rerun, restart and
 cancellation; focused core/CLI race tests, then `make check`.
+
+### 6. Export and merge community catalogs locally
+
+**Outcome:** `export` creates a deliberately public, account-scoped v1 catalog
+from confirmed local mappings; `merge` combines only explicitly
+named local documents into a new v1 catalog. Both write JSON to stdout and make
+no provider requests. This is not anonymous sharing: export discloses selected
+WeRead source IDs.
+
+**Acceptance:** export requires exact source/target account labels, catalog ID,
+publisher, provenance source/reference and accepts optional `--db`. The query
+filters both labels and selects only source IDs and confirmed Hardcover work /
+optional edition; no account labels, stored title/ISBN, progress, timestamps,
+paths or secrets enter output. It uses read-only current-schema store access,
+creates/migrates no database, errors without output for absent/unsupported
+state, and emits an empty valid catalog for an existing DB with no selected
+rows. Merge requires a new ID and publisher plus 2–8 repeated local `--input`
+paths, validates inputs and final bytes against bundled v1, preserves all
+assertions/hints/conflicts/provenance and source identity, adds lineage without
+truncation, and never mutates state. Exact repeated paths, duplicate source
+catalog IDs and output/source ID collision fail atomically. Record-ID collision
+is resolved deterministically in input order by retaining the first ID and
+SHA-256-reidentifying later collisions; same ordered inputs and metadata produce
+identical output. Output budget/schema failures reject the complete result. No
+schema evolution is included.
+
+**Likely paths:** `internal/catalog`, `internal/companion`,
+`internal/cli`, their tests, README, CLI/architecture docs, this contract and the
+story-test map.
+**Dependency:** implemented v1 catalog contract and read-only current-schema
+store.
+**Verification:** CLI tests prove exact selection/privacy exclusions, no-state
+and empty behavior, no provider calls, atomic malformed/over-limit merge,
+lineage and collision/idempotency behavior. Run focused race tests, then
+`make check`, changed-Markdown lint and existing browser probe/E2E.
 
 ## Coverage and approval
 
@@ -218,11 +266,11 @@ validation and per-book failure recovery in 5; legacy/future database safety in
 1 and 4. Full `make check` means formatting, vet, module verification,
 race-enabled tests and CLI build, not a reduced substitute.
 
-The owner confirmed the behavior and authorized updating this plan, not starting
-code or merging PRs. Keep #7 open until all its criteria pass. Each PR records
-its actual revision, commands/results and remaining criteria; no delivery claims
-for later slices. After implementation approval and the evidence prerequisite,
-use successive slice branches, starting with schema versioning, rather than one
-large `feat/matching-worklist` branch. Review the outstanding evidence PR before
-requesting its merge. No continuing handoff is needed during this same-session,
-same-device work unless explicitly requested.
+The owner-confirmed worklist behavior and parent-approved catalog extension
+remain separate delivery scopes. This approval covers only delivery 6 and does
+not authorize the deferred worklist review UI, HTTP changes, provider writes or
+schema evolution. Keep #7 open until all its criteria pass. Each PR records its
+actual revision, commands/results and remaining criteria; do not claim later
+deliveries. Parent review is required before PR12 publication. No continuing
+handoff is needed during this same-session, same-device work unless explicitly
+requested.

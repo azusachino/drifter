@@ -3,17 +3,31 @@ package companion
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"unicode"
 
+	"github.com/azusachino/drifter/internal/catalog"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db       *sql.DB
+	path     string
+	owner    *DatabaseOwnership
+	readOnly bool
+}
+
+var (
+	ErrInvalidMapping     = errors.New("invalid mapping")
+	ErrInvalidMappingKey  = errors.New("invalid mapping key")
+	ErrMappingConflict    = errors.New("mapping already exists with different target IDs")
+	errCatalogExportLimit = errors.New("catalog export record limit exceeded")
+)
+
 type Mapping struct {
 	Provider      string `json:"provider"`
 	SourceAccount string `json:"source_account"`
@@ -42,44 +56,112 @@ func (m Mapping) valid() bool {
 }
 
 func OpenStore(path string) (*Store, error) {
-	if path == "" {
-		return nil, fmt.Errorf("database path required")
+	if err := checkLockSupport(); err != nil {
+		return nil, err
 	}
-	path, err := filepath.Abs(path)
+	canonical, err := canonicalDatabasePath(path, true)
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	lock, err := acquireDatabaseFileLock(canonical, true)
+	if err != nil {
 		return nil, err
 	}
-	parent, err := os.Stat(filepath.Dir(path))
-	if err != nil || parent.Mode().Perm()&0o022 != 0 {
-		return nil, fmt.Errorf("database parent must not be writable by other users")
+	defer lock.Close()
+	return openStore(canonical, false, nil)
+}
+
+// OpenStoreForRead preserves the historical initialize-if-needed behavior when
+// no owner is active, but falls back to a schema-checked read-only handle when
+// another process owns or is writing the database.
+func OpenStoreForRead(path string) (*Store, error) {
+	store, err := OpenStore(path)
+	if errors.Is(err, ErrDatabaseOwned) {
+		return OpenStoreReadOnly(path)
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-	if err == nil {
-		file.Close()
-	} else if !os.IsExist(err) {
+	if err != nil {
 		return nil, err
 	}
+	store.readOnly = true
+	return store, nil
+}
+
+// OpenStoreReadOnly never creates files or migrates schema.
+func OpenStoreReadOnly(path string) (*Store, error) {
+	if err := checkLockSupport(); err != nil {
+		return nil, err
+	}
+	canonical, err := canonicalDatabasePath(path, false)
+	if err != nil {
+		return nil, err
+	}
+	return openStore(canonical, true, nil)
+}
+
+// OpenOwnedStore opens state under an already-held daemon ownership lease.
+func OpenOwnedStore(path string, owner *DatabaseOwnership) (*Store, error) {
+	canonical, err := canonicalDatabasePath(path, true)
+	if err != nil {
+		return nil, err
+	}
+	release, err := owner.acquire(canonical)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return openStore(canonical, false, owner)
+}
+
+func openStore(path string, readOnly bool, owner *DatabaseOwnership) (*Store, error) {
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
 		return nil, fmt.Errorf("database must be a regular, non-symlink mode-600 file")
 	}
-	u := url.URL{Scheme: "file", Path: path, RawQuery: "_busy_timeout=5000&_foreign_keys=on&_journal_mode=DELETE&_secure_delete=on"}
+	if err := requireSingleLink(info); err != nil {
+		return nil, err
+	}
+	query := "_busy_timeout=5000&_foreign_keys=on&_journal_mode=DELETE&_secure_delete=on"
+	if readOnly {
+		query = "mode=ro&_busy_timeout=5000"
+	}
+	u := url.URL{Scheme: "file", Path: path, RawQuery: query}
 	db, err := sql.Open("sqlite3", u.String())
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	if err := migrateStore(db); err != nil {
+	if readOnly {
+		err = validateStoreSchema(db)
+	} else {
+		err = migrateStore(db)
+	}
+	if err != nil {
 		db.Close()
+		if readOnly {
+			return nil, fmt.Errorf("mapping database requires initialization or migration")
+		}
 		return nil, fmt.Errorf("cannot initialize mapping database: %w", err)
 	}
-	return &Store{db}, nil
+	return &Store{db: db, path: path, owner: owner, readOnly: readOnly}, nil
 }
 
 const storeVersion = 1
+
+func validateStoreSchema(db *sql.DB) error {
+	var version int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if version != storeVersion {
+		return fmt.Errorf("unsupported database schema version %d (supported: %d)", version, storeVersion)
+	}
+	rows, err := db.Query(`SELECT provider,source_account,book_id,target_account,
+		work_id,edition_id,source_title,source_isbn FROM mappings LIMIT 0`)
+	if err != nil {
+		return err
+	}
+	return rows.Close()
+}
 
 func migrateStore(db *sql.DB) error {
 	tx, err := db.Begin()
@@ -122,10 +204,29 @@ func migrateStore(db *sql.DB) error {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+func (s *Store) writeGuard() (func(), error) {
+	if s.readOnly {
+		return nil, fmt.Errorf("mapping database is read-only")
+	}
+	if s.owner != nil {
+		return s.owner.acquire(s.path)
+	}
+	guard, err := acquireDatabaseFileLock(s.path, false)
+	if err != nil {
+		return nil, err
+	}
+	return func() { _ = guard.Close() }, nil
+}
+
 func (s *Store) Confirm(ctx context.Context, m Mapping, replace bool) error {
 	if !m.valid() {
-		return fmt.Errorf("invalid mapping identity or account labels")
+		return ErrInvalidMapping
 	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return err
+	}
+	defer release()
 	query := `INSERT INTO mappings VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(provider,source_account,book_id,target_account) DO NOTHING`
 	if replace {
 		query = `INSERT INTO mappings VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(provider,source_account,book_id,target_account) DO UPDATE SET work_id=excluded.work_id, edition_id=excluded.edition_id, source_title=excluded.source_title, source_isbn=excluded.source_isbn`
@@ -147,7 +248,7 @@ func (s *Store) Confirm(ctx context.Context, m Mapping, replace bool) error {
 		return err
 	}
 	if work != m.WorkID || edition != m.EditionID {
-		return fmt.Errorf("mapping already exists; use explicit replacement or unlink it")
+		return fmt.Errorf("%w; use explicit replacement or unlink it", ErrMappingConflict)
 	}
 	return nil
 }
@@ -169,10 +270,40 @@ func (s *Store) List(ctx context.Context) ([]Mapping, error) {
 	return result, rows.Err()
 }
 
+// listCatalogMappings selects only public catalog fields and reads at most one
+// row beyond the shared v1 record limit to detect overflow.
+func (s *Store) listCatalogMappings(ctx context.Context, sourceAccount, targetAccount string) ([]Mapping, error) {
+	limit := catalog.MaxRecordsPerCatalog
+	rows, err := s.db.QueryContext(ctx, `SELECT provider,book_id,work_id,edition_id
+		FROM mappings WHERE source_account=? AND target_account=?
+		ORDER BY provider,book_id,work_id,edition_id LIMIT ?`, sourceAccount, targetAccount, limit+1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]Mapping, 0, limit)
+	for rows.Next() {
+		if len(result) == limit {
+			return nil, errCatalogExportLimit
+		}
+		var m Mapping
+		if err := rows.Scan(&m.Provider, &m.BookID, &m.WorkID, &m.EditionID); err != nil {
+			return nil, err
+		}
+		result = append(result, m)
+	}
+	return result, rows.Err()
+}
+
 func (s *Store) Unlink(ctx context.Context, provider, sourceAccount, bookID, targetAccount string) error {
 	if !ValidLabel(provider) || !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) || !ValidBookID(bookID) {
-		return fmt.Errorf("invalid mapping key")
+		return ErrInvalidMappingKey
 	}
-	_, err := s.db.ExecContext(ctx, `DELETE FROM mappings WHERE provider=? AND source_account=? AND book_id=? AND target_account=?`, provider, sourceAccount, bookID, targetAccount)
+	release, err := s.writeGuard()
+	if err != nil {
+		return err
+	}
+	defer release()
+	_, err = s.db.ExecContext(ctx, `DELETE FROM mappings WHERE provider=? AND source_account=? AND book_id=? AND target_account=?`, provider, sourceAccount, bookID, targetAccount)
 	return err
 }

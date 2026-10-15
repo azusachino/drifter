@@ -34,6 +34,13 @@ _Avoid_: Work used interchangeably with edition
 and a target work, optionally including an edition. A mapping does not grant
 status authority. _Avoid_: Automatic match, write approval
 
+**Local HTTP server and mapping interface**:
+The foreground `serve` process provides a local browser interface and HTTP API
+for reading or explicitly maintaining confirmed mappings. It is an adapter over
+the same core and SQLite state as the CLI, not a separate administrator role or
+an authority to write provider status.
+_Avoid_: Admin service, status-sync daemon
+
 **Pending source book**:
 An eligible recently opened source book with neither a mapping nor a suppressing
 review decision for the selected source and target accounts.
@@ -45,8 +52,9 @@ and target account pair. It makes no claim about target catalog coverage.
 _Avoid_: Deleted source book, global exclusion
 
 **Matching hint**:
-An unconfirmed suggestion about a source book's original title or author.
-Confidence describes uncertainty, not identity confirmation or permission to link.
+An unconfirmed suggestion about a source book's original title, author or ISBN.
+Provenance records its unverified origin; confidence describes uncertainty, not
+identity confirmation or permission to link.
 _Avoid_: Verified metadata, automatic mapping
 
 **Skip**:

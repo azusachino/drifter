@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/azusachino/drifter/blob/main/schemas/matching-catalog-v1.schema.json",
+  "title": "Drifter community matching catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "catalog_schema_version",
+    "catalog_id",
+    "publisher",
+    "assertions",
+    "hints"
+  ],
+  "properties": {
+    "catalog_schema_version": {"const": 1},
+    "catalog_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "publisher": {"type": "string", "minLength": 1, "maxLength": 128},
+    "assertions": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {"$ref": "#/$defs/assertion"}
+    },
+    "hints": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {"$ref": "#/$defs/hint"}
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "id"],
+      "properties": {
+        "provider": {"const": "weread"},
+        "id": {"type": "string", "pattern": "^[0-9]{1,32}$"}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "reference"],
+      "properties": {
+        "source": {"type": "string", "minLength": 1, "maxLength": 128},
+        "reference": {"type": "string", "minLength": 1, "maxLength": 512}
+      }
+    },
+    "provenanceList": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {"$ref": "#/$defs/provenance"}
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "work_id"],
+      "properties": {
+        "provider": {"const": "hardcover"},
+        "work_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "edition_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        }
+      }
+    },
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_id", "source", "target", "provenance"],
+      "properties": {
+        "record_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        },
+        "source": {"$ref": "#/$defs/source"},
+        "target": {"$ref": "#/$defs/target"},
+        "provenance": {"$ref": "#/$defs/provenanceList"}
+      }
+    },
+    "hint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_id", "source", "confidence", "provenance"],
+      "properties": {
+        "record_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        },
+        "source": {"$ref": "#/$defs/source"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "original_author": {"type": "string", "maxLength": 512},
+        "isbn": {"type": "string", "minLength": 10, "maxLength": 32},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "provenance": {"$ref": "#/$defs/provenanceList"}
+      },
+      "anyOf": [{"required": ["title"]}, {"required": ["isbn"]}]
+    }
+  }
+}

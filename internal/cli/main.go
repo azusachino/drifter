@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"context"
@@ -10,7 +10,8 @@ import (
 	"github.com/azusachino/drifter/internal/companion"
 )
 
-func main() {
+// Main runs the interactive command-line application.
+func Main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	providers := clients{

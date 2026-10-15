@@ -87,12 +87,13 @@ catalog creation.
 - `internal/companion`: small source and target clients, native-fact
   normalization, candidate discovery and durable confirmed mappings. No plugin
   registry or public SDK contract.
-- `cmd/drifter`: standard-library CLI using the core; JSON output for manual
-  inspection and later daemon operations.
+- `internal/cli`: Cobra command tree using the shared core; JSON output for
+  manual inspection and later daemon operations. Cobra owns flags/help only;
+  strict settings-only TOML remains `internal/config` (no Viper binding).
 - SQLite: mapping records only, scoped by provider, source-account label,
   source-book ID and target-account label. No raw responses, excerpts, device
   identifiers, personal progress archive or credentials persisted.
-- Go 1.26; one pinned SQLite driver, `github.com/mattn/go-sqlite3`. It requires
+- Go 1.27; one pinned SQLite driver, `github.com/mattn/go-sqlite3`. It requires
   CGO and a C compiler at build time. Choose this small dependency footprint
   explicitly; pure-Go/cross-compilation is deferred, not silently promised.
 - Credentials: environment variables `WEREAD_API_KEY` and `HARDCOVER_API_KEY`;

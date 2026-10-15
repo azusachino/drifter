@@ -1,11 +1,13 @@
-package main
+package cli
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -65,6 +67,24 @@ func fakeClients(reader *fakeReader, catalog *fakeCatalog) clients {
 	}
 }
 
+func TestCLIHasNoServerCommand(t *testing.T) {
+	var out, stderr bytes.Buffer
+	if err := run(context.Background(), nil, &out, &stderr, clients{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "  serve ") {
+		t.Fatalf("CLI help still advertises the server command: %s", out.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if err := run(context.Background(), []string{"serve"}, &out, &stderr, clients{}); err == nil {
+		t.Fatal("CLI accepted removed serve command")
+	}
+	if out.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("removed command emitted output: stdout=%q stderr=%q", out.String(), stderr.String())
+	}
+}
+
 func TestCLIReadCommands(t *testing.T) {
 	for _, tc := range []struct {
 		args, calls []string
@@ -94,6 +114,9 @@ func TestCLIReadCommands(t *testing.T) {
 				if !reflect.DeepEqual(catalog.calls, []string{"match:Original title"}) {
 					t.Fatalf("unexpected target calls: %v", catalog.calls)
 				}
+				if strings.Contains(out.String(), "catalogs_complete") || strings.Contains(out.String(), "catalog_assertions") {
+					t.Fatalf("no-source match changed the legacy report: %s", out.String())
+				}
 			} else if len(catalog.calls) != 0 {
 				t.Fatal("inspection contacted Hardcover")
 			}
@@ -102,18 +125,39 @@ func TestCLIReadCommands(t *testing.T) {
 }
 
 func TestCLIHelpAndInvalidInputsDoNotNeedCredentials(t *testing.T) {
-	for _, args := range [][]string{nil, {"help"}, {"--help"}, {"link", "-h"}, {"inspect", "--help"}} {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "Available Commands:"},
+		{[]string{"help"}, "Available Commands:"},
+		{[]string{"--help"}, "Available Commands:"},
+		{[]string{"link", "-h"}, "--book-id"},
+		{[]string{"inspect", "--help"}, "--progress"},
+		{[]string{"export", "--help"}, "--provenance-reference"},
+		{[]string{"merge", "--help"}, "--input"},
+	} {
 		var out, stderr bytes.Buffer
-		if err := run(context.Background(), args, &out, &stderr, clients{}); err != nil {
-			t.Fatal(err)
+		if err := run(context.Background(), tc.args, &out, &stderr, clients{}); err != nil {
+			t.Fatalf("help for %v failed: %v", tc.args, err)
 		}
-		if out.Len()+stderr.Len() == 0 {
-			t.Fatal("missing help")
+		if !strings.Contains(out.String(), tc.want) || stderr.Len() != 0 {
+			t.Fatalf("unexpected Cobra help for %v: stdout=%q stderr=%q", tc.args, out.String(), stderr.String())
+		}
+		if tc.args == nil {
+			for _, command := range []string{"export", "merge"} {
+				if !strings.Contains(out.String(), "  "+command+" ") {
+					t.Fatalf("root help omitted top-level command %q: %s", command, out.String())
+				}
+			}
+			if strings.Contains(out.String(), "  catalog ") || strings.Contains(out.String(), "  completion ") {
+				t.Fatalf("root help retained a removed or unrequested command: %s", out.String())
+			}
 		}
 	}
 	secret := "synthetic-secret-never-echo"
 	for _, args := range [][]string{
-		{"daemon"}, {"search"}, {"inspect", "--book-id", "0"},
+		{"daemon"}, {"secret-command-never-echo"}, {secret}, {"search"}, {"inspect", "--book-id", "0"},
 		{"link", "--book-id", "123", "--work-id", "42"},
 		{"unlink", "--book-id", "123", "--account", "source"},
 		{"link", "--work-id", secret}, {"search", "--api-key", secret},
@@ -124,9 +168,64 @@ func TestCLIHelpAndInvalidInputsDoNotNeedCredentials(t *testing.T) {
 		if err == nil {
 			t.Fatalf("invalid args accepted: %v", args)
 		}
+		if stderr.Len() != 0 || out.Len() != 0 {
+			t.Fatalf("Cobra emitted output with a returned parse error: stdout=%q stderr=%q", out.String(), stderr.String())
+		}
 		if strings.Contains(err.Error()+out.String()+stderr.String(), secret) {
 			t.Fatal("parse error echoed secret")
 		}
+	}
+}
+
+func TestCLIRequiredFlagsFailBeforeSideEffects(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mappings.sqlite")
+	providerCalls := 0
+	providers := clients{
+		source: func() (source, error) { providerCalls++; return nil, errors.New("unexpected source construction") },
+		target: func() (target, error) { providerCalls++; return nil, errors.New("unexpected target construction") },
+	}
+	for _, args := range [][]string{
+		{"link", "--db", path},
+		{"export", "--db", path},
+		{"merge", "--catalog-id", "combined", "--publisher", "publisher", "--input", "not-read.json"},
+		{"search"},
+	} {
+		var out, stderr bytes.Buffer
+		if err := run(context.Background(), args, &out, &stderr, providers); err == nil || out.Len() != 0 || stderr.Len() != 0 {
+			t.Fatalf("missing required flags did not fail cleanly: args=%v err=%v stdout=%q stderr=%q", args, err, out.String(), stderr.String())
+		}
+	}
+	if providerCalls != 0 {
+		t.Fatalf("required-flag failures constructed providers %d times", providerCalls)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("required-flag failure created database state: %v", err)
+	}
+}
+
+func TestCLIRemovedCatalogParentFailsWithoutSideEffects(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mappings.sqlite")
+	providerCalls := 0
+	providers := clients{
+		source: func() (source, error) { providerCalls++; return nil, errors.New("unexpected source construction") },
+		target: func() (target, error) { providerCalls++; return nil, errors.New("unexpected target construction") },
+	}
+	for _, args := range [][]string{
+		{"catalog", "export", "--account", "source", "--target-account", "target", "--catalog-id", "out", "--publisher", "p", "--provenance-source", "source", "--provenance-reference", "ref", "--db", path},
+		{"catalog", "merge", "--catalog-id", "out", "--publisher", "p", "--input", "missing-one.json", "--input", "missing-two.json"},
+	} {
+		var out, stderr bytes.Buffer
+		err := run(context.Background(), args, &out, &stderr, providers)
+		rejected := err != nil && (strings.Contains(err.Error(), "invalid command") || strings.Contains(err.Error(), "invalid flags"))
+		if !rejected || out.Len() != 0 || stderr.Len() != 0 {
+			t.Fatalf("removed catalog parent did not fail cleanly: args=%v err=%v stdout=%q stderr=%q", args, err, out.String(), stderr.String())
+		}
+	}
+	if providerCalls != 0 {
+		t.Fatalf("removed catalog parent constructed providers %d times", providerCalls)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("removed catalog export created database state: %v", err)
 	}
 }
 
@@ -282,6 +381,71 @@ func (w *syncWriter) String() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.buf.String()
+}
+
+const writerSubprocessEnv = "DRIFTER_CLI_WRITER_HELPER"
+
+func TestCLIWriterSubprocessHelper(t *testing.T) {
+	mode := os.Getenv(writerSubprocessEnv)
+	if mode == "" {
+		return
+	}
+	path := os.Getenv("DRIFTER_CLI_WRITER_DB")
+	args := []string{"--db", path}
+	switch mode {
+	case "link":
+		args = append([]string{"link", "--book-id", "123", "--work-id", "42", "--account", "source", "--target-account", "target"}, args...)
+	case "unlink":
+		args = append([]string{"unlink", "--book-id", "123", "--account", "source", "--target-account", "target"}, args...)
+	default:
+		t.Fatalf("unknown CLI helper mode %q", mode)
+	}
+	reader := &fakeReader{}
+	var out, stderr bytes.Buffer
+	err := run(context.Background(), args, &out, &stderr, fakeClients(reader, &fakeCatalog{}))
+	if err == nil {
+		t.Fatal("CLI mutation unexpectedly succeeded")
+	}
+	if mode == "link" && len(reader.calls) != 0 {
+		t.Fatalf("link contacted provider before ownership refusal: %v", reader.calls)
+	}
+	_, _ = fmt.Fprintln(os.Stdout, err.Error())
+}
+
+func TestCLIWritersRefuseDaemonOwnershipAndReadsRemainAvailable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mappings.sqlite")
+	owner, err := companion.AcquireDatabaseOwnership(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	store, err := companion.OpenOwnedStore(path, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping := companion.Mapping{Provider: "weread", SourceAccount: "source", BookID: "123", TargetAccount: "target", WorkID: 42}
+	if err := store.Confirm(context.Background(), mapping, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"link", "unlink"} {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestCLIWriterSubprocessHelper$")
+		cmd.Env = append(os.Environ(), writerSubprocessEnv+"="+mode, "DRIFTER_CLI_WRITER_DB="+path)
+		output, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(output), "mapping database is owned or write-locked") {
+			t.Fatalf("%s subprocess was not clearly refused: %q %v", mode, output, err)
+		}
+	}
+	var out, stderr bytes.Buffer
+	if err := run(context.Background(), []string{"links", "--db", path}, &out, &stderr, clients{}); err != nil {
+		t.Fatalf("read-only links failed during ownership: %v", err)
+	}
+	var rows []companion.Mapping
+	if err := json.Unmarshal(out.Bytes(), &rows); err != nil || len(rows) != 1 || rows[0].WorkID != 42 {
+		t.Fatalf("owned-state read: rows=%+v err=%v", rows, err)
+	}
 }
 
 func TestCLIServeProbesRejectsInvalidConfig(t *testing.T) {

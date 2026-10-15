@@ -20,12 +20,16 @@ profile.cov
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+/node_modules/
+/test-results/
+/playwright-report/
 
 # Go workspace file
 go.work
 go.work.sum
 
 # Credentials, private local state and build/scratch output
+/state/
 .env
 .env.*
 /bin/
