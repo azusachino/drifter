@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/azusachino/drifter/internal/matchingcatalog"
+	"github.com/azusachino/drifter/internal/catalog"
 )
 
 type catalogMatchTarget struct {
@@ -48,10 +48,10 @@ func TestMatchCoreSurfacesExactCatalogEvidenceAndConflicts(t *testing.T) {
 	if err := os.WriteFile(secondPath, []byte(secondCatalog), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loader, err := matchingcatalog.NewLoader([]matchingcatalog.Subscription{
+	loader, err := catalog.NewLoader([]catalog.Subscription{
 		{ID: "synthetic", File: path},
 		{ID: "second", File: secondPath},
-	}, matchingcatalog.LoaderOptions{})
+	}, catalog.LoaderOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestMatchWithoutCatalogsPreservesLegacyJSONAndRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	withEmptyLoader, err := matchingcatalog.NewLoader(nil, matchingcatalog.LoaderOptions{})
+	withEmptyLoader, err := catalog.NewLoader(nil, catalog.LoaderOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestMatchKeepsProviderResultsWhenCatalogIsInvalid(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"catalog_schema_version": 1, "unexpected": true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	loader, err := matchingcatalog.NewLoader([]matchingcatalog.Subscription{{ID: "safe-alias", File: path}}, matchingcatalog.LoaderOptions{})
+	loader, err := catalog.NewLoader([]catalog.Subscription{{ID: "safe-alias", File: path}}, catalog.LoaderOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestMatchKeepsProviderResultsWhenCatalogIsInvalid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.CatalogsComplete == nil || *report.CatalogsComplete || len(report.CatalogIssues) != 1 || report.CatalogIssues[0].SubscriptionID != "safe-alias" || report.CatalogIssues[0].Code != matchingcatalog.IssueInvalidDocument {
+	if report.CatalogsComplete == nil || *report.CatalogsComplete || len(report.CatalogIssues) != 1 || report.CatalogIssues[0].SubscriptionID != "safe-alias" || report.CatalogIssues[0].Code != catalog.IssueInvalidDocument {
 		t.Fatalf("invalid catalog issue was not attached: %+v", report)
 	}
 	if target.matchCalls != 1 || !report.RequiresConfirmation || report.Book.ID != "42" {

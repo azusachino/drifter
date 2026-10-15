@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/azusachino/drifter/internal/matchingcatalog"
+	"github.com/azusachino/drifter/internal/catalog"
 )
 
 func seedCatalogExportRows(t *testing.T, path string, selected, other int) {
@@ -48,14 +48,14 @@ func seedCatalogExportRows(t *testing.T, path string, selected, other int) {
 
 func TestCatalogExportBoundsSelectedRowsAndPreservesAtLimitAccountScope(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mappings.sqlite")
-	seedCatalogExportRows(t, path, matchingcatalog.MaxRecordsPerCatalog, 1)
+	seedCatalogExportRows(t, path, catalog.MaxRecordsPerCatalog, 1)
 
 	store, err := OpenStoreReadOnly(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rows, err := store.listCatalogMappings(context.Background(), "selected-source", "selected-target")
-	if err != nil || len(rows) != matchingcatalog.MaxRecordsPerCatalog {
+	if err != nil || len(rows) != catalog.MaxRecordsPerCatalog {
 		t.Fatalf("at-limit selected query failed or included another account: rows=%d err=%v", len(rows), err)
 	}
 	if err := store.Close(); err != nil {

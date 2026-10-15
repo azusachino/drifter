@@ -108,18 +108,34 @@ func TestCLIReadCommands(t *testing.T) {
 }
 
 func TestCLIHelpAndInvalidInputsDoNotNeedCredentials(t *testing.T) {
-	for _, args := range [][]string{nil, {"help"}, {"--help"}, {"link", "-h"}, {"inspect", "--help"}, {"catalog", "--help"}, {"catalog", "export", "--help"}} {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "Available Commands:"},
+		{[]string{"help"}, "Available Commands:"},
+		{[]string{"--help"}, "Available Commands:"},
+		{[]string{"link", "-h"}, "--book-id"},
+		{[]string{"inspect", "--help"}, "--progress"},
+		{[]string{"catalog"}, "merge"},
+		{[]string{"catalog", "--help"}, "export"},
+		{[]string{"catalog", "export", "--help"}, "--provenance-reference"},
+		{[]string{"catalog", "merge", "--help"}, "--input"},
+	} {
 		var out, stderr bytes.Buffer
-		if err := run(context.Background(), args, &out, &stderr, clients{}); err != nil {
-			t.Fatal(err)
+		if err := run(context.Background(), tc.args, &out, &stderr, clients{}); err != nil {
+			t.Fatalf("help for %v failed: %v", tc.args, err)
 		}
-		if out.Len()+stderr.Len() == 0 {
-			t.Fatal("missing help")
+		if !strings.Contains(out.String(), tc.want) || stderr.Len() != 0 {
+			t.Fatalf("unexpected Cobra help for %v: stdout=%q stderr=%q", tc.args, out.String(), stderr.String())
+		}
+		if tc.args == nil && strings.Contains(out.String(), "  completion ") {
+			t.Fatalf("Cobra added an unrequested completion command: %s", out.String())
 		}
 	}
 	secret := "synthetic-secret-never-echo"
 	for _, args := range [][]string{
-		{"daemon"}, {"search"}, {"inspect", "--book-id", "0"},
+		{"daemon"}, {"secret-command-never-echo"}, {secret}, {"search"}, {"inspect", "--book-id", "0"},
 		{"link", "--book-id", "123", "--work-id", "42"},
 		{"unlink", "--book-id", "123", "--account", "source"},
 		{"link", "--work-id", secret}, {"search", "--api-key", secret},
@@ -130,9 +146,38 @@ func TestCLIHelpAndInvalidInputsDoNotNeedCredentials(t *testing.T) {
 		if err == nil {
 			t.Fatalf("invalid args accepted: %v", args)
 		}
+		if stderr.Len() != 0 || out.Len() != 0 {
+			t.Fatalf("Cobra emitted output with a returned parse error: stdout=%q stderr=%q", out.String(), stderr.String())
+		}
 		if strings.Contains(err.Error()+out.String()+stderr.String(), secret) {
 			t.Fatal("parse error echoed secret")
 		}
+	}
+}
+
+func TestCLIRequiredFlagsFailBeforeSideEffects(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mappings.sqlite")
+	providerCalls := 0
+	providers := clients{
+		source: func() (source, error) { providerCalls++; return nil, errors.New("unexpected source construction") },
+		target: func() (target, error) { providerCalls++; return nil, errors.New("unexpected target construction") },
+	}
+	for _, args := range [][]string{
+		{"link", "--db", path},
+		{"catalog", "export", "--db", path},
+		{"catalog", "merge", "--catalog-id", "combined", "--publisher", "publisher", "--input", "not-read.json"},
+		{"search"},
+	} {
+		var out, stderr bytes.Buffer
+		if err := run(context.Background(), args, &out, &stderr, providers); err == nil || out.Len() != 0 || stderr.Len() != 0 {
+			t.Fatalf("missing required flags did not fail cleanly: args=%v err=%v stdout=%q stderr=%q", args, err, out.String(), stderr.String())
+		}
+	}
+	if providerCalls != 0 {
+		t.Fatalf("required-flag failures constructed providers %d times", providerCalls)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("required-flag failure created database state: %v", err)
 	}
 }
 
@@ -413,7 +458,10 @@ func TestCLIServeStartsWithoutProviderCredentials(t *testing.T) {
 func TestCLIServeHTTPWiringAndCancellation(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(configPath, []byte("[server]\naddr = \"127.0.0.1:0\"\n"), 0o600); err != nil {
+	configuredDB := filepath.Join(dir, "configured.sqlite")
+	cliDB := filepath.Join(dir, "cli.sqlite")
+	configBody := fmt.Sprintf("[server]\naddr = \"127.0.0.1:0\"\n[database]\npath = %q\n", configuredDB)
+	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var raw bytes.Buffer
@@ -423,7 +471,7 @@ func TestCLIServeHTTPWiringAndCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- run(ctx, []string{"serve", "--config", configPath, "--db", filepath.Join(dir, "mappings.sqlite")}, out, &stderr, fakeClients(reader, &fakeCatalog{}))
+		done <- run(ctx, []string{"serve", "--config", configPath, "--db", cliDB}, out, &stderr, fakeClients(reader, &fakeCatalog{}))
 	}()
 	var record struct {
 		Addr    string `json:"addr"`
@@ -455,6 +503,12 @@ func TestCLIServeHTTPWiringAndCancellation(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("serve did not stop cleanly: %v", err)
+	}
+	if _, err := os.Stat(configuredDB); err != nil {
+		t.Fatalf("settings database.path did not override --db: %v", err)
+	}
+	if _, err := os.Stat(cliDB); !os.IsNotExist(err) {
+		t.Fatalf("CLI --db unexpectedly overrode settings database.path: %v", err)
 	}
 }
 

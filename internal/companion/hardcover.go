@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/azusachino/drifter/internal/matchingcatalog"
+	"github.com/azusachino/drifter/internal/catalog"
 )
 
 const hardcoverURL = "https://api.hardcover.app/v1/graphql"
@@ -90,47 +90,47 @@ func isbnVariants(raw string) ([]string, error) {
 }
 
 type CatalogAssertion struct {
-	SubscriptionID string                       `json:"subscription_id"`
-	CatalogID      string                       `json:"catalog_id"`
-	Publisher      string                       `json:"publisher"`
-	RecordID       string                       `json:"record_id"`
-	Source         matchingcatalog.SourceRef    `json:"source"`
-	Target         matchingcatalog.TargetRef    `json:"target"`
-	Provenance     []matchingcatalog.Provenance `json:"provenance"`
+	SubscriptionID string               `json:"subscription_id"`
+	CatalogID      string               `json:"catalog_id"`
+	Publisher      string               `json:"publisher"`
+	RecordID       string               `json:"record_id"`
+	Source         catalog.SourceRef    `json:"source"`
+	Target         catalog.TargetRef    `json:"target"`
+	Provenance     []catalog.Provenance `json:"provenance"`
 }
 
 type CatalogHint struct {
-	SubscriptionID string                       `json:"subscription_id"`
-	CatalogID      string                       `json:"catalog_id"`
-	Publisher      string                       `json:"publisher"`
-	RecordID       string                       `json:"record_id"`
-	Source         matchingcatalog.SourceRef    `json:"source"`
-	Title          string                       `json:"title,omitempty"`
-	OriginalAuthor string                       `json:"original_author,omitempty"`
-	ISBN           string                       `json:"isbn,omitempty"`
-	Confidence     float64                      `json:"confidence"`
-	Provenance     []matchingcatalog.Provenance `json:"provenance"`
+	SubscriptionID string               `json:"subscription_id"`
+	CatalogID      string               `json:"catalog_id"`
+	Publisher      string               `json:"publisher"`
+	RecordID       string               `json:"record_id"`
+	Source         catalog.SourceRef    `json:"source"`
+	Title          string               `json:"title,omitempty"`
+	OriginalAuthor string               `json:"original_author,omitempty"`
+	ISBN           string               `json:"isbn,omitempty"`
+	Confidence     float64              `json:"confidence"`
+	Provenance     []catalog.Provenance `json:"provenance"`
 }
 
 type CatalogConflict struct {
-	Source matchingcatalog.SourceRef `json:"source"`
-	Claims []CatalogAssertion        `json:"claims"`
+	Source catalog.SourceRef  `json:"source"`
+	Claims []CatalogAssertion `json:"claims"`
 }
 
 type MatchReport struct {
-	Book                 Book                    `json:"source_book"`
-	ISBNState            string                  `json:"isbn_state"`
-	Resolution           string                  `json:"resolution"`
-	ExactEditions        []Edition               `json:"exact_editions"`
-	Candidates           []Candidate             `json:"work_candidates"`
-	SearchQuery          string                  `json:"search_query,omitempty"`
-	SearchLimit          int                     `json:"search_limit"`
-	RequiresConfirmation bool                    `json:"requires_confirmation"`
-	CatalogsComplete     *bool                   `json:"catalogs_complete,omitempty"`
-	CatalogAssertions    []CatalogAssertion      `json:"catalog_assertions,omitempty"`
-	CatalogHints         []CatalogHint           `json:"catalog_hints,omitempty"`
-	CatalogConflicts     []CatalogConflict       `json:"catalog_conflicts,omitempty"`
-	CatalogIssues        []matchingcatalog.Issue `json:"catalog_issues,omitempty"`
+	Book                 Book               `json:"source_book"`
+	ISBNState            string             `json:"isbn_state"`
+	Resolution           string             `json:"resolution"`
+	ExactEditions        []Edition          `json:"exact_editions"`
+	Candidates           []Candidate        `json:"work_candidates"`
+	SearchQuery          string             `json:"search_query,omitempty"`
+	SearchLimit          int                `json:"search_limit"`
+	RequiresConfirmation bool               `json:"requires_confirmation"`
+	CatalogsComplete     *bool              `json:"catalogs_complete,omitempty"`
+	CatalogAssertions    []CatalogAssertion `json:"catalog_assertions,omitempty"`
+	CatalogHints         []CatalogHint      `json:"catalog_hints,omitempty"`
+	CatalogConflicts     []CatalogConflict  `json:"catalog_conflicts,omitempty"`
+	CatalogIssues        []catalog.Issue    `json:"catalog_issues,omitempty"`
 }
 
 func (h *Hardcover) Match(ctx context.Context, book Book, search string) (MatchReport, error) {

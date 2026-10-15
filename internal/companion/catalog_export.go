@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/azusachino/drifter/internal/matchingcatalog"
+	"github.com/azusachino/drifter/internal/catalog"
 )
 
 // CatalogExportOptions records the explicit account and public catalog metadata.
@@ -36,12 +36,12 @@ func ExportCatalog(ctx context.Context, dbPath string, options CatalogExportOpti
 	if err != nil {
 		return nil, fmt.Errorf("catalog export could not read selected mappings")
 	}
-	doc := matchingcatalog.Document{
+	doc := catalog.Document{
 		CatalogSchemaVersion: 1,
 		CatalogID:            options.CatalogID,
 		Publisher:            options.Publisher,
-		Assertions:           make([]matchingcatalog.Assertion, 0, len(rows)),
-		Hints:                []matchingcatalog.Hint{},
+		Assertions:           make([]catalog.Assertion, 0, len(rows)),
+		Hints:                []catalog.Hint{},
 	}
 	for _, row := range rows {
 		if row.Provider != "weread" || !ValidBookID(row.BookID) || row.WorkID <= 0 || row.EditionID < 0 {
@@ -52,16 +52,16 @@ func ExportCatalog(ctx context.Context, dbPath string, options CatalogExportOpti
 			value := row.EditionID
 			edition = &value
 		}
-		doc.Assertions = append(doc.Assertions, matchingcatalog.Assertion{
+		doc.Assertions = append(doc.Assertions, catalog.Assertion{
 			RecordID: "weread-" + row.BookID,
-			Source:   matchingcatalog.SourceRef{Provider: "weread", ID: row.BookID},
-			Target:   matchingcatalog.TargetRef{Provider: "hardcover", WorkID: row.WorkID, EditionID: edition},
-			Provenance: []matchingcatalog.Provenance{{
+			Source:   catalog.SourceRef{Provider: "weread", ID: row.BookID},
+			Target:   catalog.TargetRef{Provider: "hardcover", WorkID: row.WorkID, EditionID: edition},
+			Provenance: []catalog.Provenance{{
 				Source: options.ProvenanceSource, Reference: options.ProvenanceReference,
 			}},
 		})
 	}
-	encoded, err := matchingcatalog.MarshalDocument(doc)
+	encoded, err := catalog.MarshalDocument(doc)
 	if err != nil {
 		return nil, fmt.Errorf("catalog export metadata or selected mappings exceed v1 limits")
 	}

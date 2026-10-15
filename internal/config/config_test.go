@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/azusachino/drifter/internal/matchingcatalog"
+	"github.com/azusachino/drifter/internal/catalog"
 )
 
 func write(t *testing.T, content string) string {
@@ -96,7 +96,7 @@ url = "https://catalog.example.org/drifter/v1.json"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Matching.Catalogs) != 2 || cfg.Matching.Catalogs[0] != (matchingcatalog.Subscription{ID: "local-crosswalk", File: catalogPath}) || cfg.Matching.Catalogs[1].URL != "https://catalog.example.org/drifter/v1.json" {
+	if len(cfg.Matching.Catalogs) != 2 || cfg.Matching.Catalogs[0] != (catalog.Subscription{ID: "local-crosswalk", File: catalogPath}) || cfg.Matching.Catalogs[1].URL != "https://catalog.example.org/drifter/v1.json" {
 		t.Fatalf("matching catalog subscriptions were not loaded literally: %+v", cfg.Matching.Catalogs)
 	}
 }

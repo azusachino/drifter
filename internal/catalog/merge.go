@@ -1,4 +1,4 @@
-package matchingcatalog
+package catalog
 
 import (
 	"context"

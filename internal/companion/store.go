@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/azusachino/drifter/internal/matchingcatalog"
+	"github.com/azusachino/drifter/internal/catalog"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -273,7 +273,7 @@ func (s *Store) List(ctx context.Context) ([]Mapping, error) {
 // listCatalogMappings selects only public catalog fields and reads at most one
 // row beyond the shared v1 record limit to detect overflow.
 func (s *Store) listCatalogMappings(ctx context.Context, sourceAccount, targetAccount string) ([]Mapping, error) {
-	limit := matchingcatalog.MaxRecordsPerCatalog
+	limit := catalog.MaxRecordsPerCatalog
 	rows, err := s.db.QueryContext(ctx, `SELECT provider,book_id,work_id,edition_id
 		FROM mappings WHERE source_account=? AND target_account=?
 		ORDER BY provider,book_id,work_id,edition_id LIMIT ?`, sourceAccount, targetAccount, limit+1)

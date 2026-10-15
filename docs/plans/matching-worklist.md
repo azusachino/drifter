@@ -247,7 +247,7 @@ SHA-256-reidentifying later collisions; same ordered inputs and metadata produce
 identical output. Output budget/schema failures reject the complete result. No
 schema evolution is included.
 
-**Likely paths:** `internal/matchingcatalog`, `internal/companion`,
+**Likely paths:** `internal/catalog`, `internal/companion`,
 `cmd/drifter`, their tests, README, CLI/architecture docs, this contract and the
 story-test map.
 **Dependency:** implemented v1 catalog contract and read-only current-schema

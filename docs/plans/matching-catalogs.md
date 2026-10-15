@@ -239,13 +239,18 @@ file/HTTPS loading, and exact assertion, hint, provenance and conflict
 surfacing through core `Match`. The approved extension adds only the local
 export/merge operations described above. It does not add a match HTTP route,
 catalog contribution service, database schema, cache, automatic target search
-expansion, automatic linking, provider write or background work.
+expansion, automatic linking, provider write or background work. The Go package
+is `internal/catalog` after a behavior-preserving package rename, while the public
+TOML key remains `matching.catalogs` and the published schema filename, `$id`,
+and v1 meaning remain unchanged. Cobra v1.10.2 now owns only CLI parsing/help;
+`internal/config` continues strict TOML validation directly, with no Viper or
+credential binding.
 
 Acceptance tests use the approved seams only:
 
 | Seam | Required evidence |
 | --- | --- |
-| CLI | `match --config` loads an explicitly selected local catalog; empty config preserves legacy output; malformed/unavailable sources print incomplete JSON and exit nonzero before leaking source URLs or content. `catalog export` proves required explicit selection, safe output, empty/no-state behavior and no provider construction; `catalog merge` proves local-only atomic validated output and sanitized errors. |
+| CLI | Cobra root/nested help exposes all commands; required-flag, unknown-command and unknown-flag failures are sanitized, produce no side effects, and do not duplicate usage/errors. `match --config` loads an explicitly selected local catalog; empty config preserves legacy output; malformed/unavailable sources print incomplete JSON and exit nonzero before leaking source URLs or content. Settings still use strict `config.Load` TOML, published `matching.catalogs`, existing config precedence and env-only credentials; no Viper binding. `catalog export` proves required explicit selection, safe output, empty/no-state behavior and no provider construction; `catalog merge` proves local-only atomic validated output and sanitized errors. |
 | Export core/store | Exact two-label SQL filtering selects only provider/source/work/edition columns; export under daemon ownership is read-only; existing empty state emits an empty catalog, absent or unsupported state is rejected without create/migration; personal metadata is absent. |
 | Merge core | Input order, duplicate paths/IDs, original lineage, assertions/hints/conflicts, deterministic collision IDs, byte-for-byte idempotency, provenance overflow, malformed and oversized input, final-output limits and no partial output are covered. |
 | HTTP | Existing Host/Origin/CSRF, strict JSON, read-only route and provider-laziness tests remain green; `TestRootRendersMappingInterface` confirms `/api/match` remains 404 without provider calls. The server has no catalog loader; no fetch occurs on `/`, `/api/mappings`, `/readyz` or pending. Any later HTTP match route must call the shared core operation. |
@@ -257,13 +262,15 @@ Acceptance tests use the approved seams only:
 
 These behavior tests were written against the exported loader/core/CLI
 operations with injected resolver/transport seams. They are implementation tests,
-not a claim that the prior Chi refactor was developed test-first:
+not a claim that the prior Chi refactor or the current Cobra/package rename was
+developed test-first. The CLI refactor preserves the approved command behavior;
+existing CLI, config, core and server tests are its regression gate.
 
-- Loader: `mise exec -- go test ./internal/matchingcatalog` failed before the
-  loader implementation (synthetic catalog loading, subscription validation,
-  DNS rejection, redirect behavior, gzip limits, cancellation and pinned TLS
-  were missing); it now passes after validation, loading and pinned transport
-  were implemented.
+- Loader: its previously recorded red-green phase predates the behavior-preserving
+  package rename. That historical phase
+  covered synthetic loading, subscription validation, DNS rejection, redirects,
+  gzip limits, cancellation and pinned TLS; no new red phase is claimed for the
+  behavior-preserving package rename.
 - Configuration: `mise exec -- go test ./internal/config -run
   'TestLoadMatchingCatalogSubscriptions|TestLoadRejectsInvalidMatchingCatalogSubscriptions'`
   failed while invalid subscriptions were accepted; it now passes after
@@ -277,12 +284,13 @@ not a claim that the prior Chi refactor was developed test-first:
   failed because `match --config` was not accepted; it now passes with core-owned
   loading and report-then-nonzero incomplete behavior.
 - Merge: the new `TestMergeLocal` suite first failed to build because the
-  document encoder and merge API did not exist; after implementing those shared
-  catalog operations, `mise exec -- go test ./internal/matchingcatalog
-  -run TestMergeLocal -count=1` passes, including deterministic ID collisions,
-  provenance overflow and input/output size failures.
+  document encoder and merge operation did not exist; after implementation,
+  `mise exec -- go test ./internal/catalog -run TestMergeLocal -count=1` passes,
+  including deterministic ID collisions, provenance overflow and input/output
+  size failures. The original red phase predates the package rename; no new red
+  phase is claimed for that rename.
 - Export and CLI tools: `mise exec -- go test -race
-  ./internal/matchingcatalog ./internal/companion ./cmd/drifter` passes the
+  ./internal/catalog ./internal/companion ./cmd/drifter` passes the
   account-filtered, read-only export, privacy, no-state/empty-state, CLI
   no-provider and atomic-output regressions.
 
@@ -305,10 +313,17 @@ Validation completed on mise-managed Go 1.27.2:
   existing security/lifecycle behavior remains green.
 - `mise exec -- make check` passed again after adding export/merge, including
   gofmt verification, vet, module verification, full race tests and CLI build.
-- `mise exec -- rumdl check README.md docs/architecture.md docs/cli.md
-  docs/plans/matching-worklist.md docs/plans/matching-catalogs.md` passed.
+- Cobra/package rename regression: baseline `mise exec -- go test ./cmd/drifter`
+  passed before the refactor; after it,
+  `mise exec -- go test ./cmd/drifter ./internal/catalog ./internal/companion ./internal/config`
+  and full `mise exec -- make check` passed. This is behavior-preserving work;
+  no red-green history is claimed for it.
+- Pinned changed-Markdown lint passed after the Cobra documentation updates:
+  `mise exec -- rumdl check docs/architecture.md docs/cli.md
+  docs/plans/matching-catalogs.md docs/plans/matching-worklist.md
+  docs/plans/read-only-matching.md`.
 - `mise exec -- make e2e-probe ROUTE=/` passed, and `mise exec -- make e2e`
-  passed all three existing browser journeys.
+  passed all three existing browser journeys after the refactor.
 - Final diff check passed with no staged files. The parent-owned workflow diagram
   was intentionally not edited; its existing CLI-only scope remains accurate.
 

@@ -1,4 +1,4 @@
-package matchingcatalog_test
+package catalog_test
 
 import (
 	"bytes"
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/azusachino/drifter/internal/matchingcatalog"
+	"github.com/azusachino/drifter/internal/catalog"
 )
 
 const validCatalog = `{
@@ -63,9 +63,9 @@ func writeCatalog(t *testing.T, contents string) string {
 	return path
 }
 
-func newLoader(t *testing.T, subscription matchingcatalog.Subscription, options matchingcatalog.LoaderOptions) *matchingcatalog.Loader {
+func newLoader(t *testing.T, subscription catalog.Subscription, options catalog.LoaderOptions) *catalog.Loader {
 	t.Helper()
-	loader, err := matchingcatalog.NewLoader([]matchingcatalog.Subscription{subscription}, options)
+	loader, err := catalog.NewLoader([]catalog.Subscription{subscription}, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,21 +74,21 @@ func newLoader(t *testing.T, subscription matchingcatalog.Subscription, options 
 
 func TestLoaderLoadsSyntheticLocalCatalog(t *testing.T) {
 	path := filepath.Join("..", "..", "examples", "matching-catalog.json")
-	loader := newLoader(t, matchingcatalog.Subscription{ID: "synthetic", File: mustAbs(t, path)}, matchingcatalog.LoaderOptions{})
+	loader := newLoader(t, catalog.Subscription{ID: "synthetic", File: mustAbs(t, path)}, catalog.LoaderOptions{})
 	snapshot := loader.Load(context.Background())
 	if !snapshot.Configured || !snapshot.Complete || len(snapshot.Issues) != 0 || len(snapshot.Catalogs) != 1 {
 		t.Fatalf("unexpected snapshot: %+v", snapshot)
 	}
-	catalog := snapshot.Catalogs[0]
-	if catalog.SubscriptionID != "synthetic" || catalog.CatalogID != "example.synthetic-crosswalk" || len(catalog.Assertions) != 1 || len(catalog.Hints) != 1 {
-		t.Fatalf("catalog metadata or records missing: %+v", catalog)
+	loadedCatalog := snapshot.Catalogs[0]
+	if loadedCatalog.SubscriptionID != "synthetic" || loadedCatalog.CatalogID != "example.synthetic-crosswalk" || len(loadedCatalog.Assertions) != 1 || len(loadedCatalog.Hints) != 1 {
+		t.Fatalf("catalog metadata or records missing: %+v", loadedCatalog)
 	}
-	claim := catalog.Assertions[0]
-	if claim.Source != (matchingcatalog.SourceRef{Provider: "weread", ID: "42"}) || claim.Target.Provider != "hardcover" || claim.Target.WorkID != 77 || claim.Target.EditionID == nil || *claim.Target.EditionID != 88 || claim.Provenance[0].Reference == "" {
+	claim := loadedCatalog.Assertions[0]
+	if claim.Source != (catalog.SourceRef{Provider: "weread", ID: "42"}) || claim.Target.Provider != "hardcover" || claim.Target.WorkID != 77 || claim.Target.EditionID == nil || *claim.Target.EditionID != 88 || claim.Provenance[0].Reference == "" {
 		t.Fatalf("assertion was not decoded with provenance: %+v", claim)
 	}
-	if catalog.Hints[0].ISBN != "9780306406157" || catalog.Hints[0].Confidence != 0.8 || catalog.Hints[0].Provenance[0].Source == "" {
-		t.Fatalf("hint was not decoded with provenance: %+v", catalog.Hints[0])
+	if loadedCatalog.Hints[0].ISBN != "9780306406157" || loadedCatalog.Hints[0].Confidence != 0.8 || loadedCatalog.Hints[0].Provenance[0].Source == "" {
+		t.Fatalf("hint was not decoded with provenance: %+v", loadedCatalog.Hints[0])
 	}
 }
 
@@ -107,7 +107,7 @@ func TestLoaderRejectsInvalidDocumentsAtomically(t *testing.T) {
 	}
 	for name, contents := range cases {
 		t.Run(name, func(t *testing.T) {
-			loader := newLoader(t, matchingcatalog.Subscription{ID: "safe-alias", File: mustAbs(t, writeCatalog(t, contents))}, matchingcatalog.LoaderOptions{})
+			loader := newLoader(t, catalog.Subscription{ID: "safe-alias", File: mustAbs(t, writeCatalog(t, contents))}, catalog.LoaderOptions{})
 			snapshot := loader.Load(context.Background())
 			if !snapshot.Configured || snapshot.Complete || len(snapshot.Catalogs) != 0 || len(snapshot.Issues) != 1 || snapshot.Issues[0].SubscriptionID != "safe-alias" || snapshot.Issues[0].Code == "" {
 				t.Fatalf("invalid source was not rejected atomically: %+v", snapshot)
@@ -121,7 +121,7 @@ func TestLoaderRejectsInvalidDocumentsAtomically(t *testing.T) {
 }
 
 func TestNewLoaderRejectsUnsafeSubscriptions(t *testing.T) {
-	for _, subscription := range []matchingcatalog.Subscription{
+	for _, subscription := range []catalog.Subscription{
 		{ID: "../unsafe", File: "/tmp/catalog.json"},
 		{ID: "duplicate", File: "/tmp/a.json", URL: "https://catalog.example.org/a.json"},
 		{ID: "query", URL: "https://catalog.example.org/a.json?token=hidden"},
@@ -132,7 +132,7 @@ func TestNewLoaderRejectsUnsafeSubscriptions(t *testing.T) {
 		{ID: "literal", URL: "https://127.0.0.1/a.json"},
 		{ID: "local", URL: "https://catalog.local/a.json"},
 	} {
-		if _, err := matchingcatalog.NewLoader([]matchingcatalog.Subscription{subscription}, matchingcatalog.LoaderOptions{}); err == nil {
+		if _, err := catalog.NewLoader([]catalog.Subscription{subscription}, catalog.LoaderOptions{}); err == nil {
 			t.Fatalf("unsafe subscription accepted: %+v", subscription)
 		}
 	}
@@ -140,7 +140,7 @@ func TestNewLoaderRejectsUnsafeSubscriptions(t *testing.T) {
 
 func TestLoaderRejectsMixedPublicAndPrivateDNSAnswersBeforeFetch(t *testing.T) {
 	calls := 0
-	loader := newLoader(t, matchingcatalog.Subscription{ID: "remote", URL: "https://catalog.example.org/catalog.json"}, matchingcatalog.LoaderOptions{
+	loader := newLoader(t, catalog.Subscription{ID: "remote", URL: "https://catalog.example.org/catalog.json"}, catalog.LoaderOptions{
 		Resolver: resolverFunc(func(context.Context, string, string) ([]netip.Addr, error) {
 			return []netip.Addr{netip.MustParseAddr("93.184.216.34"), netip.MustParseAddr("127.0.0.1")}, nil
 		}),
@@ -150,7 +150,7 @@ func TestLoaderRejectsMixedPublicAndPrivateDNSAnswersBeforeFetch(t *testing.T) {
 		}),
 	})
 	snapshot := loader.Load(context.Background())
-	if snapshot.Complete || calls != 0 || len(snapshot.Issues) != 1 || snapshot.Issues[0].Code != matchingcatalog.IssueUnsafeDestination {
+	if snapshot.Complete || calls != 0 || len(snapshot.Issues) != 1 || snapshot.Issues[0].Code != catalog.IssueUnsafeDestination {
 		t.Fatalf("unsafe DNS answer was used: calls=%d snapshot=%+v", calls, snapshot)
 	}
 }
@@ -158,7 +158,7 @@ func TestLoaderRejectsMixedPublicAndPrivateDNSAnswersBeforeFetch(t *testing.T) {
 func TestLoaderRejectsRedirectWithoutFollowingOrForwardingCredentials(t *testing.T) {
 	calls := 0
 	var headers http.Header
-	loader := newLoader(t, matchingcatalog.Subscription{ID: "remote", URL: "https://catalog.example.org/catalog.json"}, matchingcatalog.LoaderOptions{
+	loader := newLoader(t, catalog.Subscription{ID: "remote", URL: "https://catalog.example.org/catalog.json"}, catalog.LoaderOptions{
 		Resolver: resolverFunc(func(context.Context, string, string) ([]netip.Addr, error) {
 			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
 		}),
@@ -169,7 +169,7 @@ func TestLoaderRejectsRedirectWithoutFollowingOrForwardingCredentials(t *testing
 		}),
 	})
 	snapshot := loader.Load(context.Background())
-	if snapshot.Complete || calls != 1 || len(snapshot.Issues) != 1 || snapshot.Issues[0].Code != matchingcatalog.IssueRedirectRejected {
+	if snapshot.Complete || calls != 1 || len(snapshot.Issues) != 1 || snapshot.Issues[0].Code != catalog.IssueRedirectRejected {
 		t.Fatalf("redirect was followed or accepted: calls=%d snapshot=%+v", calls, snapshot)
 	}
 	if headers.Get("Authorization") != "" || headers.Get("Cookie") != "" || headers.Get("Accept-Encoding") != "gzip" {
@@ -186,7 +186,7 @@ func TestLoaderLimitsDecompressedGzipBodies(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	loader := newLoader(t, matchingcatalog.Subscription{ID: "compressed", URL: "https://catalog.example.org/catalog.json"}, matchingcatalog.LoaderOptions{
+	loader := newLoader(t, catalog.Subscription{ID: "compressed", URL: "https://catalog.example.org/catalog.json"}, catalog.LoaderOptions{
 		Resolver: resolverFunc(func(context.Context, string, string) ([]netip.Addr, error) {
 			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
 		}),
@@ -195,7 +195,7 @@ func TestLoaderLimitsDecompressedGzipBodies(t *testing.T) {
 		}),
 	})
 	snapshot := loader.Load(context.Background())
-	if snapshot.Complete || len(snapshot.Issues) != 1 || snapshot.Issues[0].Code != matchingcatalog.IssueLimitExceeded {
+	if snapshot.Complete || len(snapshot.Issues) != 1 || snapshot.Issues[0].Code != catalog.IssueLimitExceeded {
 		t.Fatalf("decompressed body limit was not enforced: %+v", snapshot)
 	}
 }
@@ -203,14 +203,14 @@ func TestLoaderLimitsDecompressedGzipBodies(t *testing.T) {
 func TestLoaderCancellationIsReportedWithSafeIssue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	loader := newLoader(t, matchingcatalog.Subscription{ID: "cancelled", URL: "https://catalog.example.org/catalog.json"}, matchingcatalog.LoaderOptions{
+	loader := newLoader(t, catalog.Subscription{ID: "cancelled", URL: "https://catalog.example.org/catalog.json"}, catalog.LoaderOptions{
 		Resolver: resolverFunc(func(ctx context.Context, _, _ string) ([]netip.Addr, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}),
 	})
 	snapshot := loader.Load(ctx)
-	if snapshot.Complete || len(snapshot.Issues) != 1 || snapshot.Issues[0].Code != matchingcatalog.IssueCancelled {
+	if snapshot.Complete || len(snapshot.Issues) != 1 || snapshot.Issues[0].Code != catalog.IssueCancelled {
 		t.Fatalf("cancellation was not reported safely: %+v", snapshot)
 	}
 }
@@ -221,7 +221,7 @@ func TestLoaderPinsPublicDNSAndSendsTLSForConfiguredHost(t *testing.T) {
 	var dialed string
 	var hello []byte
 	helloRead := make(chan struct{})
-	loader := newLoader(t, matchingcatalog.Subscription{ID: "pinned", URL: "https://catalog.example.org/catalog.json"}, matchingcatalog.LoaderOptions{
+	loader := newLoader(t, catalog.Subscription{ID: "pinned", URL: "https://catalog.example.org/catalog.json"}, catalog.LoaderOptions{
 		Resolver: resolverFunc(func(context.Context, string, string) ([]netip.Addr, error) {
 			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
 		}),

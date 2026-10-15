@@ -15,7 +15,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/azusachino/drifter/internal/matchingcatalog"
+	"github.com/azusachino/drifter/internal/catalog"
 )
 
 // Level is a logging severity threshold.
@@ -47,7 +47,7 @@ type Config struct {
 		Path string `toml:"path"`
 	} `toml:"database"`
 	Matching struct {
-		Catalogs []matchingcatalog.Subscription `toml:"catalogs"`
+		Catalogs []catalog.Subscription `toml:"catalogs"`
 	} `toml:"matching"`
 }
 
@@ -148,7 +148,7 @@ func (c Config) validate() error {
 	if strings.TrimSpace(c.Database.Path) != "" && !filepath.IsAbs(c.Database.Path) {
 		return fmt.Errorf("database.path must be absolute")
 	}
-	if err := matchingcatalog.ValidateSubscriptions(c.Matching.Catalogs); err != nil {
+	if err := catalog.ValidateSubscriptions(c.Matching.Catalogs); err != nil {
 		return err
 	}
 	return nil

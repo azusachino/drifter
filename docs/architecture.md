@@ -11,7 +11,7 @@ implemented.
 
 | Component | Location | Responsibility |
 | --- | --- | --- |
-| CLI and wiring | `cmd/drifter` | Parse commands, load settings, construct providers lazily, own foreground server lifecycle, emit JSON and structured logs. |
+| CLI and wiring | `cmd/drifter` | Cobra command tree parses flags and help; handlers load strict settings, construct providers lazily, own server lifecycle, and emit JSON/structured logs. |
 | Shared feature core | `internal/companion/operations.go`, `pending.go` | Source/target contracts, matching, explicit confirmation, pending selection, account-scoped local operations and owned writes. |
 | WeRead client | `internal/companion/weread.go` | Read-only shelf, search, book metadata and explicitly requested personal progress. |
 | Hardcover client | `internal/companion/hardcover.go` | Read-only edition lookup, bounded candidate search and work/edition membership validation. |
@@ -19,7 +19,7 @@ implemented.
 | Mapping store and ownership | `internal/companion/store.go`, `ownership*.go` | Versioned SQLite, private-file validation, schema initialization, confirmed mappings, sidecar process lock and owned-operation lifetime. |
 | Local HTTP server | `internal/httpserver` | Foreground listener, server-rendered mapping interface, request boundary, read routes and explicit mapping mutations through shared core. |
 | Configuration | `internal/config` | Settings-only TOML with full validation, unknown-key rejection and refusal of credential-like settings. |
-| Matching catalogs | `internal/matchingcatalog`, called by `internal/companion` | Bounded, request-triggered local/HTTPS loading, v1 schema validation, untrusted match evidence, offline local merge and validated output encoding. |
+| Matching catalogs | `internal/catalog`, called by `internal/companion` | Bounded, request-triggered local/HTTPS loading, v1 schema validation, untrusted match evidence, offline local merge and validated output encoding. |
 | Catalog export | `internal/companion/catalog_export.go`, `cmd/drifter/catalog.go` | Read-only account-filtered projection of confirmed mappings to public v1 assertions; no database creation/migration or provider calls. |
 | Logging and probes | `internal/logging`, `internal/probes` | JSON `slog` output and local `/healthz`/`/readyz` checks. |
 
@@ -190,10 +190,11 @@ that status synchronization or the full broader milestone is complete.
 
 | Dependency | Rationale |
 | --- | --- |
-| Go standard library (`net/http`, JSON, `flag`, `log/slog`, crypto) | Small audit surface and standard-handler boundary. |
+| Go standard library (`net/http`, JSON, `log/slog`, crypto) | Small audit surface and standard-handler boundary. |
 | [`github.com/go-chi/chi/v5` v5.5.0](https://pkg.go.dev/github.com/go-chi/chi/v5@v5.5.0) | Method-aware route groups while retaining standard `http.Handler` composition. |
 | [`github.com/go-chi/httplog/v3` v3.5.0](https://pkg.go.dev/github.com/go-chi/httplog/v3@v3.5.0) | Structured request logging on `log/slog`; Drifter wraps it with a strict field/message allowlist. |
 | [`github.com/santhosh-tekuri/jsonschema/v6` v6.0.3](https://pkg.go.dev/github.com/santhosh-tekuri/jsonschema/v6@v6.0.3) | Draft 2020-12 validation for the closed, versioned catalog schema; schema references remain bundled. |
+| [`github.com/spf13/cobra` v1.10.2](https://pkg.go.dev/github.com/spf13/cobra@v1.10.2) | Nested command/help tree, flag validation and per-command handlers; Go 1.15 module baseline supports the pinned Go 1.27.2 toolchain. |
 | `github.com/mattn/go-sqlite3` | Durable local state with explicit CGO tradeoff. |
 | `github.com/BurntSushi/toml` | Small settings-only configuration with unknown-key detection. |
 | GitHub Actions and pinned `govulncheck` | Owning CI checks and advisory vulnerability scanning. |
@@ -204,6 +205,18 @@ logger's defaults include URL and panic fields; its [official options/API
 documentation](https://pkg.go.dev/github.com/go-chi/httplog/v3@v3.5.0) informed
 the explicit safe schema and handler filter in `internal/httpserver/requestlog.go`.
 
-Deliberately absent are a CLI framework, ORM, frontend framework/build chain,
-retry library, telemetry SDK, user-authentication system and background job
-runner.
+Cobra is limited to command parsing and help; it does not manage settings or
+credentials. Configuration remains strict `BurntSushi/toml` with explicit
+unknown-key and credential-like-key rejection. Viper, an ORM, frontend
+framework/build chain, retry library, telemetry SDK, user-authentication system
+and background job runner remain absent.
+
+The command-tree implementation follows Cobra's official
+[user guide](https://github.com/spf13/cobra/blob/v1.10.2/site/content/user_guide.md)
+for `AddCommand`, `RunE`, required flags and repeated `StringArray` flags, and its
+[`Command` API](https://github.com/spf13/cobra/blob/v1.10.2/command.go) for
+`ExecuteContext`, `SetOut`/`SetErr`, `SilenceErrors` and `SilenceUsage`. The
+pinned [v1.10.2 release](https://github.com/spf13/cobra/releases/tag/v1.10.2)
+(published 2025-12-04, latest listed at selection) declares Go 1.15 in its
+[versioned module file](https://github.com/spf13/cobra/blob/v1.10.2/go.mod). Cobra is not a settings manager;
+TOML remains loaded directly by `internal/config`, and Viper is not included.

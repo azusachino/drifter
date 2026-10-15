@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/azusachino/drifter/internal/matchingcatalog"
+	"github.com/azusachino/drifter/internal/catalog"
 )
 
 func TestExportCatalogSelectsOnlyRequestedAccountsAndSafeFields(t *testing.T) {
@@ -53,7 +53,7 @@ func TestExportCatalogSelectsOnlyRequestedAccountsAndSafeFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var doc matchingcatalog.Document
+	var doc catalog.Document
 	if err := json.Unmarshal(encoded, &doc); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestExportCatalogSelectsOnlyRequestedAccountsAndSafeFields(t *testing.T) {
 	if assertion.Source.ID != selected.BookID || assertion.Target.WorkID != selected.WorkID || assertion.Target.EditionID == nil || *assertion.Target.EditionID != selected.EditionID {
 		t.Fatalf("exported wrong mapping: %+v", assertion)
 	}
-	if assertion.Provenance[0] != (matchingcatalog.Provenance{Source: "public source", Reference: "public reference"}) {
+	if assertion.Provenance[0] != (catalog.Provenance{Source: "public source", Reference: "public reference"}) {
 		t.Fatalf("exported wrong provenance: %+v", assertion.Provenance)
 	}
 	if doc.Assertions[1].Source.ID != workOnly.BookID || doc.Assertions[1].Target.EditionID != nil {
@@ -102,7 +102,7 @@ func TestExportCatalogUnderDaemonOwnershipIsReadOnlyAndEmptyStateIsValid(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	var doc matchingcatalog.Document
+	var doc catalog.Document
 	if err := json.Unmarshal(encoded, &doc); err != nil || len(doc.Assertions) != 0 || len(doc.Hints) != 0 {
 		t.Fatalf("existing empty state did not export an empty catalog: %+v %v", doc, err)
 	}

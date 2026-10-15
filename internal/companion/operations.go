@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/azusachino/drifter/internal/matchingcatalog"
+	"github.com/azusachino/drifter/internal/catalog"
 )
 
 // Source and Target are the provider dependencies of core operations. Adapters
@@ -43,7 +43,7 @@ func Inspect(ctx context.Context, source Source, id string, progress bool) (Insp
 }
 
 type MatchOptions struct {
-	CatalogLoader *matchingcatalog.Loader
+	CatalogLoader *catalog.Loader
 }
 
 func Match(ctx context.Context, source Source, target Target, id, query string) (MatchReport, error) {
@@ -68,7 +68,7 @@ func MatchWithOptions(ctx context.Context, source Source, target Target, id, que
 	}
 	complete := snapshot.Complete
 	report.CatalogsComplete = &complete
-	report.CatalogIssues = append([]matchingcatalog.Issue(nil), snapshot.Issues...)
+	report.CatalogIssues = append([]catalog.Issue(nil), snapshot.Issues...)
 	for _, catalog := range snapshot.Catalogs {
 		for _, assertion := range catalog.Assertions {
 			if assertion.Source.Provider != "weread" || assertion.Source.ID != book.ID {
@@ -110,7 +110,7 @@ func MatchWithOptions(ctx context.Context, source Source, target Target, id, que
 		}
 		if len(targets) > 1 {
 			report.CatalogConflicts = []CatalogConflict{{
-				Source: matchingcatalog.SourceRef{Provider: "weread", ID: book.ID},
+				Source: catalog.SourceRef{Provider: "weread", ID: book.ID},
 				Claims: append([]CatalogAssertion(nil), report.CatalogAssertions...),
 			}}
 		}

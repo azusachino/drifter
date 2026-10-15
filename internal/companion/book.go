@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/azusachino/drifter/internal/matchingcatalog"
+	"github.com/azusachino/drifter/internal/catalog"
 )
 
 // Book contains identity evidence, not a confirmed cross-provider mapping.
@@ -42,7 +42,7 @@ func progressStatus(percent, started int, finishedAt int64) (Progress, error) {
 
 // NormalizeISBN validates identity evidence; an arbitrary ASIN is not an ISBN.
 func NormalizeISBN(raw string) (string, error) {
-	return matchingcatalog.NormalizeISBN(raw)
+	return catalog.NormalizeISBN(raw)
 }
 
 func ValidBookID(id string) bool {

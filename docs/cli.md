@@ -31,6 +31,19 @@ and builds the CLI. `make fmt` formats Go; `make test` runs race-enabled tests.
 Tests use synthetic provider responses and temporary databases, never real keys
 or account captures.
 
+## Command tree and flags
+
+The CLI uses Cobra v1.10.2 for nested commands, flag validation and generated
+help (`drifter --help`, `drifter catalog --help`, and
+`drifter catalog export --help`). The default shell-completion command is
+disabled to avoid adding an unrelated command. Required flags are rejected
+before command handlers run. Cobra owns only argument parsing and help; Drifter
+continues to load settings with its strict TOML validator. `match` and `serve`
+default to `config.toml`; `serve-probes` takes an explicit `--config` path.
+On `serve` and `serve-probes`, `database.path` in the settings file overrides
+`--db`. No automatic environment/config binding is used, and provider credentials
+remain environment-only.
+
 ## Credentials
 
 Set `WEREAD_API_KEY` and `HARDCOVER_API_KEY` in the invoking shell environment.
