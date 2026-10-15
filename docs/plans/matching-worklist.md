@@ -501,3 +501,67 @@ The owner subsequently approved native `openai-codex/gpt-6.1-sol` workers at
 medium effort for the remaining E2–G implementation and tests. This resolves the
 routing pause, not the missing acceptance. Continue from the preserved E2 diff
 without repeating completed components; retain the same PR, scope and gates.
+
+### G executable acceptance checkpoint
+
+G continues the verified E2/F1/F2 source at parent
+`e2dd713794724dc8f1714a707be0f82d7250d560` on
+`work/pr13-matching-milestone`. Earlier partial checkpoints above are historical,
+not the current next action. The G commit containing this section supplies
+executable restart/failure/cancellation acceptance and minimal review pagination
+fixes; its full hash and exact gate results belong in the component handoff and
+subsequent owning PR record. No remote records are changed by this checkpoint.
+
+The review loop now consumes safe rows from incomplete pages, follows real
+continuation, distinguishes normal `worklist_limit` from unresolved issues,
+preserves partial rows on the 60-second page deadline and reports omitted failed
+metadata IDs. The core retains last-attempted cursor semantics and identifies
+interrupted versus unattempted enrichment rows. All provider-backed stages are
+bounded independently of owner input. Saved choices survive later failures;
+unfinished IDs and unknown later-page work are not presented as completed.
+
+The [walkthrough](../walkthroughs/README.md) contains exact offline reproduction
+commands, not CLI examples falsely described as synthetic. Actual test names
+map the milestone outcomes as follows; the full gate re-executes predecessor
+coverage rather than treating historical test claims as new evidence.
+
+| Outcome | Actual executable evidence |
+| --- | --- |
+| M1: older eligible books | CLI `TestReviewAcceptanceOlderPageFailuresAndRetry`, `TestReviewAcceptanceNormalPaginationIsNotFailure`, `TestReviewAcceptancePageDeadlinePreservesRowsAndContinues`; core `TestPendingSeekContinuesAcrossFailuresAndTies` |
+| M2: persisted reversible choices | CLI `TestReviewAcceptanceRestartAndScopedReset`; core `TestDecisionStoreAccountIsolationResetAndValidation`, `TestDecisionMigrationFromVersionOnePreservesMappingsAndReadOnlySchema`, `TestFailedVersionOneDecisionMigrationRollsBack`, `TestStoreVersionsNewAndLegacyDatabases` |
+| M3: suggestions remain unconfirmed | CLI `TestReviewHintQueryActions`, `TestReviewIncompleteSelectionsNeverMeanConsent`; core `TestMatchExpectedAuthorStablePartition`, `TestMatchExpectedAuthorPreservesExactEditions` |
+| M4: intended work/edition | CLI `TestReviewManualEditionAndWorkOnlyDespiteExactEdition`, `TestReviewWrongEditionPreservesMappingsAndDecisions`, `TestReviewGuardedReplacementAndStaleExpectedTarget`; core `TestStoreGuardedMutationsRejectStaleTargets` |
+| M5: failure, restart and cancellation | CLI `TestReviewAcceptanceOlderPageFailuresAndRetry`, `TestReviewAcceptanceCancellationDuringProviderStages`, `TestReviewAcceptanceInputCancellationPreservesPriorChoices`, `TestReviewCancellationWhileInputBlockedReleasesLease`, `TestReviewAcceptanceInputFailureAndDefaultsReleaseLease`, `TestReviewProviderStageDeadlinesAndOwnerThinkTime`, `TestReviewEOFDoesNotSaveDecisionAndReleasesLease`, `TestReviewAcceptanceMetadataOmissionsRemainHonest`; core `TestPendingSeekCancellationDoesNotSkipUnattemptedRows` |
+| M6: bounded intentional HTTP mutations | HTTP `TestBusySlotLeavesReadRoutesAndValidationAvailableThenReuses`, `TestPendingTimeoutPreservesCompletedRowsAndReturns504`, `TestMutationDeadlineIsConsistentForJSONAndNativeForm`, `TestMutationRejectionsPrecedeProviderCallsAndStateWrites`; core `TestCanceledSpacingDoesNotSendRequest`, `TestCanceledSerializationWaitDoesNotSendAndGateCanBeReused`; browser native-form regressions |
+| M7: privacy and ownership | CLI `TestReviewAcceptancePrivateAndUnknownRowsAreNotEnriched`, `TestReviewAcquiresOwnershipBeforeProviderFactory`, `TestReviewImportedRowsNeverLink`, `TestReviewSourceMetadataIsTerminalSafe`; core `TestPendingShelfFiltersBeforeMetadataAndClassifies`, `TestReadOnlyStoreUnderOwnershipDoesNotMigrate`, `TestDaemonOwnershipIsExclusiveAndReleasedOnProcessDeath` |
+
+G's initial acceptance tests were red: ordinary pagination/metadata issues
+prevented any review, and pending page acquisition had no stage deadline. The
+new CLI/core journeys now pass uncached under the race detector. The full gate
+also exposed an old HTTP timeout fixture that assumed only one issue; it now
+requires both the attempted failed metadata ID and `operation_timeout`, retaining
+the completed row, cursor and 504 assertions.
+
+An uncached HTTP run additionally found a pre-existing test-only race: direct
+`handlePending` invocation read `s.ownership` while background `Serve` initialized
+it. With supervisor approval, that one cancellation fixture now initializes
+ownership synchronously. Normal HTTP requests already enter through `Serve`
+after initialization; production serving and the idle-client cleanup/unchanged
+stop assertion are untouched. This exact focused regression passed 20 uncached
+race-enabled repetitions:
+
+```sh
+mise exec -- go test -race -count=20 ./internal/httpserver \
+  -run 'Test(CanceledPendingReturnsSafeEmptyArrays|PendingTimeout.*)$'
+```
+
+The complete owning gate, browser probe (one test), browser suite (four tests),
+changed-doc lint and whitespace check pass on G's final source. The component
+handoff records exact commands and revision. This is implementation/self-review
+evidence, not independent review. The next owner is the parent integration stage:
+inspect the component commit, reconcile
+M1–M7 with PR 13 and issue 7 under the owner's authority, and record the actual
+integrated revision/gates before claiming milestone completion. Status-write
+milestones, real account fingerprints, live-provider validation, KU intake,
+backup/restore, deployment and sharing-policy changes remain outside this work.
+Public catalog v1 and provider destinations/security policies are unchanged.

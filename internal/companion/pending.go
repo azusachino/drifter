@@ -221,8 +221,12 @@ func PendingWithDecisions(ctx context.Context, reader worklistSource, mappings [
 		report.Complete = false
 		report.Issues = append(report.Issues, PendingIssue{Code: "worklist_limit"})
 	}
-	for _, row := range eligible {
+	for i, row := range eligible {
 		if err := ctx.Err(); err != nil {
+			report.Complete = false
+			for _, remaining := range eligible[i:] {
+				report.Issues = append(report.Issues, PendingIssue{remaining.ID, "unattempted"})
+			}
 			return report, err
 		}
 		cursor = pendingCursor{Version: 1, AsOf: asOf.Unix(), Days: options.Days, SourceAccount: options.SourceAccount, TargetAccount: options.TargetAccount, IncludePrivate: options.IncludePrivate, IncludeImported: options.IncludeImported, LastOpened: *row.LastOpened, BookID: row.ID}
@@ -232,6 +236,11 @@ func PendingWithDecisions(ctx context.Context, reader worklistSource, mappings [
 		if !strings.HasPrefix(row.ID, "CB_") {
 			book, err = reader.Book(ctx, row.ID)
 			if err := ctx.Err(); err != nil {
+				report.Complete = false
+				report.Issues = append(report.Issues, PendingIssue{row.ID, "metadata_lookup_failed"})
+				for _, remaining := range eligible[i+1:] {
+					report.Issues = append(report.Issues, PendingIssue{remaining.ID, "unattempted"})
+				}
 				return report, err
 			}
 			if err != nil || book.ID != row.ID || strings.TrimSpace(book.Title) == "" {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -72,8 +73,22 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 		defer store.Close()
 		terminal := bufio.NewReader(app.input)
 		var failedBooks []string
+		var unfinished []string
+		var morePending bool
+		pendingIncomplete := false
+		savedChoices := 0
 		catalogsIncomplete := false
 		defer func() {
+			fmt.Fprintf(c.ErrOrStderr(), "Review saved choices: %d.\n", savedChoices)
+			if len(unfinished) > 0 {
+				fmt.Fprintf(c.ErrOrStderr(), "Review unfinished/unattempted source books: %s.\n", strings.Join(unfinished, ", "))
+			}
+			if morePending {
+				fmt.Fprintln(c.ErrOrStderr(), "Later pending rows may remain unattempted; start a fresh review to resume.")
+			}
+			if pendingIncomplete {
+				reviewErr = errors.Join(reviewErr, fmt.Errorf("pending source/metadata incomplete; see issue codes"))
+			}
 			if catalogsIncomplete {
 				reviewErr = errors.Join(reviewErr, fmt.Errorf("matching catalogs incomplete; see issue codes"))
 			}
@@ -93,14 +108,51 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 		}
 		after := ""
 		for {
-			report, err := companion.PendingWorklistOwned(c.Context(), source, dbPath, companion.PendingOptions{SourceAccount: account, TargetAccount: targetAccount, Days: days, IncludePrivate: includePrivate, IncludeImported: includeImported, After: after, Now: now}, owner)
-			if err != nil {
+			if err := c.Context().Err(); err != nil {
 				return err
 			}
-			if !report.Complete {
-				return fmt.Errorf("pending worklist incomplete; see issue codes")
-			}
+			pageCtx, pageCancel := context.WithTimeout(c.Context(), reviewProviderTimeout)
+			report, pageErr := companion.PendingWorklistOwned(pageCtx, source, dbPath, companion.PendingOptions{SourceAccount: account, TargetAccount: targetAccount, Days: days, IncludePrivate: includePrivate, IncludeImported: includeImported, After: after, Now: now}, owner)
+			pageCancel()
+			unfinished = nil
+			var pageUnattempted []string
+			morePending = report.NextCursor != ""
 			for _, book := range report.Books {
+				unfinished = append(unfinished, book.ID)
+			}
+			for _, issue := range report.Issues {
+				if issue.Code == "worklist_limit" {
+					continue // Normal pagination is resolved by consuming NextCursor.
+				}
+				if issue.Code == "unattempted" {
+					pageUnattempted = append(pageUnattempted, issue.BookID)
+					unfinished = append(unfinished, issue.BookID)
+					continue // A local page deadline continues from the last attempted row.
+				}
+				pendingIncomplete = true
+				fmt.Fprintf(c.ErrOrStderr(), "Pending issue: %s %s\n", terminalText(issue.BookID), terminalText(issue.Code))
+				if issue.BookID != "" && !slices.Contains(failedBooks, issue.BookID) {
+					failedBooks = append(failedBooks, issue.BookID)
+				}
+			}
+			if err := c.Context().Err(); err != nil {
+				if pageErr != nil {
+					fmt.Fprintln(c.ErrOrStderr(), "Pending acquisition interrupted; remaining eligibility is unknown beyond reported source IDs.")
+				}
+				return err
+			}
+			if pageErr != nil {
+				pendingIncomplete = true
+				fmt.Fprintln(c.ErrOrStderr(), "Pending acquisition failed; provider details omitted.")
+				if !errors.Is(pageErr, context.DeadlineExceeded) || report.NextCursor == "" {
+					return fmt.Errorf("pending acquisition failed; no decision saved for unfinished rows")
+				}
+			}
+			for i, book := range report.Books {
+				unfinished = append([]string(nil), pageUnattempted...)
+				for _, remaining := range report.Books[i:] {
+					unfinished = append(unfinished, remaining.ID)
+				}
 				if err := c.Context().Err(); err != nil {
 					return err
 				}
@@ -142,6 +194,9 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 							if sourceErr != nil {
 								failedBooks = append(failedBooks, book.ID)
 								fmt.Fprintf(c.ErrOrStderr(), "Book %s lookup failed; no decision saved.\n", book.ID)
+								if err := c.Context().Err(); err != nil {
+									return err
+								}
 								break
 							}
 							if report.CatalogsComplete != nil && !*report.CatalogsComplete {
@@ -289,6 +344,11 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 							if finalErr != nil {
 								failedBooks = append(failedBooks, book.ID)
 								fmt.Fprintf(c.ErrOrStderr(), "Book %s link failed; no decision saved.\n", book.ID)
+								if err := c.Context().Err(); err != nil {
+									return err
+								}
+							} else {
+								savedChoices++
 							}
 							break
 						}
@@ -302,9 +362,11 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 					if err != nil {
 						return err
 					}
+					savedChoices++
 					break
 				}
 			}
+			unfinished = pageUnattempted
 			if report.NextCursor == "" {
 				return nil
 			}
@@ -345,6 +407,9 @@ func readReviewLine(ctx context.Context, input *bufio.Reader) (string, error) {
 	case r := <-result:
 		if err := ctx.Err(); err != nil {
 			return "", err
+		}
+		if r.err != nil && !errors.Is(r.err, io.EOF) {
+			return "", fmt.Errorf("review input failed")
 		}
 		return r.line, r.err
 	}

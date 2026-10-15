@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -81,7 +82,7 @@ func TestPendingTimeoutPreservesCompletedRowsAndReturns504(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&report); err != nil {
 		t.Fatal(err)
 	}
-	if res.StatusCode != http.StatusGatewayTimeout || report.Complete || len(report.Books) != 1 || report.Books[0].ID != "one" || len(report.Issues) != 1 || report.Issues[0].Code != "operation_timeout" {
+	if res.StatusCode != http.StatusGatewayTimeout || report.Complete || len(report.Books) != 1 || report.Books[0].ID != "one" || len(report.Issues) != 2 || report.Issues[0].Code != "metadata_lookup_failed" || report.Issues[0].BookID != "two" || report.Issues[1].Code != "operation_timeout" || report.NextCursor == "" {
 		t.Fatalf("timeout status=%d report=%+v", res.StatusCode, report)
 	}
 }
@@ -155,11 +156,30 @@ func TestBusySlotLeavesReadRoutesAndValidationAvailableThenReuses(t *testing.T) 
 func TestCanceledPendingReturnsSafeEmptyArrays(t *testing.T) {
 	now := time.Now()
 	src := &sourceStub{now: now}
-	s, base := newBudgetServer(t, src, time.Second)
+	// This test invokes the handler directly, bypassing Serve's initialization
+	// before Accept. Initialize ownership synchronously instead of racing Serve.
+	db := filepath.Join(t.TempDir(), "db.sqlite")
+	s, err := New(Options{Address: "127.0.0.1:8081", Database: db, Source: src, Target: &targetStub{}, operationTimeout: time.Second, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := companion.AcquireDatabaseOwnership(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	s.ownership = owner
+	store, err := companion.OpenOwnedStore(db, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	req := httptest.NewRequest(http.MethodGet, "/api/pending?account=src&target_account=dst", nil).WithContext(ctx)
-	req.Host = strings.TrimPrefix(base, "http://")
+	req.Host = "127.0.0.1:8081"
 	response := httptest.NewRecorder()
 	s.handlePending(response, req)
 	var report companion.PendingReport

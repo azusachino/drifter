@@ -234,9 +234,16 @@ book's review without saving a choice. Catalog failures remain visibly
 incomplete and cause a nonzero exit while preserving usable provider results
 and valid catalog evidence. EOF never means consent.
 
-Metadata is stripped of terminal control characters. Provider lookup and final
-confirmation each have a 60-second deadline; owner input has no provider
-deadline. Lookup or link failure saves no decision and review continues, then
+Metadata is stripped of terminal control characters. Each pending page,
+provider lookup and final confirmation has its own 60-second deadline; owner
+input has no provider deadline. Safe available rows remain reviewable when a
+page has metadata issues or times out. Review follows the last-attempted cursor
+to older rows; ordinary pagination alone does not cause failure. Source/metadata
+issues, including rows omitted from the interactive list, remain explicit and
+cause a nonzero exit. Completed choices survive; a fresh invocation retries
+only still-pending work. On early exit, summaries distinguish saved choices,
+known unfinished/unattempted IDs and possible later pages (not a shelf snapshot).
+Lookup or link failure saves no decision and review continues, then
 returns nonzero with failed source IDs, even if later books succeed. Replacing
 a mapping requires a separate `yes` and refuses a changed expected target.
 Review takes exclusive database ownership before constructing the WeRead client

@@ -248,6 +248,21 @@ func TestPendingSeekCancellationDoesNotSkipUnattemptedRows(t *testing.T) {
 	if err == nil || report.NextCursor == "" {
 		t.Fatalf("cancellation cursor: %+v %v", report, err)
 	}
+	if report.Complete || len(report.Books) != 49 {
+		t.Fatalf("partial rows lost or marked complete: %+v", report)
+	}
+	failed, unattempted := []string{}, []string{}
+	for _, issue := range report.Issues {
+		switch issue.Code {
+		case "metadata_lookup_failed":
+			failed = append(failed, issue.BookID)
+		case "unattempted":
+			unattempted = append(unattempted, issue.BookID)
+		}
+	}
+	if !reflect.DeepEqual(failed, []string{"050"}) || len(unattempted) != 50 || unattempted[0] != "051" || unattempted[49] != "100" {
+		t.Fatalf("failed=%v unattempted=%v", failed, unattempted)
+	}
 	options.After = report.NextCursor
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
