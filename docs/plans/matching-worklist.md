@@ -16,7 +16,11 @@ owns this tier-1 planning deliverable. Implementation involving a migration or
 changed interface follows intent-to-verified-result at tier 2.
 The subsequent owner request selected native Pi subagents with Luna 6 at medium
 effort for implementation; the bounded A1 result is recorded in the handoff below.
-That checkpoint does not claim approval or completion of later interface changes.
+That checkpoint does not claim completion of later interface changes. The owner
+subsequently requested "finish all in this PR": A2-G of milestone 1 are now
+approved for implementation in PR 13, including the proposed interface and
+migration contracts below. Later status-sync milestones and deferred sharing,
+backup/import and deployment decisions remain outside that authorization.
 
 This revises the existing incomplete plan in place. The
 [matching worklist issue](https://github.com/azusachino/drifter/issues/7) remains
@@ -129,8 +133,11 @@ verified and integrated before its successor; split again if it exceeds one
 focused session. Keep source stable at each acceptance checkpoint. No general
 workflow engine, background queue, stored shelf archive or new framework.
 
-The following command spelling and new numerical bounds are **proposed for
-implementation approval**, not capabilities that already exist.
+The command spelling, bounds and interface changes below were proposals during
+planning and are now accepted for milestone 1 by the owner's PR 13 completion
+request. Historical approval annotations below are satisfied by that request;
+they are not a reason to pause again before each accepted delivery. They do not
+claim that the capabilities are already implemented or approve later milestones.
 
 ### A. Bound provider-backed work
 
@@ -339,6 +346,35 @@ sensitive logs.
 - Exit: owner reviews M1-M7 evidence. Matching work is complete only when the
   owning acceptance record agrees, including its superseded hints contract.
 
+## Execution ownership for PR 13
+
+The remaining implementation is multi-seam. Run the component owners serially
+in the isolated `work/pr13-matching-milestone` checkout, handing off a clean,
+tested local commit after each stage. The published `fix/provider-cancellation`
+checkout is integration-only until those handoffs are ready. Shared files have
+one writer at a time; no concurrent writer or issue-wide implementation owner.
+All workers use native Pi subagents with `openai-codex/gpt-6-luna:medium`.
+
+| Owner stage | Exclusive behavior / edit scope | Handoff gate |
+| --- | --- | --- |
+| A2 | HTTP admission/deadline handlers and bounded partial pending result support. | HTTP/core race tests and owning gates. |
+| B1 | Atomic guarded mapping mutation in store/shared confirmation. | Core race tests and owning gates. |
+| B2 | Required expected target in HTTP JSON/native forms and browser acceptance. | HTTP/core tests, browser journeys and owning gates. |
+| C1 | Shared bounded pending seek cursor and selection tests. | Core race tests and owning gates. |
+| C2 | Pending CLI/HTTP continuation inputs and output contract. | Adapter/core tests, browser regression and owning gates. |
+| D1 | Version-2 decisions state, migration and store tests. | Migration/store race tests and owning gates. |
+| D2 | Local decision/reset/list commands and shared pending suppression. | CLI/core tests, browser regression and owning gates. |
+| E | Terminal review, owned lifecycle and explicit validated selections. | Scripted CLI/core journeys and owning gates. |
+| F1 | Explicit author-aware ranking option in shared matching. | Catalog/matching/core regressions and owning gates. |
+| F2 | Terminal hint choice and alternate-query prompts. | Scripted CLI/core journeys and owning gates. |
+| G | Terminal restart, cancellation, bounded per-book failures and resume acceptance. | Uncached CLI/core acceptance plus complete owning/browser gates. |
+| Integration | Fast-forward verified component commits, final documentation/story evidence and combined acceptance. No new feature ownership. | Complete owning gates on the integrated checkpoint. |
+
+Each owner reads earlier handoffs and the actual current source rather than
+assuming a planned interface exists. A failed gate blocks advancement; fix only
+within the owned contract or request a bounded supervisor decision. Parent
+source/evidence inspection is self-review, not an independent-review claim.
+
 ## Verification and iteration
 
 All code checks run from the owning checkout with its pinned mise tools.
@@ -419,11 +455,11 @@ records exact commands, baseline comparison and limits. Focused race tests,
 journeys passed on this code. Documentation lint/whitespace checks apply to the
 later documentation-only checkpoint; no provider experiments occurred.
 
-**Next action:** review A1's owning PR/checkpoint, then approve A2's proposed
-HTTP budget/admission/error contract before its implementation. A2 and B-G,
-including persistent decisions and terminal review, remain undelivered. Do not
-start schema changes or a review interface while silently leaving prerequisites
-unresolved. Before resuming, compare current Git with the code checkpoint and
-read intervening commits; documentation-only commits may follow it. Each next
-subdelivery records its actual revision, results and remaining acceptance.
-Asobi, extra agents and cross-device coordination remain opt-in.
+**Next action:** execute the approved A2-G ownership sequence above and finish
+milestone 1 in the existing PR 13. At this authorization checkpoint, A2-G remain
+undelivered; the plan is not proof of their completion. Preserve each tested
+component commit and record final M1-M7 evidence in the owning PR/records. Do not
+silently skip prerequisites, weaken gates or claim status synchronization.
+Before resuming, compare current Git with the code checkpoint and read
+intervening commits; documentation-only commits may follow it. Asobi,
+cross-device coordination, provider writes and PR merge remain outside scope.
