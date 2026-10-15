@@ -117,6 +117,7 @@ func newTestServer(t *testing.T, source companion.Source, db string, now time.Ti
 		close(stopped)
 	}()
 	t.Cleanup(func() {
+		http.DefaultClient.CloseIdleConnections()
 		cancel()
 		select {
 		case <-stopped:
