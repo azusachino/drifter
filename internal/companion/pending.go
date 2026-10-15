@@ -145,6 +145,10 @@ type worklistSource interface {
 const pendingLimit = 100
 
 func Pending(ctx context.Context, reader worklistSource, mappings []Mapping, options PendingOptions) (PendingReport, error) {
+	return PendingWithDecisions(ctx, reader, mappings, nil, options)
+}
+
+func PendingWithDecisions(ctx context.Context, reader worklistSource, mappings []Mapping, decisions []Decision, options PendingOptions) (PendingReport, error) {
 	report := PendingReport{Books: []PendingBook{}, Issues: []PendingIssue{}}
 	if !ValidLabel(options.SourceAccount) || !ValidLabel(options.TargetAccount) || options.Days < 1 || options.Days > 36500 || options.Now.IsZero() {
 		return report, fmt.Errorf("pending requires account labels, time and a window of 1–36500 days")
@@ -170,6 +174,11 @@ func Pending(ctx context.Context, reader worklistSource, mappings []Mapping, opt
 		report.Issues = append(report.Issues, PendingIssue{Code: "incomplete_shelf"})
 	}
 	mapped := make(map[string]bool)
+	for _, d := range decisions {
+		if d.Provider == "weread" && d.SourceAccount == options.SourceAccount && d.TargetAccount == options.TargetAccount && (d.Kind == "exclude" || d.Kind == "not-in-catalog") {
+			mapped[d.BookID] = true
+		}
+	}
 	for _, m := range mappings {
 		if m.Provider == "weread" && m.SourceAccount == options.SourceAccount && m.TargetAccount == options.TargetAccount {
 			mapped[m.BookID] = true

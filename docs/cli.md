@@ -176,6 +176,27 @@ capability; standalone `link` and `unlink` remain refused while `serve` owns the
 state. See the [architecture](architecture.md) and the
 [HTTP user-story and test map](plans/http-server.md).
 
+## Local review decisions
+
+Decision controls are local SQLite operations and require no provider credentials:
+
+```sh
+bin/drifter decide --book-id 123 --account my-weread \
+  --target-account my-hardcover --decision exclude
+bin/drifter decisions --account my-weread --target-account my-hardcover
+bin/drifter reset-decision --book-id 123 --account my-weread \
+  --target-account my-hardcover
+```
+
+`--decision` accepts `skip`, `exclude`, or `not-in-catalog`. Skip is retained
+for review history but appears in the next pending invocation; exclude and
+not-in-catalog suppress that source book only for the exact source/target
+account pair. Link and unlink do not erase decisions. If unlinking reveals a
+suppressed source book, run `reset-decision` with the same `--book-id`,
+`--account`, and `--target-account` to make it eligible again. `decisions` reads
+current-schema state read-only while a server owns the database; decision writes
+refuse an active server/review owner. All three accept `--db PATH`.
+
 ## Inspect and match
 
 ```sh

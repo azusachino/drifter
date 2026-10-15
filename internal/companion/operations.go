@@ -202,7 +202,11 @@ func PendingWorklist(ctx context.Context, source Source, path string, options Pe
 	if err != nil {
 		return PendingReport{}, err
 	}
-	return Pending(ctx, source, mappings, options)
+	decisions, err := store.ListDecisions(ctx, "weread", options.SourceAccount, options.TargetAccount)
+	if err != nil {
+		return PendingReport{}, err
+	}
+	return PendingWithDecisions(ctx, source, mappings, decisions, options)
 }
 
 // PendingWorklistOwned reads mappings through a daemon-owned store while using
@@ -217,5 +221,9 @@ func PendingWorklistOwned(ctx context.Context, source Source, path string, optio
 	if err != nil {
 		return PendingReport{}, err
 	}
-	return Pending(ctx, source, mappings, options)
+	decisions, err := store.ListDecisions(ctx, "weread", options.SourceAccount, options.TargetAccount)
+	if err != nil {
+		return PendingReport{}, err
+	}
+	return PendingWithDecisions(ctx, source, mappings, decisions, options)
 }
