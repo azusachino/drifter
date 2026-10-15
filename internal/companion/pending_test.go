@@ -191,3 +191,69 @@ func TestPendingRequestBudgetValidationAndCancellation(t *testing.T) {
 		t.Fatal("canceled worklist succeeded")
 	}
 }
+
+func TestPendingSeekContinuesAcrossFailuresAndTies(t *testing.T) {
+	now := time.Unix(2000000000, 0)
+	r := &pendingReader{shelf: ShelfResult{Complete: true}}
+	for i := 1; i <= pendingLimit+2; i++ {
+		id := fmt.Sprintf("%03d", i)
+		r.shelf.Books = append(r.shelf.Books, ShelfBook{ID: id, Secret: value(0), LastOpened: value(now.Unix())})
+	}
+	r.lookup = func(id string) (Book, error) {
+		if id == "001" || id == "002" {
+			return Book{}, fmt.Errorf("private lookup failure")
+		}
+		return Book{ID: id, Title: "Synthetic", TranslatorKnown: true}, nil
+	}
+	options := PendingOptions{SourceAccount: "source", TargetAccount: "target", Days: 90, Now: now}
+	first, err := Pending(context.Background(), r, nil, options)
+	if err != nil || len(first.Books) != 98 || len(r.calls) != 100 || first.NextCursor == "" {
+		t.Fatalf("first page: books=%d calls=%d report=%+v err=%v", len(first.Books), len(r.calls), first, err)
+	}
+	options.After = first.NextCursor
+	second, err := Pending(context.Background(), r, nil, options)
+	if err != nil || len(second.Books) != 2 || second.Books[0].ID != "101" || second.Books[1].ID != "102" || second.NextCursor != "" {
+		t.Fatalf("second page: %+v %v", second, err)
+	}
+	if len(r.calls) != 102 {
+		t.Fatalf("previous rows re-enriched: %d calls", len(r.calls))
+	}
+	for _, bad := range []string{"not-base64", strings.Repeat("a", 2049)} {
+		options.After = bad
+		if _, err := Pending(context.Background(), r, nil, options); err == nil {
+			t.Fatal("invalid cursor accepted")
+		}
+	}
+	options.After = encodePendingCursor(pendingCursor{Version: 1, AsOf: now.Unix(), Days: 90, SourceAccount: "other", TargetAccount: "target", LastOpened: now.Unix(), BookID: "100"})
+	if _, err := Pending(context.Background(), r, nil, options); err == nil {
+		t.Fatal("wrong scope accepted")
+	}
+}
+
+func TestPendingSeekCancellationDoesNotSkipUnattemptedRows(t *testing.T) {
+	now := time.Unix(2000000000, 0)
+	r := &pendingReader{shelf: ShelfResult{Complete: true}}
+	for i := 1; i <= pendingLimit+1; i++ {
+		r.shelf.Books = append(r.shelf.Books, ShelfBook{ID: fmt.Sprintf("%03d", i), Secret: value(0), LastOpened: value(now.Unix())})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	r.lookup = func(id string) (Book, error) {
+		if id == "050" {
+			cancel()
+		}
+		return Book{ID: id, Title: "Synthetic", TranslatorKnown: true}, nil
+	}
+	options := PendingOptions{SourceAccount: "source", TargetAccount: "target", Days: 90, Now: now}
+	report, err := Pending(ctx, r, nil, options)
+	if err == nil || report.NextCursor == "" {
+		t.Fatalf("cancellation cursor: %+v %v", report, err)
+	}
+	options.After = report.NextCursor
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	r.lookup = nil
+	continued, err := Pending(ctx2, r, nil, options)
+	if err != nil || len(continued.Books) != 51 || continued.Books[0].ID != "051" {
+		t.Fatalf("continuation skipped work: %+v %v", continued, err)
+	}
+}

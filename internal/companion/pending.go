@@ -2,6 +2,8 @@ package companion
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -71,6 +73,7 @@ type PendingOptions struct {
 	IncludePrivate  bool
 	IncludeImported bool
 	Now             time.Time
+	After           string
 }
 
 type PendingBook struct {
@@ -86,9 +89,42 @@ type PendingIssue struct {
 }
 
 type PendingReport struct {
-	Books    []PendingBook  `json:"books"`
-	Complete bool           `json:"complete"`
-	Issues   []PendingIssue `json:"issues"`
+	Books      []PendingBook  `json:"books"`
+	Complete   bool           `json:"complete"`
+	Issues     []PendingIssue `json:"issues"`
+	NextCursor string         `json:"next_cursor,omitempty"`
+}
+
+type pendingCursor struct {
+	Version         int    `json:"v"`
+	AsOf            int64  `json:"as_of"`
+	Days            int    `json:"days"`
+	SourceAccount   string `json:"source_account"`
+	TargetAccount   string `json:"target_account"`
+	IncludePrivate  bool   `json:"include_private"`
+	IncludeImported bool   `json:"include_imported"`
+	LastOpened      int64  `json:"last_opened"`
+	BookID          string `json:"book_id"`
+}
+
+func encodePendingCursor(c pendingCursor) string {
+	data, _ := json.Marshal(c)
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+func decodePendingCursor(raw string, options PendingOptions) (pendingCursor, error) {
+	var c pendingCursor
+	if len(raw) > 2048 {
+		return c, fmt.Errorf("invalid pending cursor")
+	}
+	data, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil || json.Unmarshal(data, &c) != nil {
+		return c, fmt.Errorf("invalid pending cursor")
+	}
+	if c.Version != 1 || c.Days != options.Days || c.SourceAccount != options.SourceAccount || c.TargetAccount != options.TargetAccount || c.IncludePrivate != options.IncludePrivate || c.IncludeImported != options.IncludeImported || c.AsOf <= 0 || c.AsOf > options.Now.Unix() || c.LastOpened <= 0 || c.LastOpened > c.AsOf || !validShelfID(c.BookID) {
+		return c, fmt.Errorf("invalid pending cursor")
+	}
+	return c, nil
 }
 
 type worklistSource interface {
@@ -113,6 +149,15 @@ func Pending(ctx context.Context, reader worklistSource, mappings []Mapping, opt
 		return report, err
 	}
 	report.Complete = shelf.Complete
+	asOf := options.Now
+	var cursor pendingCursor
+	if options.After != "" {
+		cursor, err = decodePendingCursor(options.After, options)
+		if err != nil {
+			return report, err
+		}
+		asOf = time.Unix(cursor.AsOf, 0)
+	}
 	if !shelf.Complete {
 		report.Issues = append(report.Issues, PendingIssue{Code: "incomplete_shelf"})
 	}
@@ -124,7 +169,7 @@ func Pending(ctx context.Context, reader worklistSource, mappings []Mapping, opt
 	}
 	// Filter privacy before inspecting activity, titles or metadata.
 	eligible := []ShelfBook{}
-	cutoff, now := options.Now.Add(-time.Duration(options.Days)*24*time.Hour).Unix(), options.Now.Unix()
+	cutoff, now := asOf.Add(-time.Duration(options.Days)*24*time.Hour).Unix(), asOf.Unix()
 	for _, row := range shelf.Books {
 		if row.Secret == nil || (*row.Secret != 0 && *row.Secret != 1) || (*row.Secret == 1 && !options.IncludePrivate) {
 			continue
@@ -140,6 +185,9 @@ func Pending(ctx context.Context, reader worklistSource, mappings []Mapping, opt
 		if *row.LastOpened == 0 || *row.LastOpened < cutoff {
 			continue
 		}
+		if options.After != "" && (*row.LastOpened > cursor.LastOpened || (*row.LastOpened == cursor.LastOpened && row.ID <= cursor.BookID)) {
+			continue
+		}
 		eligible = append(eligible, row)
 	}
 	sort.Slice(eligible, func(i, j int) bool {
@@ -148,8 +196,11 @@ func Pending(ctx context.Context, reader worklistSource, mappings []Mapping, opt
 		}
 		return eligible[i].ID < eligible[j].ID
 	})
-	if len(eligible) > pendingLimit {
+	more := len(eligible) > pendingLimit
+	if more {
 		eligible = eligible[:pendingLimit]
+	}
+	if more {
 		report.Complete = false
 		report.Issues = append(report.Issues, PendingIssue{Code: "worklist_limit"})
 	}
@@ -157,6 +208,8 @@ func Pending(ctx context.Context, reader worklistSource, mappings []Mapping, opt
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
+		cursor = pendingCursor{Version: 1, AsOf: asOf.Unix(), Days: options.Days, SourceAccount: options.SourceAccount, TargetAccount: options.TargetAccount, IncludePrivate: options.IncludePrivate, IncludeImported: options.IncludeImported, LastOpened: *row.LastOpened, BookID: row.ID}
+		report.NextCursor = encodePendingCursor(cursor)
 		book := Book{ID: row.ID, Title: row.Title, Author: row.Author}
 		classification := "imported"
 		if !strings.HasPrefix(row.ID, "CB_") {
@@ -184,6 +237,9 @@ func Pending(ctx context.Context, reader worklistSource, mappings []Mapping, opt
 			continue
 		}
 		report.Books = append(report.Books, PendingBook{book, classification, *row.LastOpened, *row.Secret == 1})
+	}
+	if !more {
+		report.NextCursor = ""
 	}
 	return report, nil
 }
