@@ -496,3 +496,8 @@ accepted components and the three-file partial diff must be preserved. Resume
 by inspecting actual Git, completing E2 acceptance, then following the approved
 F/G and integration gates. Do not repeat completed source work or passing checks
 unless their inputs change, and do not claim the original sync stories complete.
+
+The owner subsequently approved native `openai-codex/gpt-6.1-sol` workers at
+medium effort for the remaining E2–G implementation and tests. This resolves the
+routing pause, not the missing acceptance. Continue from the preserved E2 diff
+without repeating completed components; retain the same PR, scope and gates.
