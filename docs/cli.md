@@ -5,8 +5,9 @@ Hardcover**. Hardcover → Iroha remains an independent Iroha integration.
 
 Provider operations are **read-only**: inspect WeRead books/progress and
 validate explicitly selected Hardcover identities. Local mappings can be
-confirmed, replaced and unlinked with CLI commands or the foreground `serve`
-HTTP server and mapping interface. No provider status writes occur. The server
+confirmed, replaced and unlinked with CLI commands or the foreground
+`drifter-server` HTTP server and mapping interface. No provider status writes
+occur. The server
 does not synchronize statuses, import catalog entries or infer fuzzy matches.
 KU intake and deployment are not implemented. Settings-only TOML and
 standalone health probes remain available.
@@ -27,7 +28,8 @@ make e2e
 ```
 
 `make check` verifies Go formatting, runs vet and race-enabled offline tests,
-and builds the CLI. `make fmt` formats Go; `make test` runs race-enabled tests.
+verifies modules, and builds both executables. `make fmt` formats Go;
+`make test` runs race-enabled tests.
 Tests use synthetic provider responses and temporary databases, never real keys
 or account captures.
 
@@ -144,8 +146,9 @@ target now exists. Normal confirm remains unchanged and rejects guard fields.
 Native form posts use bounded URL-encoded `/mappings/confirm`,
 `/mappings/replace` and `/mappings/unlink` routes with the same Origin/Host and
 hidden-token checks. Confirm form fields are `source_account`, `book_id`,
-`target_account`, `work_id`, `edition_mode` (`work` or `edition`) and
-`edition_id` (required only for a specific edition). Replace adds hidden
+`target_account`, `work_id`, `edition_mode` (`work_only` or `edition`) and
+`edition_id` (present but empty for work-only; positive for a specific edition).
+Replace adds hidden
 `expected_work_id` and `expected_edition_id`; unlink carries the source key and
 those same hidden expected-target fields. Stale native submissions show a
 reload-and-review instruction and do not mutate the newer mapping. The page
@@ -172,8 +175,8 @@ and keeps it until shutdown. While it runs, standalone `link` and `unlink`
 refuse with an ownership error; `links` and pending reads may use the existing
 current schema read-only. If that schema needs migration, a reader fails rather
 than migrating under the owner. HTTP mapping maintenance uses the same owned
-capability; standalone `link` and `unlink` remain refused while `serve` owns the
-state. See the [architecture](architecture.md) and the
+capability; standalone `link` and `unlink` remain refused while
+`drifter-server` owns the state. See the [architecture](architecture.md) and the
 [HTTP user-story and test map](plans/http-server.md).
 
 ## Local review decisions
@@ -302,7 +305,8 @@ claims appear separately in the core match report; they never select a result
 or create a mapping. The existing explicit `link` operation still validates
 Hardcover membership and requires your decision.
 
-Catalog requests occur only during `match`, not server startup, browser pages,
+Catalog requests occur only during `match` or an explicit review lookup,
+not server startup, browser pages,
 probes, pending or mapping operations. Each document is limited to 1 MiB, total
 catalog input to 4 MiB per match, and loading to eight sources/fifteen seconds.
 Remote HTTPS is restricted to DNS hostnames on port 443, rejects credentials,
@@ -317,8 +321,9 @@ Hardcover title search is limited to the first ten candidates; candidate edition
 lists show at most ten editions each. Exact ISBN lookup is capped at 100 rows.
 These bounded views do not prove that an absent title/edition is missing from
 the whole catalog. Every result requires owner confirmation. Catalog claims are
-shown separately and do not alter provider search, automatic English-edition
-substitution or confirmation.
+shown separately and never cause automatic English-edition substitution or
+confirmation. Only explicit review query/author actions reuse hints; standalone
+`match` has no author-ranking flag and retains its ordinary behavior.
 
 ### Local catalog export and merge
 
@@ -345,8 +350,8 @@ WeRead provider source IDs, confirmed Hardcover work IDs and optional edition
 IDs, plus the explicitly supplied provenance. Source IDs are disclosed, so an
 export is **not anonymous**. Provenance is caller-supplied public text; do not
 put account aliases, local paths or secrets in it. Export creates or migrates
-no database and works through a current schema read-only handle while `serve`
-owns the database. An absent database or
+no database and works through a current schema read-only handle while
+`drifter-server` owns the database. An absent database or
 unsupported schema is an error with no output; an existing database with no
 mappings in the selected account pair emits a valid empty catalog. More than
 v1's record limit or an output exceeding its byte limit fails without partial
@@ -415,12 +420,14 @@ JSON includes `next_cursor`; continue with `pending --after CURSOR` or HTTP
 `after=CURSOR`, keeping account labels, window and inclusion flags unchanged.
 Cursors bind those settings and the original scan time; treat them as private
 input and never log or share them. This is a live shelf scan, not a snapshot.
-Continuation advances past attempted failures, so omit `--after` for a fresh
-scan or explicitly retry to revisit failures. More work and other incomplete
-reports print JSON and exit nonzero. Shelf incompleteness remains incomplete
-across pages. Shelf facts, progress and raw responses are never persisted.
-Opening the local mapping database may initialize or migrate it as documented
-below.
+New activity moving a row ahead of the seek boundary, or a newly reset decision
+in the already-passed range, can require a fresh scan. The fixed as-of/window
+does not freeze shelf contents. Continuation advances past attempted failures.
+Omit `--after` for a fresh scan or explicitly retry to revisit failures. More
+work and other incomplete reports print JSON and exit nonzero. Shelf
+incompleteness remains incomplete across pages. Shelf facts, progress and raw
+responses are never persisted. Opening the local mapping database may
+initialize or migrate it as documented below.
 
 Saved review decisions and interactive review are separate matching slices;
 this command does not synchronize status.
@@ -462,7 +469,8 @@ Default database:
   absolute path.
 - Otherwise `$HOME/.local/state/drifter/mappings.sqlite`.
 
-Use `--db PATH` on `link`, `links`, `unlink` or `export` to override it.
+Use `--db PATH` on mapping, pending, decision, review or export commands to
+override it; review config precedence is described above.
 Local listing may initialize an empty database; `export` never does. New
 application directories are mode 700 and the database must be a regular,
 non-symlink mode-600 file. The daemon also leaves a
@@ -473,18 +481,21 @@ rejected. The database's immediate parent must
 not be writable by other users. Keep the state directory under your control;
 these checks do not protect against a hostile process running as you.
 
-Persisted fields are source/provider account namespaces, source book ID,
-confirmed target IDs, source title and ISBN. These are personal metadata: keep
-them out of Git and public artifacts. The mapping JSON route exposes the
+Persisted mapping fields are source/provider account namespaces, source book ID,
+confirmed target IDs, source title and ISBN. Decisions store only their namespace
+key and kind (`skip`, `exclude`, `not-in-catalog`), not shelf or hint snapshots.
+These are personal metadata: keep them out of Git and public artifacts. The
+mapping JSON route exposes the
 same saved fields and must be protected like the local database. Raw provider
 responses, personal progress,
 excerpts, device identifiers and tokens are not stored. JSON progress output is
 still personal data; protect redirected output yourself.
 
-The database uses SQLite `PRAGMA user_version` (currently version 1). Opening
-an unversioned database from the first release upgrades it transactionally,
-without rewriting mappings. Unsupported versions and missing required mapping
-columns are refused; a failed upgrade does not advance the version. Do not
+The database uses SQLite `PRAGMA user_version` (currently version 2). Opening
+a legacy version-0 or version-1 database upgrades it transactionally, preserving
+mappings and adding the decisions table. Unsupported versions and missing
+required schema are refused; a failed upgrade rolls back tables and version.
+Version-1 binaries refuse version-2 state; public catalog v1 is unchanged. Do not
 manually lower the version or use an older binary against newer state. Back up
 privately before upgrading; schema versioning is not a downgrade mechanism.
 

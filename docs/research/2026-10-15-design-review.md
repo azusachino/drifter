@@ -149,7 +149,7 @@ offline with the existing provenance and schema guarantees.
   exercise that procedure before relying on unattended persistent deployment;
   do not imply the catalog format restores personal state.
 
-## User-story coverage follow-up
+## Historical user-story coverage follow-up
 
 The denominator matters. The original research defines twelve reading-status
 stories; the current HTTP plan defines nine much smaller local-mapping stories.
@@ -315,3 +315,24 @@ A1 is complete at this bounded checkpoint. A2's total HTTP deadline/admission
 policy and the rest of the matching milestone remain separate work. The full
 user-story coverage assessment above is not upgraded to completed sync merely
 because this transport prerequisite passed.
+
+## Integrated matching follow-up
+
+The source-only assessment above and A1's separate historical runtime evidence
+remain unchanged in meaning. They are not the current completion ledger. PR 13's
+component source through `4002a6d51e87ca21249f72cfc1383227836ba6e0` now supplies
+HTTP admission/deadlines, atomic expected-target guards, pending continuation,
+v2 decisions/reset, terminal explicit linking and opt-in hint query/author use.
+The [integrated acceptance record](../plans/matching-worklist.md#integrated-milestone-1-checkpoint)
+records current combined commands and M1–M7 evidence. These are synthetic
+implementation/self-review results, not independent or live-provider verification.
+
+Findings 1–3 have bounded implementations and executable acceptance, including
+malformed new expected-tuple fields and changed-live-shelf limitations. Durable
+choices and terminal review complete the local matching journey, not all twelve
+original status stories. US2 has stronger matching evidence; post-link bootstrap
+and every status-write acceptance case remain gated. Browser coverage is still
+mapping maintenance, not terminal-review evidence. Public sharing consent in
+finding 4, account identity/status contracts, private backup/restore/import,
+KU and deployment remain unresolved/deferred under their owning plan. Catalog v1
+and offline account-wide export consent have not changed.

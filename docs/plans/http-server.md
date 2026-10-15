@@ -35,7 +35,7 @@ synthetic providers only, never live credentials or provider calls.
 | Cancel in-flight provider work, drain requests and retain the database lease through an owned write/close race. | HTTP `TestServeCancellationPropagatesIntoInFlightPendingLookup`; core `TestOwnerCloseWaitsForInFlightOwnedWrite`. |
 | Confirm, replace and unlink through the browser; remain usable at narrow widths. | `e2e/mapping-interface.spec.ts`: persisted confirm/replace/unlink journey and narrow-viewport journey. |
 
-## Recorded red-green evidence
+## Historical server red-green evidence
 
 Root route, before installing the root handler:
 
@@ -139,10 +139,30 @@ and waits for current operations before releasing the OS lock. Standalone
 initialization/writes take a nonblocking lock. A CLI reader under daemon
 ownership may use only an already-current read-only schema and never migrates.
 
+## Matching milestone HTTP follow-up
+
+Current combined acceptance is recorded in the
+[matching plan](matching-worklist.md#integrated-milestone-1-checkpoint).
+`TestExpectedTargetBoundaryRejectionsPreserveState` adds concrete expected-tuple
+JSON/native malformed-payload coverage; old edition-field tests alone were not
+proof of these new guard fields. Every rejection leaves seeded state intact with
+zero provider construction/calls.
+`TestMappingMutationHTTPUsesCoreValidationAndOwnedStore`
+and browser `stale browser tabs cannot replace or unlink a changed mapping`
+prove stale-intent conflicts; the browser suite now has four journeys.
+
+HTTP pending accepts strict `after` continuation and returns `next_cursor`.
+`TestPendingTimeoutPreservesCompletedRowsAndReturns504` proves timeout partial
+rows; `TestBusySlotLeavesReadRoutesAndValidationAvailableThenReuses` proves
+admission and reuse. The [CLI/HTTP reference](../cli.md) owns wire details.
+The terminal 103-row failure/retry journey is CLI evidence, not browser
+coverage.
+
 ## Explicitly not implemented
 
-No provider-status writes, synchronization, polling, import/export, review
-hints/decisions, run history, holds, background scheduling, daemonization,
-deployment or authentication framework. Do not claim the larger synchronization
-milestone complete. The workflow diagram remains parent-owned and has not been
-updated in this change.
+No provider-status writes, synchronization, polling, run history, holds,
+background scheduling, daemonization, deployment or authentication framework.
+HTTP has no candidate-review, hint-action, decision-control or personal-state
+import/export routes. CLI terminal review/decisions and public catalog
+export/merge exist separately; they do not complete synchronization. The static
+workflow diagram remains historical CLI-only evidence.

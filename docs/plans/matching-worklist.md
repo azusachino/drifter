@@ -38,7 +38,7 @@ claims belong to their original PRs, not to a new implementation checkpoint.
 The original plan is retained in Git history; the
 [first read-only plan](read-only-matching.md) remains historical.
 
-## Revalidated baseline
+## Historical planning baseline
 
 Planning source: `main` at `ca5b47760cdcd53e45cf028c2762a3d7995fd452`.
 The only pre-existing uncommitted work was this session's design-review report.
@@ -353,7 +353,9 @@ in the isolated `work/pr13-matching-milestone` checkout, handing off a clean,
 tested local commit after each stage. The published `fix/provider-cancellation`
 checkout is integration-only until those handoffs are ready. Shared files have
 one writer at a time; no concurrent writer or issue-wide implementation owner.
-All workers use native Pi subagents with `openai-codex/gpt-6-luna:medium`.
+The initial route used native Pi subagents with `openai-codex/gpt-6-luna:medium`.
+The owner subsequently approved GPT-6.1 Sol medium for remaining E2–G and
+integration work; see the historical route-resolution checkpoint below.
 
 | Owner stage | Exclusive behavior / edit scope | Handoff gate |
 | --- | --- | --- |
@@ -433,7 +435,7 @@ call it from Drifter or make Drifter success depend on that job.
   provider status mutation, background refresh, notification system, KU adapter,
   public hosting or deployment is part of milestone 1.
 
-## Continuing handoff
+## Historical A1 handoff
 
 A1 tested code checkpoint: `fix/provider-cancellation` at
 `87006388ebf3a053260c6b43de1373abc39878af`, based on the baseline above.
@@ -455,7 +457,8 @@ records exact commands, baseline comparison and limits. Focused race tests,
 journeys passed on this code. Documentation lint/whitespace checks apply to the
 later documentation-only checkpoint; no provider experiments occurred.
 
-**Next action:** execute the approved A2-G ownership sequence above and finish
+**Historical next action (superseded by the integrated checkpoint below):**
+execute the approved A2-G ownership sequence above and finish
 milestone 1 in the existing PR 13. At this authorization checkpoint, A2-G remain
 undelivered; the plan is not proof of their completion. Preserve each tested
 component commit and record final M1-M7 evidence in the owning PR/records. Do not
@@ -464,7 +467,7 @@ Before resuming, compare current Git with the code checkpoint and read
 intervening commits; documentation-only commits may follow it. Asobi,
 cross-device coordination, provider writes and PR merge remain outside scope.
 
-### Partial execution checkpoint: E2 acceptance remains open
+### Historical partial execution checkpoint: E2 acceptance was open
 
 The isolated `work/pr13-matching-milestone` branch has verified commits through
 A2, B1/B2, C1/C2, D1/D2 and E1. The E2 linking implementation checkpoint is
@@ -565,3 +568,71 @@ integrated revision/gates before claiming milestone completion. Status-write
 milestones, real account fingerprints, live-provider validation, KU intake,
 backup/restore, deployment and sharing-policy changes remain outside this work.
 Public catalog v1 and provider destinations/security policies are unchanged.
+
+## Integrated milestone 1 checkpoint
+
+Integration starts from PR 13's `fix/provider-cancellation` at
+`b53709791e01bfa78952bf7d8a779e8e9e8aac7c`. Both it and the isolated
+`work/pr13-matching-milestone` checkout were clean. The lane is a descendant of
+that PR checkpoint and was integrated locally with `git merge --ff-only` to
+`4002a6d51e87ca21249f72cfc1383227836ba6e0`. No merge commit, remote action or
+provider experiment occurred. The final documentation/acceptance commit follows
+that source revision; its hash is discoverable in Git/PR 13, avoiding a
+self-referential hash in this record. The isolated lane remains unchanged.
+
+The G table above maps actual M1–M7 tests. Integration additionally supplies:
+
+| Outcome | Combined evidence / limit |
+| --- | --- |
+| M1 | `TestPendingSeekLiveShelfUsesFixedWindowAndFreshScanRecoversMovedRow` proves fixed cutoff/as-of, no duplicate enrichment on continuation, and moved-ahead recovery by fresh scan. CLI 103/101-row acceptance proves actual terminal pagination rather than only core selection. |
+| M2 | `TestReviewAcceptanceRestartAndScopedReset` reopens durable state between invocations and tests scoped reset; v0/v1/v2 migration/rollback cases run in the core suite. |
+| M3 | `TestReviewHintQueryActions` and `TestMatchExpectedAuthorStablePartition` prove explicit search reuse/no automatic selection; public catalog v1 is unchanged. |
+| M4 | `TestReviewManualEditionAndWorkOnlyDespiteExactEdition`, wrong-membership and guarded replacement tests exercise the shared validation/store paths. |
+| M5 | `TestReviewAcceptanceOlderPageFailuresAndRetry` persists 99 exclusions and the older 103 link despite metadata/lookup/validation failures, exits nonzero naming 001/051/052, then retries only those IDs. Cancellation/EOF/partial deadline cases run uncached. |
+| M6 | `TestExpectedTargetBoundaryRejectionsPreserveState` covers both expected tuple members on JSON and native replace/unlink, zero provider construction/calls and unchanged seed. Existing HTTP budget/core cancellation and four browser journeys cover runtime regressions including stale tabs. |
+| M7 | CLI privacy/ownership tests plus core exclusive-owner/read-only cases run together; no live credentials or personal state are used. |
+
+The malformed expected-tuple matrix was absent from the earlier B2 acceptance
+addition; older edition-field tests were not substituted as proof. Integration
+adds only acceptance fixtures/tests and documentation, not missing features or
+relaxed production checks. The owner approved the bounded changed-live-shelf
+acceptance addition. A row moved ahead of the cursor or newly eligible after a
+reset can require a fresh scan: continuation is not a snapshot. Failure rows
+remain eligible unless a separate explicit mapping/decision suppresses them.
+
+### Combined verification commands
+
+Run from the PR checkout with pinned mise tools. The
+[walkthroughs](../walkthroughs/README.md) describe exact scripted assertions.
+These commands are the final combined checkpoint, separate from source-only
+review and historical A1/component evidence:
+
+```sh
+mise exec -- go test -race -count=1 ./internal/cli ./internal/companion \
+  ./internal/httpserver ./internal/catalog
+make check
+mise exec -- rumdl check README.md docs/architecture.md docs/cli.md \
+  docs/plans/http-server.md docs/plans/matching-worklist.md \
+  docs/research/2026-10-15-design-review.md docs/walkthroughs/README.md
+make e2e-probe ROUTE=/
+make e2e
+git diff --check
+```
+
+Final combined results: uncached race suites passed (CLI/core/HTTP/catalog);
+`make check` passed formatting, vet, module verification, all race tests and both
+builds. Some unchanged packages reused valid Go cache in the full gate. Pinned
+rumdl passed all seven changed Markdown files. Browser probe passed one test with
+no page errors; all four browser journeys passed. `git diff --check` passed.
+Initial documentation lint found wrapping/blank-line issues; they were corrected
+without suppressions. The new native malformed-guard fixture was also corrected
+to use the actual `work_only` mode and present-empty `edition_id`, with an
+explicit valid-baseline assertion; the CLI reference now spells that accurately.
+Historical component red/green failures are not new combined failures.
+This is integration/self-review; no independent reviewer was requested.
+
+**Next owner:** parent inspects final source/evidence, runs the workstation
+pre-publication gate and updates the same PR 13 without merging. This worker
+performs no push, GitHub write or merge. Local M1–M7 acceptance does not close
+all original sync stories or authorize later identity/status contracts,
+public-sharing consent changes, private backup/import, KU or deployment.
