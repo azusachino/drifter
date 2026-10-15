@@ -129,7 +129,12 @@ func editionValue(editionID *int64) int64 {
 // ConfirmLink is the shared explicit-confirmation path, not an automatic match.
 // Validate providers before opening state so a rejected selection creates no DB.
 func ConfirmLink(ctx context.Context, source Source, target Target, path string, selection Mapping, replace bool) error {
-	return confirmLink(ctx, source, target, path, selection, replace, nil)
+	return confirmLink(ctx, source, target, path, selection, replace, nil, nil)
+}
+
+// ConfirmLinkExpected validates the complete selection, then replaces only the previously observed target.
+func ConfirmLinkExpected(ctx context.Context, source Source, target Target, path string, selection Mapping, expected MappingTarget) error {
+	return confirmLink(ctx, source, target, path, selection, true, nil, &expected)
 }
 
 // ConfirmLinkOwned performs the same validation while using the daemon's
@@ -138,10 +143,18 @@ func ConfirmLinkOwned(ctx context.Context, source Source, target Target, path st
 	if !owner.owns(path) {
 		return fmt.Errorf("database ownership capability does not match this path")
 	}
-	return confirmLink(ctx, source, target, path, selection, replace, owner)
+	return confirmLink(ctx, source, target, path, selection, replace, owner, nil)
 }
 
-func confirmLink(ctx context.Context, source Source, target Target, path string, selection Mapping, replace bool, owner *DatabaseOwnership) error {
+// ConfirmLinkExpectedOwned is the guarded confirmation path for the daemon owner.
+func ConfirmLinkExpectedOwned(ctx context.Context, source Source, target Target, path string, selection Mapping, expected MappingTarget, owner *DatabaseOwnership) error {
+	if !owner.owns(path) {
+		return fmt.Errorf("database ownership capability does not match this path")
+	}
+	return confirmLink(ctx, source, target, path, selection, true, owner, &expected)
+}
+
+func confirmLink(ctx context.Context, source Source, target Target, path string, selection Mapping, replace bool, owner *DatabaseOwnership, expected *MappingTarget) error {
 	if selection.Provider != "weread" || !selection.valid() {
 		return ErrInvalidMapping
 	}
@@ -171,6 +184,9 @@ func confirmLink(ctx context.Context, source Source, target Target, path string,
 	}
 	defer store.Close()
 	selection.SourceTitle, selection.SourceISBN = book.Title, book.ISBN
+	if expected != nil {
+		return store.ReplaceExpected(ctx, selection, *expected)
+	}
 	return store.Confirm(ctx, selection, replace)
 }
 

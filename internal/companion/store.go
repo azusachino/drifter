@@ -28,6 +28,12 @@ var (
 	errCatalogExportLimit = errors.New("catalog export record limit exceeded")
 )
 
+// MappingTarget is the expected target tuple for a guarded mapping mutation.
+type MappingTarget struct {
+	WorkID    int64
+	EditionID int64
+}
+
 type Mapping struct {
 	Provider      string `json:"provider"`
 	SourceAccount string `json:"source_account"`
@@ -251,6 +257,55 @@ func (s *Store) Confirm(ctx context.Context, m Mapping, replace bool) error {
 		return fmt.Errorf("%w; use explicit replacement or unlink it", ErrMappingConflict)
 	}
 	return nil
+}
+
+// ReplaceExpected updates only an existing mapping whose current target matches expected.
+func (s *Store) ReplaceExpected(ctx context.Context, m Mapping, expected MappingTarget) error {
+	if !m.valid() || expected.WorkID <= 0 || expected.EditionID < 0 {
+		return ErrInvalidMapping
+	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return err
+	}
+	defer release()
+	r, err := s.db.ExecContext(ctx, `UPDATE mappings SET work_id=?,edition_id=?,source_title=?,source_isbn=? WHERE provider=? AND source_account=? AND book_id=? AND target_account=? AND work_id=? AND edition_id=?`, m.WorkID, m.EditionID, m.SourceTitle, m.SourceISBN, m.Provider, m.SourceAccount, m.BookID, m.TargetAccount, expected.WorkID, expected.EditionID)
+	if err != nil {
+		return err
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 1 {
+		return nil
+	}
+	return ErrMappingConflict
+}
+
+// UnlinkExpected removes a matching mapping; absence is idempotent, but a newer target conflicts.
+func (s *Store) UnlinkExpected(ctx context.Context, provider, sourceAccount, bookID, targetAccount string, expected MappingTarget) error {
+	if !ValidLabel(provider) || !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) || !ValidBookID(bookID) || expected.WorkID <= 0 || expected.EditionID < 0 {
+		return ErrInvalidMappingKey
+	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return err
+	}
+	defer release()
+	var work, edition int64
+	err = s.db.QueryRowContext(ctx, `SELECT work_id,edition_id FROM mappings WHERE provider=? AND source_account=? AND book_id=? AND target_account=?`, provider, sourceAccount, bookID, targetAccount).Scan(&work, &edition)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if work != expected.WorkID || edition != expected.EditionID {
+		return ErrMappingConflict
+	}
+	_, err = s.db.ExecContext(ctx, `DELETE FROM mappings WHERE provider=? AND source_account=? AND book_id=? AND target_account=? AND work_id=? AND edition_id=?`, provider, sourceAccount, bookID, targetAccount, expected.WorkID, expected.EditionID)
+	return err
 }
 
 func (s *Store) List(ctx context.Context) ([]Mapping, error) {
