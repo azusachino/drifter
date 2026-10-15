@@ -280,7 +280,7 @@ flat-command correction below was test-first.
   'TestMatch(CoreSurfacesExactCatalogEvidenceAndConflicts|WithoutCatalogsPreservesLegacyJSONAndRequests|KeepsProviderResultsWhenCatalogIsInvalid)'`
   failed while the core discarded catalog evidence; it now passes with exact-ID
   filtering, conflicts, incomplete reporting and unchanged empty-config output.
-- CLI: `mise exec -- go test ./cmd/drifter -run
+- CLI: `mise exec -- go test ./internal/cli -run
   'TestCLIMatchLoadsExplicitLocalCatalogThroughCore|TestCLIMatchReportsIncompleteCatalogAndPreservesProviderResult|TestCLIInvalidCatalogConfigurationPrecedesProviderConstruction'`
   failed because `match --config` was not accepted; it now passes with core-owned
   loading and report-then-nonzero incomplete behavior.
@@ -300,13 +300,13 @@ flat-command correction below was test-first.
   pattern+='|TestCLIRequiredFlagsFailBeforeSideEffects'
   pattern+='|TestCLIRemovedCatalogParentFailsWithoutSideEffects'
   pattern+='|TestCLICatalog'
-  mise exec -- go test ./cmd/drifter -run "$pattern" -count=1
+  mise exec -- go test ./internal/cli -run "$pattern" -count=1
   ```
 
   This red-green record is only for the approved flat command correction,
   not the earlier Cobra/package migration.
 - Export and CLI tools: `mise exec -- go test -race
-  ./internal/catalog ./internal/companion ./cmd/drifter` passes the
+  ./internal/catalog ./internal/companion ./internal/cli` passes the
   account-filtered, read-only export, privacy, no-state/empty-state, CLI
   no-provider and atomic-output regressions.
 
@@ -329,9 +329,9 @@ Validation completed on mise-managed Go 1.27.2:
   existing security/lifecycle behavior remains green.
 - `mise exec -- make check` passed again after adding export/merge, including
   gofmt verification, vet, module verification, full race tests and CLI build.
-- Cobra/package rename regression: baseline `mise exec -- go test ./cmd/drifter`
+- Cobra/package rename regression: baseline `mise exec -- go test ./internal/cli`
   passed before the refactor; after it,
-  `mise exec -- go test ./cmd/drifter ./internal/catalog ./internal/companion ./internal/config`
+  `mise exec -- go test ./internal/cli ./internal/catalog ./internal/companion ./internal/config`
   and full `mise exec -- make check` passed. This is behavior-preserving work;
   no red-green history is claimed for it.
 - Pinned changed-Markdown lint passed after the Cobra documentation updates:

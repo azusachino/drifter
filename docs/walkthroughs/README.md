@@ -2,10 +2,10 @@
 
 Reproducible end-to-end examples driven entirely by synthetic fixtures
 (in-process fake providers and temporary SQLite files), mirroring
-`cmd/drifter/cli_test.go`. Every walkthrough is **executable today**; sections
+`internal/cli/cli_test.go`. Every walkthrough is **executable today**; sections
 marked *illustrated* describe behavior that is not implemented.
 
-Prerequisite: `make build` produces `bin/drifter`.
+Prerequisite: `make build` produces `bin/drifter` and `bin/drifter-server`.
 
 ## 1. Search, inspect, match (read-only path)
 

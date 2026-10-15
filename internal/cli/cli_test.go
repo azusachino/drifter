@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bytes"
@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,6 +64,24 @@ func fakeClients(reader *fakeReader, catalog *fakeCatalog) clients {
 	return clients{
 		source: func() (source, error) { return reader, nil },
 		target: func() (target, error) { return catalog, nil },
+	}
+}
+
+func TestCLIHasNoServerCommand(t *testing.T) {
+	var out, stderr bytes.Buffer
+	if err := run(context.Background(), nil, &out, &stderr, clients{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "  serve ") {
+		t.Fatalf("CLI help still advertises the server command: %s", out.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if err := run(context.Background(), []string{"serve"}, &out, &stderr, clients{}); err == nil {
+		t.Fatal("CLI accepted removed serve command")
+	}
+	if out.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("removed command emitted output: stdout=%q stderr=%q", out.String(), stderr.String())
 	}
 }
 
@@ -428,118 +445,6 @@ func TestCLIWritersRefuseDaemonOwnershipAndReadsRemainAvailable(t *testing.T) {
 	var rows []companion.Mapping
 	if err := json.Unmarshal(out.Bytes(), &rows); err != nil || len(rows) != 1 || rows[0].WorkID != 42 {
 		t.Fatalf("owned-state read: rows=%+v err=%v", rows, err)
-	}
-}
-
-func TestCLIServeStartsWithoutProviderCredentials(t *testing.T) {
-	t.Setenv("WEREAD_API_KEY", "")
-	t.Setenv("HARDCOVER_API_KEY", "")
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(configPath, []byte("[server]\naddr = \"127.0.0.1:0\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var raw bytes.Buffer
-	out := &syncWriter{mu: &sync.Mutex{}, buf: &raw}
-	var stderr bytes.Buffer
-	providers := clients{
-		source: func() (source, error) { return companion.NewWeRead(os.Getenv("WEREAD_API_KEY")) },
-		target: func() (target, error) { return companion.NewHardcover(os.Getenv("HARDCOVER_API_KEY")) },
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		done <- run(ctx, []string{"serve", "--config", configPath, "--db", filepath.Join(dir, "mappings.sqlite")}, out, &stderr, providers)
-	}()
-	var record struct {
-		Addr    string `json:"addr"`
-		Message string `json:"msg"`
-	}
-	for i := 0; i < 200; i++ {
-		for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
-			_ = json.Unmarshal([]byte(line), &record)
-		}
-		if record.Message == "HTTP server starting" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if record.Message != "HTTP server starting" {
-		cancel()
-		t.Fatalf("HTTP server did not start without provider credentials: %s", out.String())
-	}
-	for _, path := range []string{"/", "/api/mappings"} {
-		response, err := http.Get("http://" + record.Addr + path)
-		if err != nil {
-			cancel()
-			t.Fatal(err)
-		}
-		response.Body.Close()
-		if response.StatusCode != http.StatusOK {
-			cancel()
-			t.Fatalf("GET %s status=%d without provider credentials", path, response.StatusCode)
-		}
-	}
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("serve did not stop cleanly without provider credentials: %v", err)
-	}
-}
-
-func TestCLIServeHTTPWiringAndCancellation(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.toml")
-	configuredDB := filepath.Join(dir, "configured.sqlite")
-	cliDB := filepath.Join(dir, "cli.sqlite")
-	configBody := fmt.Sprintf("[server]\naddr = \"127.0.0.1:0\"\n[database]\npath = %q\n", configuredDB)
-	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var raw bytes.Buffer
-	out := &syncWriter{mu: &sync.Mutex{}, buf: &raw}
-	var stderr bytes.Buffer
-	reader := &fakeReader{}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		done <- run(ctx, []string{"serve", "--config", configPath, "--db", cliDB}, out, &stderr, fakeClients(reader, &fakeCatalog{}))
-	}()
-	var record struct {
-		Addr    string `json:"addr"`
-		Message string `json:"msg"`
-	}
-	for i := 0; i < 200; i++ {
-		for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
-			_ = json.Unmarshal([]byte(line), &record)
-		}
-		if record.Message == "HTTP server starting" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if record.Message != "HTTP server starting" || !strings.HasPrefix(record.Addr, "127.0.0.1:") {
-		cancel()
-		t.Fatalf("HTTP server startup log missing: %s", out.String())
-	}
-	response, err := http.Get("http://" + record.Addr + "/healthz")
-	if err != nil {
-		cancel()
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK || len(reader.calls) != 0 {
-		cancel()
-		t.Fatalf("health status=%d provider calls=%v", response.StatusCode, reader.calls)
-	}
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("serve did not stop cleanly: %v", err)
-	}
-	if _, err := os.Stat(configuredDB); err != nil {
-		t.Fatalf("settings database.path did not override --db: %v", err)
-	}
-	if _, err := os.Stat(cliDB); !os.IsNotExist(err) {
-		t.Fatalf("CLI --db unexpectedly overrode settings database.path: %v", err)
 	}
 }
 

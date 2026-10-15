@@ -87,7 +87,7 @@ catalog creation.
 - `internal/companion`: small source and target clients, native-fact
   normalization, candidate discovery and durable confirmed mappings. No plugin
   registry or public SDK contract.
-- `cmd/drifter`: Cobra command tree using the shared core; JSON output for
+- `internal/cli`: Cobra command tree using the shared core; JSON output for
   manual inspection and later daemon operations. Cobra owns flags/help only;
   strict settings-only TOML remains `internal/config` (no Viper binding).
 - SQLite: mapping records only, scoped by provider, source-account label,

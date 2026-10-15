@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"context"
@@ -97,7 +97,6 @@ come only from WEREAD_API_KEY and HARDCOVER_API_KEY in the process environment.`
 		app.exportCommand(),
 		app.mergeCommand(),
 		app.serveProbesCommand(),
-		app.serveCommand(),
 	)
 	return root
 }
@@ -391,23 +390,5 @@ func (app *cliApp) serveProbesCommand() *cobra.Command {
 			}
 		}
 		return serveProbes(cmd.Context(), configPath, dbPath, requireProviders, cmd.OutOrStdout())
-	})
-}
-
-func (app *cliApp) serveCommand() *cobra.Command {
-	var configPath, dbPath string
-	command := &cobra.Command{Use: "serve", Short: "Run the foreground HTTP server and mapping interface"}
-	flags := command.Flags()
-	flags.StringVar(&configPath, "config", "config.toml", "settings-only TOML path (missing file uses defaults; never credentials)")
-	flags.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
-	return app.command(command, func(cmd *cobra.Command, _ []string) error {
-		if dbPath == "" {
-			var err error
-			dbPath, err = defaultDB()
-			if err != nil {
-				return err
-			}
-		}
-		return serveHTTPServer(cmd.Context(), configPath, dbPath, cmd.OutOrStdout(), app.providers)
 	})
 }

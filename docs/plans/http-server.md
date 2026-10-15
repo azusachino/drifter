@@ -2,10 +2,11 @@
 
 ## Scope and routes
 
-Drifter has one foreground `cmd/drifter serve` HTTP server. Its root page is a
-local mapping interface; CLI and HTTP are adapters over the same
-`internal/companion` operations and SQLite state, not separate products. This
-work does not implement status synchronization or write to provider libraries.
+Drifter has one foreground `cmd/server` HTTP server, separate from the CLI
+executable. Its root page is a local mapping interface; CLI and HTTP are
+adapters over the same `internal/companion` operations and SQLite state, not
+separate products. This work does not implement status synchronization or write
+to provider libraries.
 
 Canonical page: `GET /`. Read routes: `GET|HEAD /api/mappings`,
 `GET /api/pending`, and `GET /api/csrf`. Mutations: explicit JSON endpoints
@@ -24,7 +25,7 @@ synthetic providers only, never live credentials or provider calls.
 
 | Story and acceptance | Executable evidence |
 | --- | --- |
-| Start without provider credentials, serve local routes and stop cleanly. | `cmd/drifter`: `TestCLIServeStartsWithoutProviderCredentials`, `TestCLIServeHTTPWiringAndCancellation`. |
+| Start without provider credentials, serve local routes and stop cleanly. | `internal/server`: `TestRunStartsWithoutProviderCredentialsAndStops`; `internal/httpserver` serve cancellation tests. |
 | Open the root interface and list saved mappings without provider calls. | `internal/httpserver`: `TestRootRendersMappingInterface`, `TestMappingInterfaceReadsWithoutProviderCalls`. |
 | Request pending explicitly; reject unsupported methods/queries and share paced clients. | `TestPendingRouteSharesLazySourceClient`, `TestConcurrentPendingRequestsShareOneProviderClient`, `TestPendingHeadIsRejectedWithoutProviderCalls`; core `TestPendingShelfFiltersBeforeMetadataAndClassifies`. |
 | Confirm explicit source/target IDs; reject invalid work/edition membership; require explicit replacement on conflicts. | `TestMappingMutationHTTPUsesCoreValidationAndOwnedStore`, `TestNativeMappingFormsUseExplicitCoreActions`; core `TestDaemonOwnedConfirmationAndUnlinkUseCoreValidation`; CLI `TestCLIRejectedEditionDoesNotCreateMapping`. |
@@ -67,7 +68,9 @@ local Origin and the form returned 303. After setting that policy and finishing
 the canonical native routes, the no-script assertion passed (303 plus exact
 Origin, no script request) and the complete three-journey suite passed.
 
-Missing-credential evidence:
+Historical missing-credential evidence (before the CLI/server split; the
+`cmd/drifter` package no longer exists). For current executable tests, use the
+`internal/server` entries in the acceptance map above:
 
 ```sh
 go test ./cmd/drifter -run '^TestCLIServeStartsWithoutProviderCredentials$' -count=1
@@ -86,8 +89,8 @@ passed:
 pattern='TestRootRendersMappingInterface|'
 pattern+='TestNativeMappingFormsUseExplicitCoreActions'
 go test ./internal/httpserver -run "$pattern" -count=1
-go test ./cmd/drifter \
-  -run '^TestCLIServeStartsWithoutProviderCredentials$' \
+go test ./internal/server \
+  -run '^TestRunStartsWithoutProviderCredentialsAndStops$' \
   -count=1
 make e2e
 ```

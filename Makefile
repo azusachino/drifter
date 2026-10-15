@@ -20,7 +20,8 @@ test:
 
 build:
 	mkdir -p bin
-	$(GO) build -o bin/drifter ./cmd/drifter
+	$(GO) build -o bin/drifter ./cmd/cli
+	$(GO) build -o bin/drifter-server ./cmd/server
 
 e2e:
 	mise exec -- npm run e2e

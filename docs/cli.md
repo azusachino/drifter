@@ -38,11 +38,11 @@ generated help (`drifter --help`, `drifter export --help`, and
 `drifter merge --help`). The default shell-completion command is
 disabled to avoid adding an unrelated command. Required flags are rejected
 before command handlers run. Cobra owns only argument parsing and help; Drifter
-continues to load settings with its strict TOML validator. `match` and `serve`
-default to `config.toml`; `serve-probes` takes an explicit `--config` path.
-On `serve` and `serve-probes`, `database.path` in the settings file overrides
-`--db`. No automatic environment/config binding is used, and provider credentials
-remain environment-only.
+continues to load settings with its strict TOML validator. `match` defaults to
+`config.toml`; `serve-probes` takes an explicit `--config` path. On
+`serve-probes` and the separate `drifter-server` executable, `database.path` in
+the settings file overrides `--db`. No automatic environment/config binding is
+used, and provider credentials remain environment-only.
 
 ## Credentials
 
@@ -97,16 +97,15 @@ bin/drifter serve-probes --config config.toml [--db PATH] [--require-providers]
 ```
 
 It serves `/healthz` and `/readyz` without provider network calls or synchronization.
-The foreground `serve` command establishes the first slice of the same intended
-long-running daemon server foundation, delivered incrementally; it is not a
-separate server product. Synchronization is not implemented:
+The separate `drifter-server` executable owns the foreground HTTP process;
+`drifter` does not contain a `serve` command. Synchronization is not implemented:
 
 ```sh
-bin/drifter serve --config config.toml [--db PATH]
+bin/drifter-server --config config.toml [--db PATH]
 ```
 
-`serve` uses `server.addr` (default `127.0.0.1:8081`), provides the same health
-routes, a server-rendered mapping interface at `/`, read-only `/api/mappings`
+The server uses `server.addr` (default `127.0.0.1:8081`), provides the same
+health routes, a server-rendered mapping interface at `/`, read-only `/api/mappings`
 and `/api/pending?account=LABEL&target_account=LABEL[&days=N]`, and explicit
 local mapping maintenance. There is no `/admin` compatibility route. New
 confirmations use `ConfirmLinkOwned`, including source book lookup and target

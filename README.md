@@ -92,10 +92,11 @@ protect redirected files yourself.
 
 ## Local HTTP server
 
-Start the foreground server with the optional settings-only TOML file:
+Start the separate foreground server binary with the optional settings-only
+TOML file:
 
 ```sh
-bin/drifter serve --config config.toml
+bin/drifter-server --config config.toml
 ```
 
 The default listener is `127.0.0.1:8081`. Open <http://127.0.0.1:8081/> for the
@@ -104,7 +105,8 @@ forms; it makes no provider calls just by loading or listing mappings. Pending
 work is fetched only when explicitly requested. The server also provides
 `/healthz`, `/readyz`, a read-only JSON mappings route, and protected JSON
 mutation endpoints. See the [HTTP server and CLI reference](docs/cli.md) for
-routes, payloads, configuration and database ownership behavior.
+routes, payloads, configuration and database ownership behavior, or the
+[server container guide](docs/server.md) for the loopback-only Compose setup.
 
 The server and CLI share validation and local state. Confirming or replacing a
 mapping fetches source metadata and validates that the selected work and

@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+config.toml
+state
+*.sqlite*
+*.db*
+bin
+node_modules
+playwright-report
+test-results
+.tmp

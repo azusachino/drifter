@@ -1,0 +1,41 @@
+services:
+  drifter-server:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: drifter-server:local
+    network_mode: host
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    command:
+      - --config
+      - /etc/drifter/config.toml
+      - --db
+      - /var/lib/drifter/mappings.sqlite
+    environment:
+      WEREAD_API_KEY: "${WEREAD_API_KEY:-}"
+      HARDCOVER_API_KEY: "${HARDCOVER_API_KEY:-}"
+    volumes:
+      - type: bind
+        source: ./examples/server-config.toml
+        target: /etc/drifter/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+          selinux: Z
+      - type: volume
+        source: state
+        target: /var/lib/drifter
+        volume:
+          nocopy: false
+
+volumes:
+  state: {}

@@ -145,7 +145,7 @@ claiming a complete worklist. Filter before per-book enrichment, bound requests,
 and report metadata failures without misclassifying rows.
 
 **Likely paths:** `internal/companion/weread.go`, `weread_test.go`,
-`cmd/drifter/cli.go`, `cli_test.go`, `README.md`.
+`internal/cli/cli.go`, `cli_test.go`, `README.md`.
 **Dependency:** slice 1; synthetic contract for shelf/privacy/activity fields.
 **Verification:** synthetic HTTP fixtures for cutoff, private/unknown privacy,
 translator/no-translator/imported, pagination, malformed fields and provider
@@ -167,7 +167,7 @@ without echoing source URLs or contents; conflicts retain all alternatives; no
 hint creates a mapping or provider write. Further use of hints to alter
 candidate searches or ranking needs separate parent review and approval.
 
-**Likely paths:** `cmd/drifter/cli.go`, `cli_test.go`,
+**Likely paths:** `internal/cli/cli.go`, `cli_test.go`,
 `internal/companion/hardcover.go`, `hardcover_test.go`, `README.md`.
 **Dependency:** slice 2 for the worklist workflow; catalogs add no stored state.
 **Verification:** synthetic core and CLI fixtures prove source-ID matching,
@@ -189,7 +189,7 @@ back. Persist only decision kind and minimal keyed metadata, not provider bodies
 hints, progress or credentials.
 
 **Likely paths:** `internal/companion/store.go`, `store_test.go`,
-`cmd/drifter/cli.go`, `cli_test.go`, `README.md`.
+`internal/cli/cli.go`, `cli_test.go`, `README.md`.
 **Dependency:** slices 1 and 2. Exact local command syntax is settled before this
 slice; avoid a daemon-facing API or general decision framework.
 **Verification:** temp SQLite restart/reset/isolation and migration-chain tests,
@@ -212,7 +212,7 @@ selection never silently selects an edition. EOF/cancel never means consent.
 Titles/authors rendered interactively are terminal-safe;
 errors/logs contain no titles, tokens or raw bodies. No provider mutation exists.
 
-**Likely paths:** `cmd/drifter/cli.go`, a small review helper and its tests,
+**Likely paths:** `internal/cli/cli.go`, a small review helper and its tests,
 `cli_test.go`, `README.md`. Extract shared confirmation only as needed here;
 do not build a generic workflow engine in earlier slices.
 **Dependency:** slices 3 and 4.
@@ -248,7 +248,7 @@ identical output. Output budget/schema failures reject the complete result. No
 schema evolution is included.
 
 **Likely paths:** `internal/catalog`, `internal/companion`,
-`cmd/drifter`, their tests, README, CLI/architecture docs, this contract and the
+`internal/cli`, their tests, README, CLI/architecture docs, this contract and the
 story-test map.
 **Dependency:** implemented v1 catalog contract and read-only current-schema
 store.

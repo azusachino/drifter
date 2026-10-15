@@ -29,6 +29,7 @@ go.work
 go.work.sum
 
 # Credentials, private local state and build/scratch output
+/state/
 .env
 .env.*
 /bin/

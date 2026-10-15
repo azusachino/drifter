@@ -11,7 +11,8 @@ implemented.
 
 | Component | Location | Responsibility |
 | --- | --- | --- |
-| CLI and wiring | `cmd/drifter` | Cobra command tree parses flags and help; handlers load strict settings, construct providers lazily, own server lifecycle, and emit JSON/structured logs. |
+| CLI and wiring | `cmd/cli`, `internal/cli` | Thin CLI executable and Cobra command tree; handlers load strict settings, construct providers lazily, and emit JSON/structured logs. |
+| Server command runner | `cmd/server`, `internal/server` | Thin signal/environment entrypoint and flag/configuration runner for the standalone HTTP server. |
 | Shared feature core | `internal/companion/operations.go`, `pending.go` | Source/target contracts, matching, explicit confirmation, pending selection, account-scoped local operations and owned writes. |
 | WeRead client | `internal/companion/weread.go` | Read-only shelf, search, book metadata and explicitly requested personal progress. |
 | Hardcover client | `internal/companion/hardcover.go` | Read-only edition lookup, bounded candidate search and work/edition membership validation. |
@@ -20,7 +21,7 @@ implemented.
 | Local HTTP server | `internal/httpserver` | Foreground listener, server-rendered mapping interface, request boundary, read routes and explicit mapping mutations through shared core. |
 | Configuration | `internal/config` | Settings-only TOML with full validation, unknown-key rejection and refusal of credential-like settings. |
 | Matching catalogs | `internal/catalog`, called by `internal/companion` | Bounded, request-triggered local/HTTPS loading, v1 schema validation, untrusted match evidence, offline local merge and validated output encoding. |
-| Catalog export | `internal/companion/catalog_export.go`, `cmd/drifter/catalog.go` | Read-only account-filtered projection of confirmed mappings to public v1 assertions; no database creation/migration or provider calls. |
+| Catalog export | `internal/companion/catalog_export.go`, `internal/cli/catalog.go` | Read-only account-filtered projection of confirmed mappings to public v1 assertions; no database creation/migration or provider calls. |
 | Logging and probes | `internal/logging`, `internal/probes` | JSON `slog` output and local `/healthz`/`/readyz` checks. |
 
 ## Domain and authority
@@ -75,8 +76,11 @@ SQLite only; provider construction is lazy and shared by each server instance.
 
 ## CLI and HTTP interfaces
 
-`drifter serve` owns one foreground HTTP process. The default bind is
-`127.0.0.1:8081`; wildcard binds are rejected. The root `GET /` serves an
+`drifter-server` owns one foreground HTTP process, independently of the CLI.
+`cmd/server` wires signals and environment-provided credentials into the
+`internal/server` runner; HTTP routes and templates remain in
+`internal/httpserver`. The default bind is `127.0.0.1:8081`;
+wildcard binds are rejected. The root `GET /` serves an
 embedded server-rendered mapping page. It uses native forms and no browser
 JavaScript asset or frontend build. The page and saved-mapping reads do not
 construct or call providers. Provider-backed requests happen only when a user
