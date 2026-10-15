@@ -151,7 +151,7 @@ func openStore(path string, readOnly bool, owner *DatabaseOwnership) (*Store, er
 	return &Store{db: db, path: path, owner: owner, readOnly: readOnly}, nil
 }
 
-const storeVersion = 1
+const storeVersion = 2
 
 func validateStoreSchema(db *sql.DB) error {
 	var version int
@@ -163,6 +163,13 @@ func validateStoreSchema(db *sql.DB) error {
 	}
 	rows, err := db.Query(`SELECT provider,source_account,book_id,target_account,
 		work_id,edition_id,source_title,source_isbn FROM mappings LIMIT 0`)
+	if err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	rows, err = db.Query(`SELECT provider,source_account,book_id,target_account,kind FROM decisions LIMIT 0`)
 	if err != nil {
 		return err
 	}
@@ -202,6 +209,18 @@ func migrateStore(db *sql.DB) error {
 	}
 	if version == 0 {
 		if _, err := tx.Exec("PRAGMA user_version = 1"); err != nil {
+			return err
+		}
+		version = 1
+	}
+	if version == 1 {
+		if _, err := tx.Exec(`CREATE TABLE decisions (
+			provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+			target_account TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('skip','exclude','not-in-catalog')),
+			PRIMARY KEY(provider, source_account, book_id, target_account))`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 2"); err != nil {
 			return err
 		}
 	}
