@@ -47,10 +47,14 @@ func (f *fakeReader) Progress(_ context.Context, id string) (companion.Progress,
 type fakeCatalog struct {
 	calls  []string
 	reject bool
+	report companion.MatchReport
 }
 
 func (f *fakeCatalog) Match(_ context.Context, book companion.Book, query string) (companion.MatchReport, error) {
 	f.calls = append(f.calls, "match:"+query)
+	if f.report.Book.ID != "" {
+		return f.report, nil
+	}
 	return companion.MatchReport{Book: book, SearchQuery: query, RequiresConfirmation: true}, nil
 }
 func (f *fakeCatalog) ValidateLink(_ context.Context, work, edition int64) error {

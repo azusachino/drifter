@@ -197,20 +197,25 @@ suppressed source book, run `reset-decision` with the same `--book-id`,
 current-schema state read-only while a server owns the database; decision writes
 refuse an active server/review owner. All three accept `--db PATH`.
 
-`review` provides the terminal decision-only lifecycle:
+`review` provides terminal decisions and explicit local linking:
 
 ```sh
 bin/drifter review --account my-weread --target-account my-hardcover
 ```
 
 It lists eligible books using the same privacy, mapping, decision and recent
-activity filters as `pending`, then accepts `skip`, `exclude`,
-`not-in-catalog`, or `quit`. Blank input is reprompted; EOF and cancellation
-save nothing. Metadata is stripped of terminal control characters. This slice
-does not select candidates or create mappings. Review takes exclusive database
-ownership before constructing the WeRead client and holds it until exit; the
-server or another review must be stopped first. Credential-free `links` and
-`decisions` reads remain available against current-schema state.
+activity filters as `pending`. Enter `match` for provider-backed suggestions,
+or `skip`, `exclude`, `not-in-catalog`, or `quit`. Suggestions are not accepted
+automatically: choose a displayed work or enter a manual work ID, optionally
+enter an edition ID, then confirm the displayed tuple. Shared source and target
+validation is required before a local link is stored. Imported rows remain
+inspection-only. Blank input is reprompted; EOF and cancellation save nothing.
+Metadata is stripped of terminal control characters. Provider lookup and final
+confirmation each have a 60-second deadline; owner input has no provider
+deadline. Lookup failure saves no decision and review continues. Review takes
+exclusive database ownership before constructing the WeRead client and holds
+it until exit; the server or another review must be stopped first. Credential-
+free `links` and `decisions` reads remain available against current-schema state.
 
 `review` accepts `--days` (default 90), `--include-private`,
 `--include-imported`, `--db`, and `--config`. The strict settings-only config

@@ -42,6 +42,30 @@ func TestReviewSavesDecisionAndSkipsItAfterRestart(t *testing.T) {
 	}
 }
 
+func TestReviewExplicitlyConfirmsWorkOnlySuggestion(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "state.sqlite")
+	reader := reviewFixture()
+	catalog := &fakeCatalog{report: companion.MatchReport{Book: companion.Book{ID: "42"}, Candidates: []companion.Candidate{{ID: 77, Title: "Suggested", Slug: "suggested"}}, RequiresConfirmation: true}}
+	providers := fakeClients(reader, catalog)
+	var out bytes.Buffer
+	input := strings.NewReader("match\n1\n\nyes\nquit\n")
+	if err := runWithInput(context.Background(), []string{"review", "--account", "source", "--target-account", "target", "--db", db}, &out, io.Discard, providers, input); err != nil {
+		t.Fatal(err)
+	}
+	store, err := companion.OpenStoreForRead(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	rows, err := store.List(context.Background())
+	if err != nil || len(rows) != 1 || rows[0].WorkID != 77 || rows[0].EditionID != 0 {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	if !strings.Contains(out.String(), "Suggested") || !strings.Contains(out.String(), "Confirm work 77 edition 0") {
+		t.Fatalf("missing displayed selection: %s", out.String())
+	}
+}
+
 func TestReviewConfigDatabasePathOverridesFlag(t *testing.T) {
 	dir := t.TempDir()
 	configured := filepath.Join(dir, "configured.sqlite")
