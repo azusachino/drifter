@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
-  "receiptId": "8bf1f206-a17c-4b39-8324-78511016daa3",
+  "receiptId": "4c54d9c4-570c-4b0d-be6c-3f0921acb24e",
   "status": "current",
   "command": "deliver",
   "type": "workflow",
   "input": "/Users/azusachino/Projects/project-github/harus-workstation/vendor/drifter/docs/diagrams/cli-mapping-workflow.json",
   "output": "/Users/azusachino/Projects/project-github/harus-workstation/vendor/drifter/docs/diagrams/cli-mapping-workflow.html",
   "specification": {
-    "sha256": "52eeb71ece73d46b4562669a06794ba0465943bf26ea452f7390a88461de0828",
-    "bytes": 5356
+    "sha256": "d0ada0589e133baae2edd165e5fd72e5cce4fe14521e3f2de7f022b7268165a2",
+    "bytes": 5359
   },
   "artifact": {
-    "sha256": "f1598fb533d8fd607df20abfa047f1931ea80dcd8244681b4ca341a24266d199",
-    "bytes": 825055
+    "sha256": "55a932cdf74bda0eb11f37c817d97166d67333e079d9c6562223021635fa8499",
+    "bytes": 825058
   }
 }
