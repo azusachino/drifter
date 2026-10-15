@@ -197,6 +197,27 @@ suppressed source book, run `reset-decision` with the same `--book-id`,
 current-schema state read-only while a server owns the database; decision writes
 refuse an active server/review owner. All three accept `--db PATH`.
 
+`review` provides the terminal decision-only lifecycle:
+
+```sh
+bin/drifter review --account my-weread --target-account my-hardcover
+```
+
+It lists eligible books using the same privacy, mapping, decision and recent
+activity filters as `pending`, then accepts `skip`, `exclude`,
+`not-in-catalog`, or `quit`. Blank input is reprompted; EOF and cancellation
+save nothing. Metadata is stripped of terminal control characters. This slice
+does not select candidates or create mappings. Review takes exclusive database
+ownership before constructing the WeRead client and holds it until exit; the
+server or another review must be stopped first. Credential-free `links` and
+`decisions` reads remain available against current-schema state.
+
+`review` accepts `--days` (default 90), `--include-private`,
+`--include-imported`, `--db`, and `--config`. The strict settings-only config
+is read first; an absolute `database.path` overrides `--db`, otherwise an
+explicit `--db` overrides the normal XDG state default. The resolved path is
+used consistently for ownership, pending selection and decisions.
+
 ## Inspect and match
 
 ```sh

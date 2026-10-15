@@ -28,6 +28,7 @@ type cliApp struct {
 	providers    clients
 	commandError *error
 	flagError    *error
+	input        io.Reader
 }
 
 func defaultDB() (string, error) {
@@ -46,8 +47,12 @@ func defaultDB() (string, error) {
 }
 
 func run(ctx context.Context, args []string, out, errOut io.Writer, providers clients) error {
+	return runWithInput(ctx, args, out, errOut, providers, os.Stdin)
+}
+
+func runWithInput(ctx context.Context, args []string, out, errOut io.Writer, providers clients, input io.Reader) error {
 	var commandError, flagError error
-	app := &cliApp{providers: providers, commandError: &commandError, flagError: &flagError}
+	app := &cliApp{providers: providers, commandError: &commandError, flagError: &flagError, input: input}
 	root := app.rootCommand(out, errOut)
 	if args == nil {
 		args = []string{}
@@ -91,6 +96,7 @@ come only from WEREAD_API_KEY and HARDCOVER_API_KEY in the process environment.`
 		app.inspectCommand(),
 		app.matchCommand(),
 		app.pendingCommand(),
+		app.reviewCommand(),
 		app.decideCommand(),
 		app.decisionsCommand(),
 		app.resetDecisionCommand(),
