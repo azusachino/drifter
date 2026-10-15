@@ -13,8 +13,11 @@ implemented.
 
 - Inspect WeRead books, search the source catalog, and explicitly request
   personal progress.
-- List recently opened, eligible WeRead books without contacting Hardcover.
+- Page through recently opened, eligible WeRead books without
+  contacting Hardcover.
   Private books are excluded by default; incomplete responses remain explicit.
+- Review candidates in the terminal, explicitly choose work-only or an edition,
+  save skip/exclude/not-in-catalog decisions, restart and reset scoped choices.
 - Compare a source book with bounded Hardcover candidates. Candidates are
   suggestions, never automatic matches.
 - Optionally surface user-selected community catalog assertions and title/ISBN
@@ -22,14 +25,15 @@ implemented.
 - Confirm, explicitly replace, list, and unlink local mappings through the CLI
   or a foreground HTTP server with a local mapping interface.
 - Export explicitly selected confirmed mappings or merge named local community
-  catalogs with the offline `catalog` CLI commands.
-- Keep confirmed mappings in a private, versioned SQLite database shared by
-  both interfaces.
+  catalogs with the offline `export` and `merge` CLI commands.
+- Keep confirmed mappings and account-scoped decisions in private version-2
+  SQLite state. HTTP stale-target guards protect replacement and unlink.
 
 The project does not synchronize reading status, provide a catalog contribution
 service, poll in background, import Kindle Unlimited books, or deploy a service.
-See the [matching-worklist plan](docs/plans/matching-worklist.md) for later matching
-work and the [HTTP server acceptance map](docs/plans/http-server.md) for the
+See the [matching-worklist plan](docs/plans/matching-worklist.md) for delivered
+matching evidence and later status work. The
+[HTTP server acceptance map](docs/plans/http-server.md) covers the
 current server stories and executable evidence. See the
 [community matching catalog contract](docs/plans/matching-catalogs.md) for
 source configuration, trust boundaries and limitations.
@@ -49,7 +53,7 @@ bin/drifter help
 ```
 
 `make check` formats/checks Go, runs vet and offline race-enabled tests, verifies
-modules, and builds `bin/drifter`. No database service is needed.
+modules, and builds both executables. No database service is needed.
 
 Set provider keys in your shell only when needed:
 
@@ -65,6 +69,7 @@ credentials.
 
 ```sh
 bin/drifter pending --account my-weread --target-account my-hardcover
+bin/drifter review --account my-weread --target-account my-hardcover
 bin/drifter match --book-id 123 --query 'Original-language title'
 bin/drifter link --book-id 123 --work-id 456 \
   --account my-weread --target-account my-hardcover
@@ -114,7 +119,15 @@ The server and CLI share validation and local state. Confirming or replacing a
 mapping fetches source metadata and validates that the selected work and
 optional edition exist and belong together. It does not prove that two records
 are the same literary work; that remains your decision. Work-only and specific
-edition selections are distinct. Unlinking changes only the local mapping.
+edition selections are distinct. Unlinking changes only the local mapping;
+independent decisions remain until reset. Stop the server before terminal
+review: review holds exclusive database
+ownership, while current-schema read-only listing remains available.
+Provider-backed HTTP operations admit one request with a 90-second budget;
+terminal review bounds each provider stage to 60 seconds, not owner input time.
+Pending cursors scan the live shelf, not a snapshot: moved-ahead activity or
+newly reset decisions can require a fresh scan. See the [CLI reference](docs/cli.md)
+for continuation versus retry and failure summaries.
 
 **Security boundary:** the server is unauthenticated. Keep it on loopback. A
 non-loopback listener is possible only on an explicit concrete address and
@@ -135,7 +148,9 @@ credentials.
 
 ```sh
 make check
-mise exec -- rumdl check README.md docs/architecture.md docs/cli.md docs/plans/http-server.md
+mise exec -- rumdl check README.md docs/architecture.md docs/cli.md \
+  docs/plans/*.md docs/walkthroughs/README.md \
+  docs/research/2026-10-15-design-review.md
 make e2e-install
 make e2e-probe ROUTE=/
 make e2e

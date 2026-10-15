@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -18,7 +17,7 @@ type api struct {
 	name, url, token string
 	client           *http.Client
 	interval         time.Duration
-	mu               sync.Mutex
+	gate             chan struct{}
 	next             time.Time
 }
 
@@ -27,7 +26,9 @@ func newAPI(name, url, token string, interval time.Duration) (*api, error) {
 	if token == "" || token == "Bearer" || strings.ContainsAny(token, "\r\n") {
 		return nil, fmt.Errorf("%s credential missing or invalid", name)
 	}
-	return &api{name: name, url: url, token: token, interval: interval,
+	gate := make(chan struct{}, 1)
+	gate <- struct{}{}
+	return &api{name: name, url: url, token: token, interval: interval, gate: gate,
 		client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
@@ -36,8 +37,12 @@ func (a *api) post(ctx context.Context, payload any, target any) error {
 	if err != nil {
 		return fmt.Errorf("%s request encoding failed", a.name)
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-a.gate:
+	}
+	defer func() { a.gate <- struct{}{} }()
 	if wait := time.Until(a.next); wait > 0 {
 		timer := time.NewTimer(wait)
 		defer timer.Stop()

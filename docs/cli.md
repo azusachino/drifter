@@ -5,8 +5,9 @@ Hardcover**. Hardcover → Iroha remains an independent Iroha integration.
 
 Provider operations are **read-only**: inspect WeRead books/progress and
 validate explicitly selected Hardcover identities. Local mappings can be
-confirmed, replaced and unlinked with CLI commands or the foreground `serve`
-HTTP server and mapping interface. No provider status writes occur. The server
+confirmed, replaced and unlinked with CLI commands or the foreground
+`drifter-server` HTTP server and mapping interface. No provider status writes
+occur. The server
 does not synchronize statuses, import catalog entries or infer fuzzy matches.
 KU intake and deployment are not implemented. Settings-only TOML and
 standalone health probes remain available.
@@ -27,7 +28,8 @@ make e2e
 ```
 
 `make check` verifies Go formatting, runs vet and race-enabled offline tests,
-and builds the CLI. `make fmt` formats Go; `make test` runs race-enabled tests.
+verifies modules, and builds both executables. `make fmt` formats Go;
+`make test` runs race-enabled tests.
 Tests use synthetic provider responses and temporary databases, never real keys
 or account captures.
 
@@ -52,7 +54,13 @@ confirmation need both. Obtain keys through the providers' official account
 flows. Never pass them as flags, put them in TOML or commit them.
 
 Provider destinations are fixed HTTPS endpoints. Redirects are refused; requests
-have a 30-second timeout and a 2 MiB response limit. Errors omit response
+have a 30-second timeout and a 2 MiB response limit. The server admits one
+provider-backed pending or confirm/replace operation at a time; excess requests
+receive a sanitized 503 without provider calls. Admitted operations have a
+90-second deadline. Pending timeouts return an incomplete report with an
+`operation_timeout` issue and any completed rows; confirmation timeouts return
+a stable timeout error. Local listings, probes and unlink do not use the
+provider slot. Errors omit response
 bodies, headers and credentials. Requests are spaced per client (WeRead one
 second, Hardcover 1.1 seconds), without automatic retries. These are client
 safeguards, not proof of remaining account quota or a complete rate-limit
@@ -105,9 +113,10 @@ bin/drifter-server --config config.toml [--db PATH]
 ```
 
 The server uses `server.addr` (default `127.0.0.1:8081`), provides the same
-health routes, a server-rendered mapping interface at `/`, read-only `/api/mappings`
-and `/api/pending?account=LABEL&target_account=LABEL[&days=N]`, and explicit
-local mapping maintenance. There is no `/admin` compatibility route. New
+health routes, a server-rendered mapping interface at `/`, read-only
+`/api/mappings` and `/api/pending` (account and target labels, optional `days`
+and continuation `after` query parameters), and explicit local mapping
+maintenance. There is no `/admin` compatibility route. New
 confirmations use `ConfirmLinkOwned`, including source book lookup and target
 work/edition membership validation. The HTML form and
 JSON routes support separate confirm, replace and scoped unlink actions; neither
@@ -122,11 +131,28 @@ the protected `/api/csrf` response or the `/` page's
 POST JSON fields `source_account`, `book_id`, `target_account`, `work_id` and
 `edition_id` to `/api/mappings/confirm` or `/api/mappings/replace`. `edition_id`
 is required: use `0` only for a deliberate work-only mapping, or the selected
-positive edition ID. Unlink with DELETE `/api/mappings/unlink` and JSON fields
-`source_account`, `book_id` and `target_account`. Native form posts use the
-bounded URL-encoded `/mappings/confirm`, `/mappings/replace` and
-`/mappings/unlink` routes with the same Origin/Host and hidden-token checks. The
-page uses native forms and loads no JavaScript. Chromium sends the exact
+positive edition ID. Replace additionally requires `expected_work_id` and
+`expected_edition_id`, the currently displayed target tuple (`0` means work-only).
+Confirm rejects these guard fields rather than ignoring them. Unlink with DELETE
+`/api/mappings/unlink` and JSON fields `source_account`, `book_id`,
+`target_account`, `expected_work_id` and `expected_edition_id`. Both guarded
+routes reject missing, null, negative, zero-work, unknown and duplicate tuple
+members before provider work. The expected work ID must be
+positive; expected edition is zero for work-only or positive for a specific
+edition. A stale tuple returns HTTP 409; reload mappings and review the current
+target. Replace conflicts rather than recreating a mapping deleted since it was
+shown. An absent unlink is idempotent, while unlink conflicts if a different
+target now exists. Normal confirm remains unchanged and rejects guard fields.
+Native form posts use bounded URL-encoded `/mappings/confirm`,
+`/mappings/replace` and `/mappings/unlink` routes with the same Origin/Host and
+hidden-token checks. Confirm form fields are `source_account`, `book_id`,
+`target_account`, `work_id`, `edition_mode` (`work_only` or `edition`) and
+`edition_id` (present but empty for work-only; positive for a specific edition).
+Replace adds hidden
+`expected_work_id` and `expected_edition_id`; unlink carries the source key and
+those same hidden expected-target fields. Stale native submissions show a
+reload-and-review instruction and do not mutate the newer mapping. The page
+uses native forms and loads no JavaScript. Chromium sends the exact
 same-origin Origin with `Referrer-Policy: strict-origin-when-cross-origin`; with
 `no-referrer` it sends `Origin: null`, which is correctly rejected. GET/HEAD
 never mutate, no CORS is enabled, and invalid/provider errors do not disclose
@@ -149,9 +175,90 @@ and keeps it until shutdown. While it runs, standalone `link` and `unlink`
 refuse with an ownership error; `links` and pending reads may use the existing
 current schema read-only. If that schema needs migration, a reader fails rather
 than migrating under the owner. HTTP mapping maintenance uses the same owned
-capability; standalone `link` and `unlink` remain refused while `serve` owns the
-state. See the [architecture](architecture.md) and the
+capability; standalone `link` and `unlink` remain refused while
+`drifter-server` owns the state. See the [architecture](architecture.md) and the
 [HTTP user-story and test map](plans/http-server.md).
+
+## Local review decisions
+
+Decision controls are local SQLite operations and require no provider credentials:
+
+```sh
+bin/drifter decide --book-id 123 --account my-weread \
+  --target-account my-hardcover --decision exclude
+bin/drifter decisions --account my-weread --target-account my-hardcover
+bin/drifter reset-decision --book-id 123 --account my-weread \
+  --target-account my-hardcover
+```
+
+`--decision` accepts `skip`, `exclude`, or `not-in-catalog`. Skip is retained
+for review history but appears in the next pending invocation; exclude and
+not-in-catalog suppress that source book only for the exact source/target
+account pair. Link and unlink do not erase decisions. If unlinking reveals a
+suppressed source book, run `reset-decision` with the same `--book-id`,
+`--account`, and `--target-account` to make it eligible again. `decisions` reads
+current-schema state read-only while a server owns the database; decision writes
+refuse an active server/review owner. All three accept `--db PATH`.
+
+`review` provides terminal decisions and explicit local linking:
+
+```sh
+bin/drifter review --account my-weread --target-account my-hardcover
+```
+
+It lists eligible books using the same privacy, mapping, decision and recent
+activity filters as `pending`. Enter `match` for provider-backed suggestions,
+or `skip`, `exclude`, `not-in-catalog`, or `quit`. Suggestions are not accepted
+automatically: choose a displayed work by suggestion number or enter a manual
+work ID as `work ID` (for example, `work 1`; this avoids ambiguity with
+suggestion number `1`), optionally enter an edition ID, then confirm the
+displayed tuple with `yes`. Blank edition input selects work-only even when an
+exact edition is displayed; suggestions never select an edition automatically.
+Shared source and target validation is required before a local link is stored.
+Imported rows remain inspection-only. Blank decision input is reprompted; EOF
+and cancellation never confirm a link or save a new decision. Earlier completed
+choices remain saved.
+
+After `match`, configured catalog hints show unverified title, author, ISBN and
+provenance. Conflicting assertions show every alternative, but their targets are
+not selectable suggestions. At the suggestion prompt, `title N` explicitly
+searches hint N's title; it does not select its author. `author N` explicitly
+reruns the current query with hint N's author for stable contributor-name
+ordering only. Enter `title N` then `author N` to use both, with one bounded
+lookup per action. `query TEXT` searches an alternate title and clears any
+selected author. A new title also clears the selected author. Native-title
+matching remains the initial default, and missing hints do not change it.
+These searches use the same shared matcher as `match --query`: native exact-ISBN
+results still short-circuit title search. Hint ISBNs are displayed only; they
+never replace native identity. No hint is searched automatically, no confidence
+ranks results, and none of these actions saves a mapping or review decision.
+An unavailable hint field or invalid query issues no new search and ends that
+book's review without saving a choice. Catalog failures remain visibly
+incomplete and cause a nonzero exit while preserving usable provider results
+and valid catalog evidence. EOF never means consent.
+
+Metadata is stripped of terminal control characters. Each pending page,
+provider lookup and final confirmation has its own 60-second deadline; owner
+input has no provider deadline. Safe available rows remain reviewable when a
+page has metadata issues or times out. Review follows the last-attempted cursor
+to older rows; ordinary pagination alone does not cause failure. Source/metadata
+issues, including rows omitted from the interactive list, remain explicit and
+cause a nonzero exit. Completed choices survive; a fresh invocation retries
+only still-pending work. On early exit, summaries distinguish saved choices,
+known unfinished/unattempted IDs and possible later pages (not a shelf snapshot).
+Lookup or link failure saves no decision and review continues, then
+returns nonzero with failed source IDs, even if later books succeed. Replacing
+a mapping requires a separate `yes` and refuses a changed expected target.
+Review takes exclusive database ownership before constructing the WeRead client
+and holds it until exit; the server or another review must be stopped first.
+Credential-free `links` and `decisions` reads remain available against
+current-schema state.
+
+`review` accepts `--days` (default 90), `--include-private`,
+`--include-imported`, `--db`, and `--config`. The strict settings-only config
+is read first; an absolute `database.path` overrides `--db`, otherwise an
+explicit `--db` overrides the normal XDG state default. The resolved path is
+used consistently for ownership, pending selection and decisions.
 
 ## Inspect and match
 
@@ -198,7 +305,8 @@ claims appear separately in the core match report; they never select a result
 or create a mapping. The existing explicit `link` operation still validates
 Hardcover membership and requires your decision.
 
-Catalog requests occur only during `match`, not server startup, browser pages,
+Catalog requests occur only during `match` or an explicit review lookup,
+not server startup, browser pages,
 probes, pending or mapping operations. Each document is limited to 1 MiB, total
 catalog input to 4 MiB per match, and loading to eight sources/fifteen seconds.
 Remote HTTPS is restricted to DNS hostnames on port 443, rejects credentials,
@@ -213,8 +321,9 @@ Hardcover title search is limited to the first ten candidates; candidate edition
 lists show at most ten editions each. Exact ISBN lookup is capped at 100 rows.
 These bounded views do not prove that an absent title/edition is missing from
 the whole catalog. Every result requires owner confirmation. Catalog claims are
-shown separately and do not alter provider search, automatic English-edition
-substitution or confirmation.
+shown separately and never cause automatic English-edition substitution or
+confirmation. Only explicit review query/author actions reuse hints; standalone
+`match` has no author-ranking flag and retains its ordinary behavior.
 
 ### Local catalog export and merge
 
@@ -241,8 +350,8 @@ WeRead provider source IDs, confirmed Hardcover work IDs and optional edition
 IDs, plus the explicitly supplied provenance. Source IDs are disclosed, so an
 export is **not anonymous**. Provenance is caller-supplied public text; do not
 put account aliases, local paths or secrets in it. Export creates or migrates
-no database and works through a current schema read-only handle while `serve`
-owns the database. An absent database or
+no database and works through a current schema read-only handle while
+`drifter-server` owns the database. An absent database or
 unsupported schema is an error with no output; an existing database with no
 mappings in the selected account pair emits a valid empty catalog. More than
 v1's record limit or an output exceeding its byte limit fails without partial
@@ -306,14 +415,22 @@ approval. JSON containing opted-in private metadata must be protected by you.
 Output has `books`, `complete` and privacy-safe `issues` (book IDs and fixed
 codes, never provider error bodies). Shelf count mismatch/missing count or a
 more-results flag prevents claiming completeness. Eligible metadata lookups are
-capped at 100 books per invocation. A lookup failure leaves other valid books in
-the output; narrowing the window or confirming mappings makes reruns useful.
-Incomplete output exits nonzero so a partial list cannot look like success.
-Shelf facts, progress and raw responses are never persisted. Opening the local
-mapping database may initialize or migrate it as documented below.
+capped at 100 attempted books per invocation. When more eligible rows remain,
+JSON includes `next_cursor`; continue with `pending --after CURSOR` or HTTP
+`after=CURSOR`, keeping account labels, window and inclusion flags unchanged.
+Cursors bind those settings and the original scan time; treat them as private
+input and never log or share them. This is a live shelf scan, not a snapshot.
+New activity moving a row ahead of the seek boundary, or a newly reset decision
+in the already-passed range, can require a fresh scan. The fixed as-of/window
+does not freeze shelf contents. Continuation advances past attempted failures.
+Omit `--after` for a fresh scan or explicitly retry to revisit failures. More
+work and other incomplete reports print JSON and exit nonzero. Shelf
+incompleteness remains incomplete across pages. Shelf facts, progress and raw
+responses are never persisted. Opening the local mapping database may
+initialize or migrate it as documented below.
 
-Saved review decisions and interactive review remain subsequent issue #7
-slices; this command does not filter decisions or synchronize status.
+Saved review decisions and interactive review are separate matching slices;
+this command does not synchronize status.
 
 ## Confirm local mappings
 
@@ -352,7 +469,8 @@ Default database:
   absolute path.
 - Otherwise `$HOME/.local/state/drifter/mappings.sqlite`.
 
-Use `--db PATH` on `link`, `links`, `unlink` or `export` to override it.
+Use `--db PATH` on mapping, pending, decision, review or export commands to
+override it; review config precedence is described above.
 Local listing may initialize an empty database; `export` never does. New
 application directories are mode 700 and the database must be a regular,
 non-symlink mode-600 file. The daemon also leaves a
@@ -363,18 +481,21 @@ rejected. The database's immediate parent must
 not be writable by other users. Keep the state directory under your control;
 these checks do not protect against a hostile process running as you.
 
-Persisted fields are source/provider account namespaces, source book ID,
-confirmed target IDs, source title and ISBN. These are personal metadata: keep
-them out of Git and public artifacts. The mapping JSON route exposes the
+Persisted mapping fields are source/provider account namespaces, source book ID,
+confirmed target IDs, source title and ISBN. Decisions store only their namespace
+key and kind (`skip`, `exclude`, `not-in-catalog`), not shelf or hint snapshots.
+These are personal metadata: keep them out of Git and public artifacts. The
+mapping JSON route exposes the
 same saved fields and must be protected like the local database. Raw provider
 responses, personal progress,
 excerpts, device identifiers and tokens are not stored. JSON progress output is
 still personal data; protect redirected output yourself.
 
-The database uses SQLite `PRAGMA user_version` (currently version 1). Opening
-an unversioned database from the first release upgrades it transactionally,
-without rewriting mappings. Unsupported versions and missing required mapping
-columns are refused; a failed upgrade does not advance the version. Do not
+The database uses SQLite `PRAGMA user_version` (currently version 2). Opening
+a legacy version-0 or version-1 database upgrades it transactionally, preserving
+mappings and adding the decisions table. Unsupported versions and missing
+required schema are refused; a failed upgrade rolls back tables and version.
+Version-1 binaries refuse version-2 state; public catalog v1 is unchanged. Do not
 manually lower the version or use an older binary against newer state. Back up
 privately before upgrading; schema versioning is not a downgrade mechanism.
 

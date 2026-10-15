@@ -28,6 +28,7 @@ type cliApp struct {
 	providers    clients
 	commandError *error
 	flagError    *error
+	input        io.Reader
 }
 
 func defaultDB() (string, error) {
@@ -46,8 +47,12 @@ func defaultDB() (string, error) {
 }
 
 func run(ctx context.Context, args []string, out, errOut io.Writer, providers clients) error {
+	return runWithInput(ctx, args, out, errOut, providers, os.Stdin)
+}
+
+func runWithInput(ctx context.Context, args []string, out, errOut io.Writer, providers clients, input io.Reader) error {
 	var commandError, flagError error
-	app := &cliApp{providers: providers, commandError: &commandError, flagError: &flagError}
+	app := &cliApp{providers: providers, commandError: &commandError, flagError: &flagError, input: input}
 	root := app.rootCommand(out, errOut)
 	if args == nil {
 		args = []string{}
@@ -91,6 +96,10 @@ come only from WEREAD_API_KEY and HARDCOVER_API_KEY in the process environment.`
 		app.inspectCommand(),
 		app.matchCommand(),
 		app.pendingCommand(),
+		app.reviewCommand(),
+		app.decideCommand(),
+		app.decisionsCommand(),
+		app.resetDecisionCommand(),
 		app.linkCommand(),
 		app.linksCommand(),
 		app.unlinkCommand(),
@@ -213,7 +222,7 @@ func (app *cliApp) matchCommand() *cobra.Command {
 }
 
 func (app *cliApp) pendingCommand() *cobra.Command {
-	var account, targetAccount, dbPath string
+	var account, targetAccount, dbPath, after string
 	var days int
 	var includePrivate, includeImported bool
 	command := &cobra.Command{Use: "pending", Short: "List recently opened eligible WeRead books"}
@@ -223,6 +232,7 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 	flags.IntVar(&days, "days", 90, "recently opened window in days (1–36500; browsing counts)")
 	flags.BoolVar(&includePrivate, "include-private", false, "explicitly include privacy-marked books (unknown privacy remains excluded)")
 	flags.BoolVar(&includeImported, "include-imported", false, "include imported books for inspection only; match/link remain unsupported")
+	flags.StringVar(&after, "after", "", "continue a pending worklist using its next_cursor")
 	flags.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
 	markRequiredFlags(command, "account", "target-account")
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
@@ -231,6 +241,11 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 		}
 		if days < 1 || days > 36500 {
 			return fmt.Errorf("--days must be between 1 and 36500")
+		}
+		options := companion.PendingOptions{SourceAccount: account, TargetAccount: targetAccount, Days: days,
+			IncludePrivate: includePrivate, IncludeImported: includeImported, After: after, Now: time.Now()}
+		if err := companion.ValidatePendingCursor(options); err != nil {
+			return err
 		}
 		if dbPath == "" {
 			var err error
@@ -245,7 +260,7 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 		}
 		report, err := companion.PendingWorklist(cmd.Context(), reader, dbPath, companion.PendingOptions{
 			SourceAccount: account, TargetAccount: targetAccount, Days: days,
-			IncludePrivate: includePrivate, IncludeImported: includeImported, Now: time.Now(),
+			IncludePrivate: includePrivate, IncludeImported: includeImported, After: after, Now: time.Now(),
 		})
 		if err != nil {
 			return err
@@ -257,6 +272,109 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 			return fmt.Errorf("pending worklist incomplete; see JSON issue codes")
 		}
 		return nil
+	})
+}
+
+func decisionPath(dbPath string) (string, error) {
+	if dbPath != "" {
+		return dbPath, nil
+	}
+	return defaultDB()
+}
+
+func (app *cliApp) decisionKeyFlags(command *cobra.Command, bookID, account, targetAccount, dbPath *string, includeBook bool) {
+	flags := command.Flags()
+	if includeBook {
+		flags.StringVar(bookID, "book-id", "", "WeRead book ID (required)")
+		markRequiredFlags(command, "book-id")
+	}
+	flags.StringVar(account, "account", "", "source account namespace (required; not an authenticated ID)")
+	flags.StringVar(targetAccount, "target-account", "", "target account namespace (required; not an authenticated ID)")
+	flags.StringVar(dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
+	markRequiredFlags(command, "account", "target-account")
+}
+
+func (app *cliApp) decideCommand() *cobra.Command {
+	var bookID, account, targetAccount, dbPath, kind string
+	command := &cobra.Command{Use: "decide", Short: "Record a local pending-review decision"}
+	app.decisionKeyFlags(command, &bookID, &account, &targetAccount, &dbPath, true)
+	command.Flags().StringVar(&kind, "decision", "", "skip, exclude, or not-in-catalog (required)")
+	markRequiredFlags(command, "decision")
+	return app.command(command, func(cmd *cobra.Command, _ []string) error {
+		path, err := decisionPath(dbPath)
+		if err != nil {
+			return err
+		}
+		if !companion.ValidBookID(bookID) || !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
+			return fmt.Errorf("valid book ID and account labels required")
+		}
+		if kind != "skip" && kind != "exclude" && kind != "not-in-catalog" {
+			return fmt.Errorf("--decision must be skip, exclude, or not-in-catalog")
+		}
+		if err := companion.CheckDatabaseWriteAvailable(path); err != nil {
+			return err
+		}
+		store, err := companion.OpenStore(path)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		if err := store.SaveDecision(cmd.Context(), companion.Decision{Provider: "weread", SourceAccount: account, BookID: bookID, TargetAccount: targetAccount, Kind: kind}); err != nil {
+			return err
+		}
+		return encodeJSON(cmd, map[string]any{"saved": true, "book_id": bookID, "decision": kind})
+	})
+}
+
+func (app *cliApp) decisionsCommand() *cobra.Command {
+	var bookID, account, targetAccount, dbPath string
+	command := &cobra.Command{Use: "decisions", Short: "List local decisions for an account pair"}
+	app.decisionKeyFlags(command, &bookID, &account, &targetAccount, &dbPath, false)
+	return app.command(command, func(cmd *cobra.Command, _ []string) error {
+		path, err := decisionPath(dbPath)
+		if err != nil {
+			return err
+		}
+		if !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
+			return fmt.Errorf("valid account labels required")
+		}
+		store, err := companion.OpenStoreForRead(path)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		rows, err := store.ListDecisions(cmd.Context(), "weread", account, targetAccount)
+		if err != nil {
+			return err
+		}
+		return encodeJSON(cmd, rows)
+	})
+}
+
+func (app *cliApp) resetDecisionCommand() *cobra.Command {
+	var bookID, account, targetAccount, dbPath string
+	command := &cobra.Command{Use: "reset-decision", Short: "Reset one local review decision"}
+	app.decisionKeyFlags(command, &bookID, &account, &targetAccount, &dbPath, true)
+	return app.command(command, func(cmd *cobra.Command, _ []string) error {
+		path, err := decisionPath(dbPath)
+		if err != nil {
+			return err
+		}
+		if !companion.ValidBookID(bookID) || !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
+			return fmt.Errorf("valid book ID and account labels required")
+		}
+		if err := companion.CheckDatabaseWriteAvailable(path); err != nil {
+			return err
+		}
+		store, err := companion.OpenStore(path)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		if err := store.ResetDecision(cmd.Context(), "weread", account, bookID, targetAccount); err != nil {
+			return err
+		}
+		return encodeJSON(cmd, map[string]any{"reset": true, "book_id": bookID})
 	})
 }
 

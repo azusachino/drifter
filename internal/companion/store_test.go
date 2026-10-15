@@ -2,6 +2,7 @@ package companion
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -72,6 +73,57 @@ func TestStorePersistenceAndReplacement(t *testing.T) {
 	}
 	if secureDelete != 1 {
 		t.Fatal("secure_delete is not enabled")
+	}
+}
+
+func TestStoreGuardedMutationsRejectStaleTargets(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "mappings.sqlite")
+	a, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	original := testMapping()
+	if err := a.Confirm(ctx, original, false); err != nil {
+		t.Fatal(err)
+	}
+	expected := MappingTarget{WorkID: original.WorkID, EditionID: original.EditionID}
+	newer := original
+	newer.WorkID, newer.EditionID = 81, 9
+	if err := b.Confirm(ctx, newer, true); err != nil {
+		t.Fatal(err)
+	}
+	stale := original
+	stale.WorkID = 77
+	if err := a.ReplaceExpected(ctx, stale, expected); !errors.Is(err, ErrMappingConflict) {
+		t.Fatalf("stale replace: %v", err)
+	}
+	if err := a.UnlinkExpected(ctx, original.Provider, original.SourceAccount, original.BookID, original.TargetAccount, expected); !errors.Is(err, ErrMappingConflict) {
+		t.Fatalf("stale unlink: %v", err)
+	}
+	rows, err := a.List(ctx)
+	if err != nil || len(rows) != 1 || rows[0].WorkID != newer.WorkID || rows[0].EditionID != newer.EditionID {
+		t.Fatalf("newer row changed: %+v, %v", rows, err)
+	}
+	fresh := newer
+	fresh.WorkID = 82
+	if err := a.ReplaceExpected(ctx, fresh, MappingTarget{WorkID: newer.WorkID, EditionID: newer.EditionID}); err != nil {
+		t.Fatalf("fresh replace: %v", err)
+	}
+	if err := a.UnlinkExpected(ctx, fresh.Provider, fresh.SourceAccount, fresh.BookID, fresh.TargetAccount, MappingTarget{WorkID: fresh.WorkID, EditionID: fresh.EditionID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.UnlinkExpected(ctx, fresh.Provider, fresh.SourceAccount, fresh.BookID, fresh.TargetAccount, MappingTarget{WorkID: fresh.WorkID, EditionID: fresh.EditionID}); err != nil {
+		t.Fatalf("absent unlink not idempotent: %v", err)
+	}
+	if err := b.ReplaceExpected(ctx, fresh, MappingTarget{WorkID: fresh.WorkID, EditionID: fresh.EditionID}); !errors.Is(err, ErrMappingConflict) {
+		t.Fatalf("deleted row resurrected: %v", err)
 	}
 }
 

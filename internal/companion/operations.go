@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/azusachino/drifter/internal/catalog"
 )
@@ -44,6 +45,9 @@ func Inspect(ctx context.Context, source Source, id string, progress bool) (Insp
 
 type MatchOptions struct {
 	CatalogLoader *catalog.Loader
+	// ExpectedAuthor optionally moves equal contributor names first without
+	// changing candidate membership or confirming identity. Empty preserves order.
+	ExpectedAuthor string
 }
 
 func Match(ctx context.Context, source Source, target Target, id, query string) (MatchReport, error) {
@@ -58,6 +62,18 @@ func MatchWithOptions(ctx context.Context, source Source, target Target, id, que
 	report, err := target.Match(ctx, book, query)
 	if err != nil {
 		return MatchReport{}, err
+	}
+	if author := strings.Join(strings.Fields(options.ExpectedAuthor), " "); author != "" && len(report.Candidates) > 1 {
+		matched := make([]Candidate, 0, len(report.Candidates))
+		var unmatched []Candidate
+		for _, candidate := range report.Candidates {
+			if candidateHasAuthor(candidate, author) {
+				matched = append(matched, candidate)
+			} else {
+				unmatched = append(unmatched, candidate)
+			}
+		}
+		report.Candidates = append(matched, unmatched...)
 	}
 	if options.CatalogLoader == nil {
 		return report, nil
@@ -119,6 +135,16 @@ func MatchWithOptions(ctx context.Context, source Source, target Target, id, que
 	return report, nil
 }
 
+func candidateHasAuthor(candidate Candidate, expected string) bool {
+	for _, contribution := range candidate.Contributions {
+		name := strings.Join(strings.Fields(contribution.Author.Name), " ")
+		if name != "" && strings.EqualFold(name, expected) {
+			return true
+		}
+	}
+	return false
+}
+
 func editionValue(editionID *int64) int64 {
 	if editionID == nil {
 		return 0
@@ -129,7 +155,12 @@ func editionValue(editionID *int64) int64 {
 // ConfirmLink is the shared explicit-confirmation path, not an automatic match.
 // Validate providers before opening state so a rejected selection creates no DB.
 func ConfirmLink(ctx context.Context, source Source, target Target, path string, selection Mapping, replace bool) error {
-	return confirmLink(ctx, source, target, path, selection, replace, nil)
+	return confirmLink(ctx, source, target, path, selection, replace, nil, nil)
+}
+
+// ConfirmLinkExpected validates the complete selection, then replaces only the previously observed target.
+func ConfirmLinkExpected(ctx context.Context, source Source, target Target, path string, selection Mapping, expected MappingTarget) error {
+	return confirmLink(ctx, source, target, path, selection, true, nil, &expected)
 }
 
 // ConfirmLinkOwned performs the same validation while using the daemon's
@@ -138,10 +169,18 @@ func ConfirmLinkOwned(ctx context.Context, source Source, target Target, path st
 	if !owner.owns(path) {
 		return fmt.Errorf("database ownership capability does not match this path")
 	}
-	return confirmLink(ctx, source, target, path, selection, replace, owner)
+	return confirmLink(ctx, source, target, path, selection, replace, owner, nil)
 }
 
-func confirmLink(ctx context.Context, source Source, target Target, path string, selection Mapping, replace bool, owner *DatabaseOwnership) error {
+// ConfirmLinkExpectedOwned is the guarded confirmation path for the daemon owner.
+func ConfirmLinkExpectedOwned(ctx context.Context, source Source, target Target, path string, selection Mapping, expected MappingTarget, owner *DatabaseOwnership) error {
+	if !owner.owns(path) {
+		return fmt.Errorf("database ownership capability does not match this path")
+	}
+	return confirmLink(ctx, source, target, path, selection, true, owner, &expected)
+}
+
+func confirmLink(ctx context.Context, source Source, target Target, path string, selection Mapping, replace bool, owner *DatabaseOwnership, expected *MappingTarget) error {
 	if selection.Provider != "weread" || !selection.valid() {
 		return ErrInvalidMapping
 	}
@@ -171,6 +210,9 @@ func confirmLink(ctx context.Context, source Source, target Target, path string,
 	}
 	defer store.Close()
 	selection.SourceTitle, selection.SourceISBN = book.Title, book.ISBN
+	if expected != nil {
+		return store.ReplaceExpected(ctx, selection, *expected)
+	}
 	return store.Confirm(ctx, selection, replace)
 }
 
@@ -186,7 +228,11 @@ func PendingWorklist(ctx context.Context, source Source, path string, options Pe
 	if err != nil {
 		return PendingReport{}, err
 	}
-	return Pending(ctx, source, mappings, options)
+	decisions, err := store.ListDecisions(ctx, "weread", options.SourceAccount, options.TargetAccount)
+	if err != nil {
+		return PendingReport{}, err
+	}
+	return PendingWithDecisions(ctx, source, mappings, decisions, options)
 }
 
 // PendingWorklistOwned reads mappings through a daemon-owned store while using
@@ -201,5 +247,9 @@ func PendingWorklistOwned(ctx context.Context, source Source, path string, optio
 	if err != nil {
 		return PendingReport{}, err
 	}
-	return Pending(ctx, source, mappings, options)
+	decisions, err := store.ListDecisions(ctx, "weread", options.SourceAccount, options.TargetAccount)
+	if err != nil {
+		return PendingReport{}, err
+	}
+	return PendingWithDecisions(ctx, source, mappings, decisions, options)
 }

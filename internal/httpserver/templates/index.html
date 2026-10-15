@@ -26,7 +26,7 @@ fieldset label { display: inline-flex; align-items: center; }
 <details><summary>Replace mapping for book {{.BookID}}</summary>
 <form aria-label="Replace mapping for book {{.BookID}}" action="/mappings/replace" method="post">
 <input type="hidden" name="csrf_token" value="{{$.Token}}">
-<input type="hidden" name="source_account" value="{{.SourceAccount}}"><input type="hidden" name="book_id" value="{{.BookID}}"><input type="hidden" name="target_account" value="{{.TargetAccount}}">
+<input type="hidden" name="source_account" value="{{.SourceAccount}}"><input type="hidden" name="book_id" value="{{.BookID}}"><input type="hidden" name="target_account" value="{{.TargetAccount}}"><input type="hidden" name="expected_work_id" value="{{.WorkID}}"><input type="hidden" name="expected_edition_id" value="{{.EditionID}}">
 <label>New target work ID <input name="work_id" type="number" min="1" required></label>
 <fieldset><legend>Target identity</legend>
 <label><input name="edition_mode" type="radio" value="work_only" required> Work only</label>
@@ -35,7 +35,7 @@ fieldset label { display: inline-flex; align-items: center; }
 <button type="submit">Replace mapping</button></form></details>
 <details><summary>Unlink mapping for book {{.BookID}}</summary>
 <form aria-label="Unlink mapping for book {{.BookID}}" action="/mappings/unlink" method="post">
-<input type="hidden" name="csrf_token" value="{{$.Token}}"><input type="hidden" name="source_account" value="{{.SourceAccount}}"><input type="hidden" name="book_id" value="{{.BookID}}"><input type="hidden" name="target_account" value="{{.TargetAccount}}">
+<input type="hidden" name="csrf_token" value="{{$.Token}}"><input type="hidden" name="source_account" value="{{.SourceAccount}}"><input type="hidden" name="book_id" value="{{.BookID}}"><input type="hidden" name="target_account" value="{{.TargetAccount}}"><input type="hidden" name="expected_work_id" value="{{.WorkID}}"><input type="hidden" name="expected_edition_id" value="{{.EditionID}}">
 <button class="danger" type="submit">Unlink this mapping</button></form></details>
 </li>{{end}}</ul>{{else}}<p>No mappings are saved.</p>{{end}}</section>
 <section><h2>Confirm a mapping</h2><form aria-label="Confirm a mapping" action="/mappings/confirm" method="post">

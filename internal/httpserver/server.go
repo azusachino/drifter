@@ -30,6 +30,7 @@ import (
 )
 
 const maxRequestBody = 8 << 10
+const defaultOperationTimeout = 90 * time.Second
 
 var errProviderUnavailable = errors.New("provider unavailable")
 
@@ -49,32 +50,35 @@ var page = template.Must(template.ParseFS(htmlTemplates, "templates/index.html")
 
 // Server owns an HTTP listener and the shared core dependencies used by routes.
 type Server struct {
-	http          *http.Server
-	address       string
-	database      string
-	ownership     *companion.DatabaseOwnership
-	token         string
-	logger        *slog.Logger
-	now           func() time.Time
-	source        companion.Source
-	sourceFactory func() (companion.Source, error)
-	sourceOnce    sync.Once
-	sourceErr     error
-	target        companion.Target
-	targetFactory func() (companion.Target, error)
-	targetOnce    sync.Once
-	targetErr     error
+	http             *http.Server
+	address          string
+	database         string
+	ownership        *companion.DatabaseOwnership
+	token            string
+	logger           *slog.Logger
+	now              func() time.Time
+	source           companion.Source
+	sourceFactory    func() (companion.Source, error)
+	sourceOnce       sync.Once
+	sourceErr        error
+	target           companion.Target
+	targetFactory    func() (companion.Target, error)
+	targetOnce       sync.Once
+	targetErr        error
+	operationSlot    chan struct{}
+	operationTimeout time.Duration
 }
 
 type Options struct {
-	Address       string
-	Database      string
-	Source        companion.Source
-	SourceFactory func() (companion.Source, error)
-	Target        companion.Target
-	TargetFactory func() (companion.Target, error)
-	Logger        *slog.Logger
-	Now           func() time.Time
+	Address          string
+	Database         string
+	Source           companion.Source
+	SourceFactory    func() (companion.Source, error)
+	Target           companion.Target
+	TargetFactory    func() (companion.Target, error)
+	Logger           *slog.Logger
+	Now              func() time.Time
+	operationTimeout time.Duration
 }
 
 func New(options Options) (*Server, error) {
@@ -90,13 +94,17 @@ func New(options Options) (*Server, error) {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
+	if options.operationTimeout <= 0 {
+		options.operationTimeout = defaultOperationTimeout
+	}
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return nil, fmt.Errorf("cannot initialize request protection")
 	}
 	s := &Server{address: options.Address, database: options.Database, token: base64.RawURLEncoding.EncodeToString(tokenBytes),
 		logger: options.Logger, now: options.Now, source: options.Source, sourceFactory: options.SourceFactory,
-		target: options.Target, targetFactory: options.TargetFactory}
+		target: options.Target, targetFactory: options.TargetFactory,
+		operationSlot: make(chan struct{}, 1), operationTimeout: options.operationTimeout}
 	router := chi.NewRouter()
 	router.Use(requestRouteLogAttribute)
 	ready := []probes.Readiness{{Name: "mapping_database", Check: func(r *http.Request) error {
@@ -135,6 +143,16 @@ func New(options Options) (*Server, error) {
 		ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second,
 	}
 	return s, nil
+}
+
+func (s *Server) admit(parent context.Context) (context.Context, func(), bool) {
+	select {
+	case s.operationSlot <- struct{}{}:
+	default:
+		return nil, nil, false
+	}
+	ctx, cancel := context.WithTimeout(parent, s.operationTimeout)
+	return ctx, func() { cancel(); <-s.operationSlot }, true
 }
 
 func (s *Server) pendingSource() (companion.Source, error) {
@@ -273,13 +291,36 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid pending query", http.StatusBadRequest)
 			return
 		}
+		ctx, release, ok := s.admit(r.Context())
+		if !ok {
+			http.Error(w, "provider operation busy", http.StatusServiceUnavailable)
+			return
+		}
+		defer release()
 		source, err := s.pendingSource()
 		if err != nil {
 			http.Error(w, "provider unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		report, err := companion.PendingWorklistOwned(r.Context(), source, s.database, opts, s.ownership)
+		report, err := companion.PendingWorklistOwned(ctx, source, s.database, opts, s.ownership)
+		if report.Books == nil {
+			report.Books = []companion.PendingBook{}
+		}
+		if report.Issues == nil {
+			report.Issues = []companion.PendingIssue{}
+		}
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				report.Complete = false
+				code := "operation_canceled"
+				status := http.StatusGatewayTimeout
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					code = "operation_timeout"
+				}
+				report.Issues = append(report.Issues, companion.PendingIssue{Code: code})
+				writeJSONStatus(w, r, status, report)
+				return
+			}
 			http.Error(w, "pending request failed", http.StatusBadGateway)
 			return
 		}
@@ -301,17 +342,21 @@ func (id *explicitEditionID) UnmarshalJSON(data []byte) error {
 }
 
 type mappingMutation struct {
-	SourceAccount string            `json:"source_account"`
-	BookID        string            `json:"book_id"`
-	TargetAccount string            `json:"target_account"`
-	WorkID        int64             `json:"work_id"`
-	EditionID     explicitEditionID `json:"edition_id"`
+	SourceAccount     string            `json:"source_account"`
+	BookID            string            `json:"book_id"`
+	TargetAccount     string            `json:"target_account"`
+	WorkID            int64             `json:"work_id"`
+	EditionID         explicitEditionID `json:"edition_id"`
+	ExpectedWorkID    explicitEditionID `json:"expected_work_id"`
+	ExpectedEditionID explicitEditionID `json:"expected_edition_id"`
 }
 
 type unlinkMutation struct {
-	SourceAccount string `json:"source_account"`
-	BookID        string `json:"book_id"`
-	TargetAccount string `json:"target_account"`
+	SourceAccount     string            `json:"source_account"`
+	BookID            string            `json:"book_id"`
+	TargetAccount     string            `json:"target_account"`
+	ExpectedWorkID    explicitEditionID `json:"expected_work_id"`
+	ExpectedEditionID explicitEditionID `json:"expected_edition_id"`
 }
 
 func (s *Server) handleJSONMapping(w http.ResponseWriter, r *http.Request, replace bool) {
@@ -340,13 +385,25 @@ func (s *Server) handleJSONMapping(w http.ResponseWriter, r *http.Request, repla
 		return
 	}
 	var request mappingMutation
-	if err := decodeStrictJSON(body, &request); err != nil || !request.EditionID.Present {
+	if err := decodeStrictJSON(body, &request); err != nil || !request.EditionID.Present || (replace && (!request.ExpectedWorkID.Present || !request.ExpectedEditionID.Present || request.ExpectedWorkID.Value <= 0 || request.ExpectedEditionID.Value < 0)) || (!replace && (request.ExpectedWorkID.Present || request.ExpectedEditionID.Present)) {
 		apiError(w, http.StatusBadRequest, "invalid_mapping_request")
 		return
 	}
 	selection := companion.Mapping{Provider: "weread", SourceAccount: request.SourceAccount, BookID: request.BookID,
 		TargetAccount: request.TargetAccount, WorkID: request.WorkID, EditionID: request.EditionID.Value}
-	if err := s.confirmMapping(r.Context(), selection, replace); err != nil {
+	ctx, release, admitted := s.admit(r.Context())
+	if !admitted {
+		apiError(w, http.StatusServiceUnavailable, "provider_operation_busy")
+		return
+	}
+	defer release()
+	var err error
+	if replace {
+		err = s.confirmMappingExpected(ctx, selection, companion.MappingTarget{WorkID: request.ExpectedWorkID.Value, EditionID: request.ExpectedEditionID.Value})
+	} else {
+		err = s.confirmMapping(ctx, selection, false)
+	}
+	if err != nil {
 		status, code := mutationError(err, true)
 		apiError(w, status, code)
 		return
@@ -380,11 +437,11 @@ func (s *Server) handleJSONUnlink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request unlinkMutation
-	if err := decodeStrictJSON(body, &request); err != nil {
+	if err := decodeStrictJSON(body, &request); err != nil || !request.ExpectedWorkID.Present || !request.ExpectedEditionID.Present || request.ExpectedWorkID.Value <= 0 || request.ExpectedEditionID.Value < 0 {
 		apiError(w, http.StatusBadRequest, "invalid_unlink_request")
 		return
 	}
-	if err := s.unlinkMapping(r.Context(), request); err != nil {
+	if err := s.unlinkMappingExpected(r.Context(), request); err != nil {
 		status, code := mutationError(err, false)
 		apiError(w, status, code)
 		return
@@ -400,7 +457,11 @@ func (s *Server) handleFormMapping(w http.ResponseWriter, r *http.Request, repla
 	if !mutationOriginAllowed(w, r) {
 		return
 	}
-	values, ok := parseStrictForm(w, r, []string{"csrf_token", "source_account", "book_id", "target_account", "work_id", "edition_mode", "edition_id"})
+	allowed := []string{"csrf_token", "source_account", "book_id", "target_account", "work_id", "edition_mode", "edition_id"}
+	if replace {
+		allowed = append(allowed, "expected_work_id", "expected_edition_id")
+	}
+	values, ok := parseStrictForm(w, r, allowed)
 	if !ok {
 		return
 	}
@@ -408,16 +469,35 @@ func (s *Server) handleFormMapping(w http.ResponseWriter, r *http.Request, repla
 		http.Error(w, "request rejected", http.StatusForbidden)
 		return
 	}
+	if replace && !validExpectedForm(values) {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
 	selection, err := mappingFromForm(values)
 	if err != nil {
 		s.renderFormFailure(w, r, http.StatusBadRequest, "The mapping request was invalid.")
 		return
 	}
-	if err := s.confirmMapping(r.Context(), selection, replace); err != nil {
+	ctx, release, admitted := s.admit(r.Context())
+	if !admitted {
+		s.renderFormFailure(w, r, http.StatusServiceUnavailable, "Another provider operation is in progress.")
+		return
+	}
+	defer release()
+	var confirmErr error
+	if replace {
+		confirmErr = s.confirmMappingExpected(ctx, selection, companion.MappingTarget{WorkID: parseFormInt(values.Get("expected_work_id")), EditionID: parseFormInt(values.Get("expected_edition_id"))})
+	} else {
+		confirmErr = s.confirmMapping(ctx, selection, false)
+	}
+	if err := confirmErr; err != nil {
 		status, _ := mutationError(err, true)
 		message := "The source or target selection could not be validated."
+		if errors.Is(err, context.DeadlineExceeded) {
+			message = "Provider validation timed out. Reload mappings before retrying."
+		}
 		if errors.Is(err, companion.ErrMappingConflict) {
-			message = "A mapping already exists; choose Replace for an explicit change."
+			message = "The mapping changed since this page was loaded. Reload mappings and review the current target before trying again."
 		}
 		s.renderFormFailure(w, r, status, message)
 		return
@@ -437,7 +517,7 @@ func (s *Server) handleFormUnlink(w http.ResponseWriter, r *http.Request) {
 	if !mutationOriginAllowed(w, r) {
 		return
 	}
-	values, ok := parseStrictForm(w, r, []string{"csrf_token", "source_account", "book_id", "target_account"})
+	values, ok := parseStrictForm(w, r, []string{"csrf_token", "source_account", "book_id", "target_account", "expected_work_id", "expected_edition_id"})
 	if !ok {
 		return
 	}
@@ -445,10 +525,18 @@ func (s *Server) handleFormUnlink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "request rejected", http.StatusForbidden)
 		return
 	}
-	request := unlinkMutation{SourceAccount: values.Get("source_account"), BookID: values.Get("book_id"), TargetAccount: values.Get("target_account")}
-	if err := s.unlinkMapping(r.Context(), request); err != nil {
+	if !validExpectedForm(values) {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	request := unlinkMutation{SourceAccount: values.Get("source_account"), BookID: values.Get("book_id"), TargetAccount: values.Get("target_account"), ExpectedWorkID: explicitEditionID{Value: parseFormInt(values.Get("expected_work_id")), Present: true}, ExpectedEditionID: explicitEditionID{Value: parseFormInt(values.Get("expected_edition_id")), Present: true}}
+	if err := s.unlinkMappingExpected(r.Context(), request); err != nil {
 		status, _ := mutationError(err, false)
-		s.renderFormFailure(w, r, status, "The mapping could not be unlinked.")
+		message := "The mapping could not be unlinked."
+		if errors.Is(err, companion.ErrMappingConflict) {
+			message = "The mapping changed since this page was loaded. Reload mappings and review the current target before trying again."
+		}
+		s.renderFormFailure(w, r, status, message)
 		return
 	}
 	http.Redirect(w, r, "/?notice=unlinked", http.StatusSeeOther)
@@ -466,13 +554,26 @@ func (s *Server) confirmMapping(ctx context.Context, selection companion.Mapping
 	return companion.ConfirmLinkOwned(ctx, source, target, s.database, selection, replace, s.ownership)
 }
 
-func (s *Server) unlinkMapping(ctx context.Context, request unlinkMutation) error {
+func (s *Server) confirmMappingExpected(ctx context.Context, selection companion.Mapping, expected companion.MappingTarget) error {
+	source, err := s.pendingSource()
+	if err != nil {
+		return errProviderUnavailable
+	}
+	target, err := s.confirmationTarget()
+	if err != nil {
+		return errProviderUnavailable
+	}
+	return companion.ConfirmLinkExpectedOwned(ctx, source, target, s.database, selection, expected, s.ownership)
+}
+
+func (s *Server) unlinkMappingExpected(ctx context.Context, request unlinkMutation) error {
 	store, err := companion.OpenOwnedStore(s.database, s.ownership)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
-	return store.Unlink(ctx, "weread", request.SourceAccount, request.BookID, request.TargetAccount)
+	return store.UnlinkExpected(ctx, "weread", request.SourceAccount, request.BookID, request.TargetAccount,
+		companion.MappingTarget{WorkID: request.ExpectedWorkID.Value, EditionID: request.ExpectedEditionID.Value})
 }
 
 func mutationError(err error, confirming bool) (int, string) {
@@ -481,6 +582,8 @@ func mutationError(err error, confirming bool) (int, string) {
 		return http.StatusBadRequest, "invalid_mapping"
 	case errors.Is(err, companion.ErrMappingConflict):
 		return http.StatusConflict, "mapping_conflict"
+	case errors.Is(err, context.DeadlineExceeded):
+		return http.StatusGatewayTimeout, "provider_operation_timeout"
 	case errors.Is(err, errProviderUnavailable):
 		return http.StatusServiceUnavailable, "provider_unavailable"
 	case errors.Is(err, companion.ErrDatabaseOwned), errors.Is(err, companion.ErrOwnershipUnsupported):
@@ -521,7 +624,11 @@ func writeJSONStatus(w http.ResponseWriter, r *http.Request, status int, value a
 }
 
 func apiError(w http.ResponseWriter, status int, code string) {
-	writeJSONStatus(w, &http.Request{Method: http.MethodPost}, status, map[string]string{"error": code})
+	body := map[string]string{"error": code}
+	if code == "mapping_conflict" {
+		body["message"] = "Mapping changed since it was displayed; reload mappings and review the current target."
+	}
+	writeJSONStatus(w, &http.Request{Method: http.MethodPost}, status, body)
 }
 
 func mutationOriginAllowed(w http.ResponseWriter, r *http.Request) bool {
@@ -661,6 +768,19 @@ func consumeJSONValue(decoder *json.Decoder) error {
 	}
 	return nil
 }
+
+func validExpectedForm(values url.Values) bool {
+	work, workOK := values["expected_work_id"]
+	edition, editionOK := values["expected_edition_id"]
+	if !workOK || !editionOK || len(work) != 1 || len(edition) != 1 {
+		return false
+	}
+	workID, workErr := strconv.ParseInt(work[0], 10, 64)
+	editionID, editionErr := strconv.ParseInt(edition[0], 10, 64)
+	return workErr == nil && editionErr == nil && workID > 0 && editionID >= 0
+}
+
+func parseFormInt(value string) int64 { id, _ := strconv.ParseInt(value, 10, 64); return id }
 
 func parseStrictForm(w http.ResponseWriter, r *http.Request, allowed []string) (url.Values, bool) {
 	if r.URL.RawQuery != "" {
@@ -811,7 +931,7 @@ func setSecurityHeaders(w http.ResponseWriter) {
 
 func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, error) {
 	for key, values := range query {
-		if key != "account" && key != "target_account" && key != "days" || len(values) != 1 {
+		if key != "account" && key != "target_account" && key != "days" && key != "after" || len(values) != 1 {
 			return companion.PendingOptions{}, fmt.Errorf("invalid query")
 		}
 	}
@@ -827,7 +947,11 @@ func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, 
 	if !companion.ValidLabel(account) || !companion.ValidLabel(target) || days < 1 || days > 36500 {
 		return companion.PendingOptions{}, fmt.Errorf("invalid options")
 	}
-	return companion.PendingOptions{SourceAccount: account, TargetAccount: target, Days: days, Now: now}, nil
+	options := companion.PendingOptions{SourceAccount: account, TargetAccount: target, Days: days, After: query.Get("after"), Now: now}
+	if err := companion.ValidatePendingCursor(options); err != nil {
+		return companion.PendingOptions{}, err
+	}
+	return options, nil
 }
 
 func writeJSON(w http.ResponseWriter, r *http.Request, value any) {

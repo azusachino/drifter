@@ -72,6 +72,43 @@ test('native mapping form submits with same-origin Origin and no page script', a
   expect(scriptRequests).toEqual([]);
 });
 
+test('stale browser tabs cannot replace or unlink a changed mapping', async ({ page, context, request }) => {
+  await page.goto('/');
+  const confirm = page.getByRole('form', { name: 'Confirm a mapping' });
+  await confirm.getByLabel('Source account').fill('synthetic-source');
+  await confirm.getByLabel('Source book ID').fill('125');
+  await confirm.getByLabel('Target account').fill('synthetic-target');
+  await confirm.getByLabel('Target work ID').fill('77');
+  await confirm.getByRole('radio', { name: 'Work only' }).check();
+  await confirm.getByRole('button', { name: 'Confirm mapping' }).click();
+  await expect(page.getByRole('status')).toHaveText('Mapping confirmed.');
+
+  const stale = await context.newPage();
+  const staleUnlink = await context.newPage();
+  await Promise.all([stale.goto('/'), staleUnlink.goto('/')]);
+  await page.getByText('Replace mapping for book 125').click();
+  const currentReplace = page.getByRole('form', { name: 'Replace mapping for book 125' });
+  await currentReplace.getByLabel('New target work ID').fill('88');
+  await currentReplace.getByRole('radio', { name: 'Work only' }).check();
+  await currentReplace.getByRole('button', { name: 'Replace mapping' }).click();
+  await expect(page.getByRole('status')).toHaveText('Mapping replaced.');
+
+  await stale.getByText('Replace mapping for book 125').click();
+  const staleReplace = stale.getByRole('form', { name: 'Replace mapping for book 125' });
+  await staleReplace.getByLabel('New target work ID').fill('99');
+  await staleReplace.getByRole('radio', { name: 'Work only' }).check();
+  await staleReplace.getByRole('button', { name: 'Replace mapping' }).click();
+  await expect(stale.getByText(/mapping changed since this page was loaded/i)).toBeVisible();
+  let response = await request.get(`${process.env.E2E_BASE_URL}/api/mappings`);
+  expect((await response.json()).find((mapping: { book_id: string }) => mapping.book_id === '125')).toMatchObject({ book_id: '125', work_id: 88 });
+
+  await staleUnlink.getByText('Unlink mapping for book 125').click();
+  await staleUnlink.getByRole('button', { name: 'Unlink this mapping' }).click();
+  await expect(staleUnlink.getByText(/mapping changed since this page was loaded/i)).toBeVisible();
+  response = await request.get(`${process.env.E2E_BASE_URL}/api/mappings`);
+  expect((await response.json()).find((mapping: { book_id: string }) => mapping.book_id === '125')).toMatchObject({ book_id: '125', work_id: 88 });
+});
+
 test('mapping interface remains usable at a narrow viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');

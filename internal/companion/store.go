@@ -28,6 +28,12 @@ var (
 	errCatalogExportLimit = errors.New("catalog export record limit exceeded")
 )
 
+// MappingTarget is the expected target tuple for a guarded mapping mutation.
+type MappingTarget struct {
+	WorkID    int64
+	EditionID int64
+}
+
 type Mapping struct {
 	Provider      string `json:"provider"`
 	SourceAccount string `json:"source_account"`
@@ -145,7 +151,7 @@ func openStore(path string, readOnly bool, owner *DatabaseOwnership) (*Store, er
 	return &Store{db: db, path: path, owner: owner, readOnly: readOnly}, nil
 }
 
-const storeVersion = 1
+const storeVersion = 2
 
 func validateStoreSchema(db *sql.DB) error {
 	var version int
@@ -157,6 +163,13 @@ func validateStoreSchema(db *sql.DB) error {
 	}
 	rows, err := db.Query(`SELECT provider,source_account,book_id,target_account,
 		work_id,edition_id,source_title,source_isbn FROM mappings LIMIT 0`)
+	if err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	rows, err = db.Query(`SELECT provider,source_account,book_id,target_account,kind FROM decisions LIMIT 0`)
 	if err != nil {
 		return err
 	}
@@ -196,6 +209,18 @@ func migrateStore(db *sql.DB) error {
 	}
 	if version == 0 {
 		if _, err := tx.Exec("PRAGMA user_version = 1"); err != nil {
+			return err
+		}
+		version = 1
+	}
+	if version == 1 {
+		if _, err := tx.Exec(`CREATE TABLE decisions (
+			provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+			target_account TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('skip','exclude','not-in-catalog')),
+			PRIMARY KEY(provider, source_account, book_id, target_account))`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 2"); err != nil {
 			return err
 		}
 	}
@@ -251,6 +276,62 @@ func (s *Store) Confirm(ctx context.Context, m Mapping, replace bool) error {
 		return fmt.Errorf("%w; use explicit replacement or unlink it", ErrMappingConflict)
 	}
 	return nil
+}
+
+// ReplaceExpected updates only an existing mapping whose current target matches expected.
+func (s *Store) ReplaceExpected(ctx context.Context, m Mapping, expected MappingTarget) error {
+	if !m.valid() || expected.WorkID <= 0 || expected.EditionID < 0 {
+		return ErrInvalidMapping
+	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return err
+	}
+	defer release()
+	r, err := s.db.ExecContext(ctx, `UPDATE mappings SET work_id=?,edition_id=?,source_title=?,source_isbn=? WHERE provider=? AND source_account=? AND book_id=? AND target_account=? AND work_id=? AND edition_id=?`, m.WorkID, m.EditionID, m.SourceTitle, m.SourceISBN, m.Provider, m.SourceAccount, m.BookID, m.TargetAccount, expected.WorkID, expected.EditionID)
+	if err != nil {
+		return err
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 1 {
+		return nil
+	}
+	return ErrMappingConflict
+}
+
+// UnlinkExpected removes a matching mapping; absence is idempotent, but a newer target conflicts.
+func (s *Store) UnlinkExpected(ctx context.Context, provider, sourceAccount, bookID, targetAccount string, expected MappingTarget) error {
+	if !ValidLabel(provider) || !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) || !ValidBookID(bookID) || expected.WorkID <= 0 || expected.EditionID < 0 {
+		return ErrInvalidMappingKey
+	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return err
+	}
+	defer release()
+	result, err := s.db.ExecContext(ctx, `DELETE FROM mappings WHERE provider=? AND source_account=? AND book_id=? AND target_account=? AND work_id=? AND edition_id=?`, provider, sourceAccount, bookID, targetAccount, expected.WorkID, expected.EditionID)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 1 {
+		return nil
+	}
+	var exists int
+	err = s.db.QueryRowContext(ctx, `SELECT 1 FROM mappings WHERE provider=? AND source_account=? AND book_id=? AND target_account=?`, provider, sourceAccount, bookID, targetAccount).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return ErrMappingConflict
 }
 
 func (s *Store) List(ctx context.Context) ([]Mapping, error) {

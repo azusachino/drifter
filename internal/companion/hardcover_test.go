@@ -87,3 +87,31 @@ func TestValidateEditionMembership(t *testing.T) {
 		t.Fatal("mutation accepted")
 	}
 }
+
+// A review-selected query is an override for title search, not native ISBN evidence.
+func TestMatchSelectedQueryPreservesExactISBNShortCircuit(t *testing.T) {
+	calls := 0
+	target := &Hardcover{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+		calls++
+		var body struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if !strings.Contains(body.Query, "query Exact") {
+			t.Errorf("selected query bypassed ISBN: %s", body.Query)
+		}
+		io.WriteString(rw, `{"data":{"editions":[{"id":88,"book_id":77}]}}`)
+	})}
+	report, err := MatchWithOptions(context.Background(), isbnHintSource{}, target, "42", "Selected original title", MatchOptions{ExpectedAuthor: "Selected author"})
+	if err != nil || calls != 1 || len(report.ExactEditions) != 1 || report.ExactEditions[0].ID != 88 || len(report.Candidates) != 0 || report.SearchQuery != "" || !report.RequiresConfirmation {
+		t.Fatalf("calls=%d report=%+v err=%v", calls, report, err)
+	}
+}
+
+type isbnHintSource struct{ Source }
+
+func (isbnHintSource) Book(context.Context, string) (Book, error) {
+	return Book{ID: "42", Title: "Native title", ISBN: "9780306406157"}, nil
+}
