@@ -463,3 +463,36 @@ silently skip prerequisites, weaken gates or claim status synchronization.
 Before resuming, compare current Git with the code checkpoint and read
 intervening commits; documentation-only commits may follow it. Asobi,
 cross-device coordination, provider writes and PR merge remain outside scope.
+
+### Partial execution checkpoint: E2 acceptance remains open
+
+The isolated `work/pr13-matching-milestone` branch has verified commits through
+A2, B1/B2, C1/C2, D1/D2 and E1. The E2 linking implementation checkpoint is
+`86b6ab8fc0149e8d963369a00b8c7f620be14bea`. The published PR checkout remains
+on its earlier approval checkpoint; these later commits are not integrated or
+published as milestone-complete.
+
+At the pause, three lane files contain preserved, uncommitted E2 corrections:
+`internal/cli/review.go`, `internal/cli/review_test.go` and `docs/cli.md`.
+They add provider-client reuse, unambiguous `work ID` input, Unicode control
+filtering, context-cancellation priority, and two focused regression cases.
+The worker has ended; no background writer owns this checkout. The parent owns
+the recovery handoff pending the owner's execution-route decision.
+
+The worker ran focused uncached CLI/core race tests, `make check`, browser probe,
+full browser tests, changed-Markdown lint and whitespace checks successfully on
+that working diff. This is not proof that all E2 requirements are met: manual
+edition, wrong-membership state preservation, replacement/stale-target cases,
+failed lookup followed by later success, exact factory counts/laziness, provider
+timeouts versus owner input, imported no-link and cancellation/input races still
+need the complete scripted acceptance matrix. An accidental rumdl invocation on
+Go files was invalid; the subsequent proper Markdown-only lint passed.
+
+Two E2 attempts ended with incomplete acceptance rather than an external
+infrastructure blocker. The parent stopped that retry loop and requested an
+owner routing decision; no model or execution mechanism was silently changed.
+F1/F2, G, final integration and updated PR publication have not run. All previous
+accepted components and the three-file partial diff must be preserved. Resume
+by inspecting actual Git, completing E2 acceptance, then following the approved
+F/G and integration gates. Do not repeat completed source work or passing checks
+unless their inputs change, and do not claim the original sync stories complete.
