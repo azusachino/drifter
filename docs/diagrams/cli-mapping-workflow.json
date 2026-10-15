@@ -5,7 +5,7 @@
     "title": "Drifter: core-owned matching workflow",
     "quality_profile": "showcase",
     "output": "docs/diagrams/cli-mapping-workflow.html",
-    "repository": {"url": "git@github.com:azusachino/drifter.git", "revision": "1783d3512f8e4b1b71ecf8cb42313d5765c4b529", "link_mode": "local-only"}
+    "repository": {"url": "git@github.com:azusachino/drifter.git", "revision": "c0f6db97bd2619288e3913ccfa9d25f86314035a", "link_mode": "local-only"}
   },
   "lanes": [
     {"id": "pending", "label": "Pending worklist"},
@@ -13,16 +13,16 @@
     {"id": "confirmation", "label": "Explicit confirmation"}
   ],
   "nodes": [
-    {"id": "pending-cli", "lane": "pending", "col": 0, "type": "frontend", "label": "CLI / HTTP pending", "width": 180, "sublabel": "explicit request only", "sources": [{"path": "cmd/drifter/cli.go", "line": 215, "end_line": 261}, {"path": "internal/httpserver/server.go", "line": 238, "end_line": 268}]},
+    {"id": "pending-cli", "lane": "pending", "col": 0, "type": "frontend", "label": "CLI / HTTP pending", "width": 180, "sublabel": "explicit request only", "sources": [{"path": "internal/cli/cli.go", "line": 215, "end_line": 261}, {"path": "internal/httpserver/server.go", "line": 262, "end_line": 292}]},
     {"id": "worklist", "lane": "pending", "col": 1, "type": "backend", "label": "Core worklist", "width": 160, "sublabel": "read local mappings", "sources": [{"path": "internal/companion/operations.go", "line": 179, "end_line": 205}]},
     {"id": "filter", "lane": "pending", "col": 2, "type": "security", "label": "Shelf filters", "width": 180, "sublabel": "privacy + age + mapped", "sources": [{"path": "internal/companion/pending.go", "line": 103, "end_line": 150}]},
     {"id": "enrich", "lane": "pending", "col": 3, "type": "backend", "label": "WeRead metadata", "width": 160, "sublabel": "eligible only; cap 100", "sources": [{"path": "internal/companion/pending.go", "line": 151, "end_line": 189}]},
-    {"id": "pending-json", "lane": "pending", "col": 4, "type": "frontend", "label": "Worklist JSON", "width": 180, "sublabel": "explicit completeness", "sources": [{"path": "cmd/drifter/cli.go", "line": 215, "end_line": 261}, {"path": "internal/httpserver/server.go", "line": 238, "end_line": 268}]},
-    {"id": "match-cli", "lane": "matching", "col": 0, "type": "frontend", "label": "CLI match", "width": 160, "sublabel": "explicit book ID", "sources": [{"path": "cmd/drifter/cli.go", "line": 174, "end_line": 213}]},
+    {"id": "pending-json", "lane": "pending", "col": 4, "type": "frontend", "label": "Worklist JSON", "width": 180, "sublabel": "explicit completeness", "sources": [{"path": "internal/cli/cli.go", "line": 215, "end_line": 261}, {"path": "internal/httpserver/server.go", "line": 262, "end_line": 292}]},
+    {"id": "match-cli", "lane": "matching", "col": 0, "type": "frontend", "label": "CLI match", "width": 160, "sublabel": "explicit book ID", "sources": [{"path": "internal/cli/cli.go", "line": 174, "end_line": 213}]},
     {"id": "match-core", "lane": "matching", "col": 1, "type": "backend", "label": "Core match", "width": 160, "sublabel": "source + catalog evidence", "sources": [{"path": "internal/companion/operations.go", "line": 49, "end_line": 126}]},
     {"id": "catalog", "lane": "matching", "col": 2, "type": "cloud", "label": "Hardcover query", "width": 180, "sublabel": "ISBN first; title fallback", "sources": [{"path": "internal/companion/hardcover.go", "line": 136, "end_line": 219}]},
     {"id": "candidates", "lane": "matching", "col": 3, "type": "frontend", "label": "Candidates", "width": 160, "sublabel": "never auto-linked", "sources": [{"path": "internal/companion/hardcover.go", "line": 136, "end_line": 175}]},
-    {"id": "link-cli", "lane": "confirmation", "col": 0, "type": "frontend", "label": "Owner: CLI / HTTP", "width": 180, "sublabel": "explicit target IDs", "sources": [{"path": "cmd/drifter/cli.go", "line": 263, "end_line": 314}, {"path": "internal/httpserver/server.go", "line": 293, "end_line": 331}]},
+    {"id": "link-cli", "lane": "confirmation", "col": 0, "type": "frontend", "label": "Owner: CLI / HTTP", "width": 180, "sublabel": "explicit target IDs", "sources": [{"path": "internal/cli/cli.go", "line": 263, "end_line": 314}, {"path": "internal/httpserver/server.go", "line": 317, "end_line": 355}]},
     {"id": "confirm", "lane": "confirmation", "col": 1, "type": "backend", "label": "Core confirmation", "width": 160, "sublabel": "source + target checks", "sources": [{"path": "internal/companion/operations.go", "line": 131, "end_line": 175}]},
     {"id": "membership", "lane": "confirmation", "col": 2, "type": "security", "label": "Membership gate", "width": 160, "sublabel": "work + optional edition", "sources": [{"path": "internal/companion/hardcover.go", "line": 221, "end_line": 250}]},
     {"id": "store", "lane": "confirmation", "col": 3, "type": "database", "label": "Private SQLite", "width": 180, "sublabel": "guarded local writes", "sources": [{"path": "internal/companion/store.go", "line": 166, "end_line": 252}, {"path": "internal/companion/ownership.go", "line": 162, "end_line": 188}]}
