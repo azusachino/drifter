@@ -700,13 +700,14 @@ func TestMappingMutationHTTPUsesCoreValidationAndOwnedStore(t *testing.T) {
 	if status := post("/api/mappings/confirm", mappingBody("src", "123", "dst", 8, 0)); status != http.StatusConflict {
 		t.Fatalf("conflicting confirmation status=%d", status)
 	}
-	if status := post("/api/mappings/replace", mappingBody("src", "123", "dst", 8, 11)); status != http.StatusOK {
+	replacement := `{"source_account":"src","book_id":"123","target_account":"dst","work_id":8,"edition_id":11,"expected_work_id":7,"expected_edition_id":0}`
+	if status := post("/api/mappings/replace", replacement); status != http.StatusOK {
 		t.Fatalf("explicit replacement status=%d", status)
 	}
 	if status := post("/api/mappings/confirm", mappingBody("src", "456", "other", 9, 0)); status != http.StatusOK {
 		t.Fatalf("second scoped confirmation status=%d", status)
 	}
-	unlink := `{"source_account":"src","book_id":"123","target_account":"dst"}`
+	unlink := `{"source_account":"src","book_id":"123","target_account":"dst","expected_work_id":8,"expected_edition_id":11}`
 	if response := request(t, base, http.MethodDelete, "/api/mappings/unlink", mutationHeaders(base, token), strings.NewReader(unlink)); response.StatusCode != http.StatusOK {
 		t.Fatalf("unlink status=%d", response.StatusCode)
 	}
@@ -741,6 +742,8 @@ func TestNativeMappingFormsUseExplicitCoreActions(t *testing.T) {
 	if mappings := listHTTPMappings(t, base); len(mappings) != 1 || mappings[0].WorkID != 7 || mappings[0].EditionID != 8 {
 		t.Fatalf("form confirmation did not persist explicit edition: %+v", mappings)
 	}
+	selection.Set("expected_work_id", "7")
+	selection.Set("expected_edition_id", "8")
 	selection.Set("work_id", "9")
 	selection.Set("edition_id", "10")
 	response = postForm("/mappings/replace", selection)
@@ -750,7 +753,7 @@ func TestNativeMappingFormsUseExplicitCoreActions(t *testing.T) {
 	if mappings := listHTTPMappings(t, base); len(mappings) != 1 || mappings[0].WorkID != 9 || mappings[0].EditionID != 10 {
 		t.Fatalf("form replacement did not persist: %+v", mappings)
 	}
-	unlink := url.Values{"csrf_token": {token}, "source_account": {"src"}, "book_id": {"123"}, "target_account": {"dst"}}
+	unlink := url.Values{"csrf_token": {token}, "source_account": {"src"}, "book_id": {"123"}, "target_account": {"dst"}, "expected_work_id": {"9"}, "expected_edition_id": {"10"}}
 	response = postForm("/mappings/unlink", unlink)
 	if response.StatusCode != http.StatusOK || len(listHTTPMappings(t, base)) != 0 {
 		t.Fatalf("form unlink status=%d", response.StatusCode)

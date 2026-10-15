@@ -293,19 +293,26 @@ func (s *Store) UnlinkExpected(ctx context.Context, provider, sourceAccount, boo
 		return err
 	}
 	defer release()
-	var work, edition int64
-	err = s.db.QueryRowContext(ctx, `SELECT work_id,edition_id FROM mappings WHERE provider=? AND source_account=? AND book_id=? AND target_account=?`, provider, sourceAccount, bookID, targetAccount).Scan(&work, &edition)
+	result, err := s.db.ExecContext(ctx, `DELETE FROM mappings WHERE provider=? AND source_account=? AND book_id=? AND target_account=? AND work_id=? AND edition_id=?`, provider, sourceAccount, bookID, targetAccount, expected.WorkID, expected.EditionID)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 1 {
+		return nil
+	}
+	var exists int
+	err = s.db.QueryRowContext(ctx, `SELECT 1 FROM mappings WHERE provider=? AND source_account=? AND book_id=? AND target_account=?`, provider, sourceAccount, bookID, targetAccount).Scan(&exists)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if work != expected.WorkID || edition != expected.EditionID {
-		return ErrMappingConflict
-	}
-	_, err = s.db.ExecContext(ctx, `DELETE FROM mappings WHERE provider=? AND source_account=? AND book_id=? AND target_account=? AND work_id=? AND edition_id=?`, provider, sourceAccount, bookID, targetAccount, expected.WorkID, expected.EditionID)
-	return err
+	return ErrMappingConflict
 }
 
 func (s *Store) List(ctx context.Context) ([]Mapping, error) {

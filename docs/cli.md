@@ -128,10 +128,16 @@ the protected `/api/csrf` response or the `/` page's
 POST JSON fields `source_account`, `book_id`, `target_account`, `work_id` and
 `edition_id` to `/api/mappings/confirm` or `/api/mappings/replace`. `edition_id`
 is required: use `0` only for a deliberate work-only mapping, or the selected
-positive edition ID. Unlink with DELETE `/api/mappings/unlink` and JSON fields
-`source_account`, `book_id` and `target_account`. Native form posts use the
-bounded URL-encoded `/mappings/confirm`, `/mappings/replace` and
-`/mappings/unlink` routes with the same Origin/Host and hidden-token checks. The
+positive edition ID. Replace additionally requires `expected_work_id` and
+`expected_edition_id`, the currently displayed target tuple (`0` means work-only).
+Confirm rejects these guard fields rather than ignoring them. Unlink with DELETE
+`/api/mappings/unlink` and JSON fields `source_account`, `book_id`,
+`target_account`, `expected_work_id` and `expected_edition_id`. Both guarded
+routes reject missing, null or invalid tuple members before provider work. A
+stale tuple returns HTTP 409; reload mappings and review the current target.
+Native form posts use bounded URL-encoded `/mappings/confirm`,
+`/mappings/replace` and `/mappings/unlink` routes with the same Origin/Host and
+hidden-token checks. Replace and unlink forms carry the displayed old tuple. The
 page uses native forms and loads no JavaScript. Chromium sends the exact
 same-origin Origin with `Referrer-Policy: strict-origin-when-cross-origin`; with
 `no-referrer` it sends `Origin: null`, which is correctly rejected. GET/HEAD
