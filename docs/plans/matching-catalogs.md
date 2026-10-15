@@ -173,20 +173,81 @@ catalog evidence cannot look complete. Successful configured catalogs set
 `catalogs_complete: true`. No configured catalogs omit catalog fields and keep
 today's behavior.
 
-## Initial implementation slice and acceptance
+## Explicit local catalog tools: export and merge
 
-The implemented v1 slice is the schema and runtime validator, bounded
-TOML-selected file/HTTPS loading, and surfacing exact assertions, hints,
-provenance and conflicts through the existing core `Match` operation. It does
-not add a match HTTP route, catalog contribution service, database schema,
-cache, importer command, automatic target search expansion, automatic linking,
-provider write or background work.
+These additions keep schema v1 unchanged and add no HTTP endpoint, provider
+call, mapping creation, persistence, cache, plugin or background work. User
+commands use the `catalog` noun and emit JSON to stdout only; a caller who uses
+shell redirection is responsible for the destination file and its permissions.
+Neither command accepts remote URLs.
+
+`drifter catalog export` requires `--account LABEL`, `--target-account LABEL`,
+`--catalog-id ID`, `--publisher NAME`, `--provenance-source TEXT`, and
+`--provenance-reference TEXT`; `--db PATH` is optional and defaults to the
+usual state database path. It opens the current-schema database through the
+non-creating, non-migrating read-only store path, including while the daemon
+owns the database. It filters mappings by both exact selected labels in the
+query and emits only the WeRead provider source ID, confirmed Hardcover work ID,
+optional edition ID, and the two explicitly supplied public provenance values.
+It excludes account labels, stored titles/ISBNs, progress, timestamps, database
+paths and secrets held in state. Provenance flags are caller-supplied public
+text; callers must not put account aliases, local paths or secrets in them.
+Source IDs are explicitly disclosed: exports are not anonymous. No database is
+created or migrated. An absent database or unsupported schema is an error with
+no output; a current database with no mappings in the selected account pair
+produces a valid empty catalog. If the selected rows exceed v1 output limits,
+export fails without partial output or truncation.
+
+`drifter catalog merge` requires `--catalog-id ID`, `--publisher NAME`, and
+at least two repeated `--input PATH` flags (at most eight). Inputs are local
+JSON files, with relative paths resolved literally against the working
+directory; there is no shell/environment expansion. Repeated lexically
+normalized absolute paths (`filepath.Abs` plus `filepath.Clean`), repeated source
+catalog IDs, or an output ID equal to an input ID are rejected.
+Every input and the final document are validated against the bundled published
+v1 schema and runtime semantic checks. All assertions and hints, including
+conflicting assertions, are retained in input order without deduplication;
+source record provenance is preserved and receives a lineage entry
+`{source:"catalog merge lineage",reference:"<input-catalog-id>/<input-record-id>"}`
+when not already present. If adding lineage would exceed v1's eight-entry
+provenance limit, merge fails instead of truncating. Input paths and subscription
+aliases are never copied into output or exposed in command errors.
+
+Record IDs are unique across both output arrays. The first occurrence in the
+explicit input order keeps its ID (assertions precede hints within one input
+for collision assignment); each later collision receives
+`merge-` plus the full lowercase SHA-256 hex digest of
+`<input-catalog-id>\0<input-record-id>`. If that generated ID is already used,
+append `-2`, `-3`, and so on to the digest in ascending order. This preserves
+the original identity in lineage while providing deterministic output for the
+same ordered inputs. Input order therefore intentionally affects which record
+keeps a colliding original ID and the ordering of records. Repeating the same
+ordered inputs with the same selected output ID and publisher is byte-for-byte
+idempotent. Exact repeated input paths and duplicate input catalog IDs are
+rejected rather than duplicated. Output record/byte limits are the v1 schema
+limits; over-limit results fail atomically, with no partial stdout and no
+truncation. Merge is offline, reads no database and contacts no provider.
+
+Any need to change a v1 field or meaning, including lineage representation,
+requires a separate schema-evolution decision and a new versioned schema; these
+commands do not modify the existing filename, `$id`, or version compatibility.
+
+## Implementation slice and acceptance
+
+The existing v1 slice provides schema validation, bounded TOML-selected
+file/HTTPS loading, and exact assertion, hint, provenance and conflict
+surfacing through core `Match`. The approved extension adds only the local
+export/merge operations described above. It does not add a match HTTP route,
+catalog contribution service, database schema, cache, automatic target search
+expansion, automatic linking, provider write or background work.
 
 Acceptance tests use the approved seams only:
 
 | Seam | Required evidence |
 | --- | --- |
-| CLI | `match --config` loads an explicitly selected local catalog; empty config preserves legacy output; malformed/unavailable sources print incomplete JSON and exit nonzero before leaking source URLs or content. |
+| CLI | `match --config` loads an explicitly selected local catalog; empty config preserves legacy output; malformed/unavailable sources print incomplete JSON and exit nonzero before leaking source URLs or content. `catalog export` proves required explicit selection, safe output, empty/no-state behavior and no provider construction; `catalog merge` proves local-only atomic validated output and sanitized errors. |
+| Export core/store | Exact two-label SQL filtering selects only provider/source/work/edition columns; export under daemon ownership is read-only; existing empty state emits an empty catalog, absent or unsupported state is rejected without create/migration; personal metadata is absent. |
+| Merge core | Input order, duplicate paths/IDs, original lineage, assertions/hints/conflicts, deterministic collision IDs, byte-for-byte idempotency, provenance overflow, malformed and oversized input, final-output limits and no partial output are covered. |
 | HTTP | Existing Host/Origin/CSRF, strict JSON, read-only route and provider-laziness tests remain green; `TestRootRendersMappingInterface` confirms `/api/match` remains 404 without provider calls. The server has no catalog loader; no fetch occurs on `/`, `/api/mappings`, `/readyz` or pending. Any later HTTP match route must call the shared core operation. |
 | Browser | Existing synthetic browser journeys remain unchanged; no catalog-fetch UI or browser trust decision is added in this slice. |
 | Shared core | Synthetic source/target and catalog snapshots prove exact provider-ID lookup, separated assertions/hints, all alternatives on conflicts, `RequiresConfirmation`, no store mutation and no provider write. |
@@ -215,6 +276,15 @@ not a claim that the prior Chi refactor was developed test-first:
   'TestCLIMatchLoadsExplicitLocalCatalogThroughCore|TestCLIMatchReportsIncompleteCatalogAndPreservesProviderResult|TestCLIInvalidCatalogConfigurationPrecedesProviderConstruction'`
   failed because `match --config` was not accepted; it now passes with core-owned
   loading and report-then-nonzero incomplete behavior.
+- Merge: the new `TestMergeLocal` suite first failed to build because the
+  document encoder and merge API did not exist; after implementing those shared
+  catalog operations, `mise exec -- go test ./internal/matchingcatalog
+  -run TestMergeLocal -count=1` passes, including deterministic ID collisions,
+  provenance overflow and input/output size failures.
+- Export and CLI tools: `mise exec -- go test -race
+  ./internal/matchingcatalog ./internal/companion ./cmd/drifter` passes the
+  account-filtered, read-only export, privacy, no-state/empty-state, CLI
+  no-provider and atomic-output regressions.
 
 Validation completed on mise-managed Go 1.27.2:
 
@@ -233,6 +303,12 @@ Validation completed on mise-managed Go 1.27.2:
 - Loader, config, shared-core and CLI red-green commands above passed after the
   implementation; the HTTP suite verifies `/api/match` remains absent and all
   existing security/lifecycle behavior remains green.
+- `mise exec -- make check` passed again after adding export/merge, including
+  gofmt verification, vet, module verification, full race tests and CLI build.
+- `mise exec -- rumdl check README.md docs/architecture.md docs/cli.md
+  docs/plans/matching-worklist.md docs/plans/matching-catalogs.md` passed.
+- `mise exec -- make e2e-probe ROUTE=/` passed, and `mise exec -- make e2e`
+  passed all three existing browser journeys.
 - Final diff check passed with no staged files. The parent-owned workflow diagram
   was intentionally not edited; its existing CLI-only scope remains accurate.
 

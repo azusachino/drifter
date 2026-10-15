@@ -121,8 +121,8 @@ func TestLoaderEnforcesCombinedRecordBudgetAcrossInvalidDocuments(t *testing.T) 
 		builder.WriteString(`],"hints":[]}`)
 		return builder.String()
 	}
-	first := strings.Replace(large(0, 5000), `"catalog_schema_version":1`, `"catalog_schema_version":9`, 1)
-	second := strings.Replace(large(5000, 5000), `"catalog_schema_version":1`, `"catalog_schema_version":9`, 1)
+	first := strings.Replace(large(0, matchingcatalog.MaxRecordsPerCatalog), `"catalog_schema_version":1`, `"catalog_schema_version":9`, 1)
+	second := strings.Replace(large(matchingcatalog.MaxRecordsPerCatalog, matchingcatalog.MaxRecordsPerCatalog), `"catalog_schema_version":1`, `"catalog_schema_version":9`, 1)
 	third := `{"catalog_schema_version":1,"catalog_id":"invalid.catalog","publisher":"fixture","assertions":[` + record + `],"hints":[]}`
 	contents := []string{first, second, third}
 	subscriptions := make([]matchingcatalog.Subscription, len(contents))

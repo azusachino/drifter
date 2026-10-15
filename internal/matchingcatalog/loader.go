@@ -28,7 +28,8 @@ const (
 	maxCatalogs          = 8
 	maxDocumentBytes     = int64(1 << 20)
 	maxTotalCatalogBytes = int64(4 << 20)
-	maxRecordsPerCatalog = 5000
+	// MaxRecordsPerCatalog is the published v1 per-document record limit.
+	MaxRecordsPerCatalog = 5000
 	maxRecordsTotal      = 10000
 	maxJSONDepth         = 64
 	perFetchTimeout      = 5 * time.Second
@@ -586,7 +587,7 @@ func decodeJSONValue(decoder *json.Decoder, depth int, root, recordArray bool, p
 			if recordArray {
 				(*perCatalogRecords)++
 				(*totalRecords)++
-				if *perCatalogRecords > maxRecordsPerCatalog || *totalRecords > maxRecordsTotal {
+				if *perCatalogRecords > MaxRecordsPerCatalog || *totalRecords > maxRecordsTotal {
 					return nil, errRecordLimit
 				}
 			}

@@ -15,10 +15,12 @@ historical; it is not overwritten. The owner replaced the earlier single-file
 [community catalog contract](matching-catalogs.md). Parent approved the
 bounded schema/loader/core/CLI slice under the existing owner authorization;
 that slice is implemented and passed its owning gates on this branch. It does
-not authorize catalog authoring or any deferred behavior. Only
-explicit owner selection may create a local mapping. No LLM calls, new
-credentials, automatic linking, remote status writes, catalog
-authoring/contribution service, HTTP server work (#6),
+not authorize automatic linking or any deferred behavior. Only
+explicit owner selection may create a local mapping. The parent-approved local
+catalog export/merge extension is recorded as delivery 6 and is limited to the
+privacy, provenance and collision contract in
+[matching-catalogs.md](matching-catalogs.md). No LLM calls, new credentials,
+remote status writes, catalog contribution service, HTTP server work (#6),
 deployment or whole-backlog bootstrap enters this scope. No agent reviewer or
 coordination service is needed for this planning pass. Pi-subagents may be
 used if agent review is actually needed; no delegation has occurred. Continue in
@@ -82,7 +84,10 @@ for this plan.
   provenance, and conflict reporting. The core match report surfaces untrusted
   evidence without selecting a target or silently replacing `--query`. Preserve
   the uncalibrated-confidence rule if later work uses hints for ranking:
-  confidence never filters, ranks or authorizes a link.
+  confidence never filters, ranks or authorizes a link. Delivery 6 extends this
+  with explicit local export and offline merge only; its user story and exact
+  flags, selection, privacy exclusions, lineage and collision rules are in the
+  catalog contract before implementation.
 - **Ranking:** stable partition by normalized contributor-name equality
   (trim, collapse whitespace, case-fold), not transliteration or fuzzy scores.
   Keep the same candidate IDs and preserve provider order within both groups.
@@ -217,6 +222,41 @@ replacement, manual target ID entry, separate edition choice, failure in the
 middle of a batch with later successes and nonzero exit, rerun, restart and
 cancellation; focused core/CLI race tests, then `make check`.
 
+### 6. Export and merge community catalogs locally
+
+**Outcome:** `catalog export` creates a deliberately public, account-scoped v1
+catalog from confirmed local mappings; `catalog merge` combines only explicitly
+named local documents into a new v1 catalog. Both write JSON to stdout and make
+no provider requests. This is not anonymous sharing: export discloses selected
+WeRead source IDs.
+
+**Acceptance:** export requires exact source/target account labels, catalog ID,
+publisher, provenance source/reference and accepts optional `--db`. The query
+filters both labels and selects only source IDs and confirmed Hardcover work /
+optional edition; no account labels, stored title/ISBN, progress, timestamps,
+paths or secrets enter output. It uses read-only current-schema store access,
+creates/migrates no database, errors without output for absent/unsupported
+state, and emits an empty valid catalog for an existing DB with no selected
+rows. Merge requires a new ID and publisher plus 2–8 repeated local `--input`
+paths, validates inputs and final bytes against bundled v1, preserves all
+assertions/hints/conflicts/provenance and source identity, adds lineage without
+truncation, and never mutates state. Exact repeated paths, duplicate source
+catalog IDs and output/source ID collision fail atomically. Record-ID collision
+is resolved deterministically in input order by retaining the first ID and
+SHA-256-reidentifying later collisions; same ordered inputs and metadata produce
+identical output. Output budget/schema failures reject the complete result. No
+schema evolution is included.
+
+**Likely paths:** `internal/matchingcatalog`, `internal/companion`,
+`cmd/drifter`, their tests, README, CLI/architecture docs, this contract and the
+story-test map.
+**Dependency:** implemented v1 catalog contract and read-only current-schema
+store.
+**Verification:** CLI tests prove exact selection/privacy exclusions, no-state
+and empty behavior, no provider calls, atomic malformed/over-limit merge,
+lineage and collision/idempotency behavior. Run focused race tests, then
+`make check`, changed-Markdown lint and existing browser probe/E2E.
+
 ## Coverage and approval
 
 Every slice retains synthetic HTTP/temp SQLite tests, privacy-safe error handling
@@ -226,11 +266,11 @@ validation and per-book failure recovery in 5; legacy/future database safety in
 1 and 4. Full `make check` means formatting, vet, module verification,
 race-enabled tests and CLI build, not a reduced substitute.
 
-The owner confirmed the behavior and authorized updating this plan, not starting
-code or merging PRs. Keep #7 open until all its criteria pass. Each PR records
-its actual revision, commands/results and remaining criteria; no delivery claims
-for later slices. After implementation approval and the evidence prerequisite,
-use successive slice branches, starting with schema versioning, rather than one
-large `feat/matching-worklist` branch. Review the outstanding evidence PR before
-requesting its merge. No continuing handoff is needed during this same-session,
-same-device work unless explicitly requested.
+The owner-confirmed worklist behavior and parent-approved catalog extension
+remain separate delivery scopes. This approval covers only delivery 6 and does
+not authorize the deferred worklist review UI, HTTP changes, provider writes or
+schema evolution. Keep #7 open until all its criteria pass. Each PR records its
+actual revision, commands/results and remaining criteria; do not claim later
+deliveries. Parent review is required before PR12 publication. No continuing
+handoff is needed during this same-session, same-device work unless explicitly
+requested.

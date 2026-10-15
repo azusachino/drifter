@@ -19,7 +19,8 @@ implemented.
 | Mapping store and ownership | `internal/companion/store.go`, `ownership*.go` | Versioned SQLite, private-file validation, schema initialization, confirmed mappings, sidecar process lock and owned-operation lifetime. |
 | Local HTTP server | `internal/httpserver` | Foreground listener, server-rendered mapping interface, request boundary, read routes and explicit mapping mutations through shared core. |
 | Configuration | `internal/config` | Settings-only TOML with full validation, unknown-key rejection and refusal of credential-like settings. |
-| Matching catalogs | `internal/matchingcatalog`, called by `internal/companion` | Bounded, request-triggered local/HTTPS loading, v1 schema validation and untrusted evidence for shared matching. |
+| Matching catalogs | `internal/matchingcatalog`, called by `internal/companion` | Bounded, request-triggered local/HTTPS loading, v1 schema validation, untrusted match evidence, offline local merge and validated output encoding. |
+| Catalog export | `internal/companion/catalog_export.go`, `cmd/drifter/catalog.go` | Read-only account-filtered projection of confirmed mappings to public v1 assertions; no database creation/migration or provider calls. |
 | Logging and probes | `internal/logging`, `internal/probes` | JSON `slog` output and local `/healthz`/`/readyz` checks. |
 
 ## Domain and authority
@@ -63,9 +64,14 @@ HTTP request ──────┘                  │
 Matching performs bounded exact-edition lookup first, then bounded candidate
 search; configured catalogs load only during the shared core `Match` operation
 and return separate, untrusted assertions and hints. They do not alter provider
-search or confirmation. Pending reads use WeRead and SQLite only. The local page
-and mapping list read SQLite only; provider construction is lazy and shared by
-each server instance.
+search or confirmation. `catalog export` uses a current-schema SQLite read-only
+query filtered by both explicitly supplied account labels and selects only the
+catalog-eligible identity columns; it never creates or migrates state. The
+standalone `catalog merge` operation loads only explicitly named local documents
+through the shared bounded loader and validates the complete output against the
+bundled v1 schema. Neither command contacts providers or mutates personal state.
+Pending reads use WeRead and SQLite only. The local page and mapping list read
+SQLite only; provider construction is lazy and shared by each server instance.
 
 ## CLI and HTTP interfaces
 
@@ -155,8 +161,9 @@ lease, but does not migrate it.
 `config.toml` contains validated settings (log level, probe address, HTTP
 listener address, optional database path and explicit matching catalog sources),
 never secrets. Missing settings use defaults; unknown keys and credential-like
-keys fail closed. Catalog files/URLs are literal and load only during `match`.
-Changes apply at process startup, not live reload. Credentials come from
+keys fail closed. Subscribed catalog files/URLs are literal and load only during
+`match`; export/merge are separately explicit offline CLI operations. Changes
+apply at process startup, not live reload. Credentials come from
 `WEREAD_API_KEY` and `HARDCOVER_API_KEY` in the invoking process environment.
 Provider endpoints are fixed HTTPS URLs. The clients reject redirects, bound
 response size and timeout, pace their own calls, and do not automatically

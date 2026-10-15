@@ -204,6 +204,71 @@ the whole catalog. Every result requires owner confirmation. Catalog claims are
 shown separately and do not alter provider search, automatic English-edition
 substitution or confirmation.
 
+### Local catalog export and merge
+
+Both commands emit one validated v1 JSON document to stdout and accept no output
+file option. If using shell redirection, protect the destination and any backups
+yourself.
+
+Export only a deliberately selected account pair:
+
+```sh
+bin/drifter catalog export \
+  --account my-weread --target-account my-hardcover \
+  --catalog-id my-crosswalk --publisher 'My community project' \
+  --provenance-source 'public mapping review' \
+  --provenance-reference 'https://example.org/mappings' \
+  [--db /private/path/mappings.sqlite] > catalog.json
+```
+
+All shown selection and attribution values are required except `--db`, which
+uses the usual state path by default. Account labels are used only to filter the
+read-only SQLite query; they, stored source titles/ISBNs, progress, timestamps,
+local paths and secrets are not exported. The document contains the selected
+WeRead provider source IDs, confirmed Hardcover work IDs and optional edition
+IDs, plus the explicitly supplied provenance. Source IDs are disclosed, so an
+export is **not anonymous**. Provenance is caller-supplied public text; do not
+put account aliases, local paths or secrets in it. Export creates or migrates
+no database and works through a current schema read-only handle while `serve`
+owns the database. An absent database or
+unsupported schema is an error with no output; an existing database with no
+mappings in the selected account pair emits a valid empty catalog. More than
+v1's record limit or an output exceeding its byte limit fails without partial
+output or truncation. No providers are contacted.
+
+Merge two to eight explicitly named local documents offline:
+
+```sh
+bin/drifter catalog merge --catalog-id combined \
+  --publisher 'Selected publisher' --input examples/first.json \
+  --input /private/catalogs/second.json > combined.json
+```
+
+Repeat `--input` for each file; relative paths are literal and resolved from the
+current working directory, with no shell/environment expansion. Exact repeated
+lexically normalized absolute paths, duplicate input `catalog_id` values, and
+an output ID equal to an input ID fail. Inputs and final bytes are validated
+against the bundled v1 schema. Assertions and hints (including conflicting
+claims) and existing provenance are preserved without deduplication. Each
+record receives a lineage entry for its original catalog and record ID; if v1's
+eight-entry provenance
+limit would be exceeded, the whole merge fails rather than dropping data. Input
+paths and account aliases are never placed in the result or command errors.
+
+Record IDs are globally unique across both arrays. In explicit input order, the
+first occurrence keeps its ID and each later collision receives `merge-` plus
+the full lowercase SHA-256 of `<input-catalog-id>\0<input-record-id>`; an
+already-used generated value receives `-2`, `-3`, etc. Assertions are visited
+before hints within each input document for collision assignment. Thus input
+order determines which collision keeps the original ID, but the same ordered
+inputs and output metadata always produce byte-for-byte identical output.
+Repeated paths/catalog IDs are rejected, not duplicated. The merge fails
+atomically with no partial stdout if any input is malformed/oversized or the
+combined document exceeds v1 limits; records are never silently truncated.
+Merge reads no database, makes no network/provider requests and mutates no
+personal state. See the [catalog contract](plans/matching-catalogs.md) for the
+exact lineage and schema-evolution boundary.
+
 ## Pending matching worklist
 
 `pending` lists recently opened **ebooks**, not albums, article collections or
@@ -275,9 +340,10 @@ Default database:
   absolute path.
 - Otherwise `$HOME/.local/state/drifter/mappings.sqlite`.
 
-Use `--db PATH` on `link`, `links` or `unlink` to override it. Local listing may
-initialize an empty database. New application directories are mode 700 and the
-database must be a regular, non-symlink mode-600 file. The daemon also leaves a
+Use `--db PATH` on `link`, `links`, `unlink` or `catalog export` to override it.
+Local listing may initialize an empty database; catalog export never does. New
+application directories are mode 700 and the database must be a regular,
+non-symlink mode-600 file. The daemon also leaves a
 mode-600 `.owner.lock` sidecar; the kernel releases its lock on process exit,
 but do not remove the file while Drifter is running. Parent-directory symlink
 aliases resolve to the same sidecar, and hard-linked database files are

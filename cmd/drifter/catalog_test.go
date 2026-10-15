@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/azusachino/drifter/internal/companion"
 )
 
 func TestCLIMatchLoadsExplicitLocalCatalogThroughCore(t *testing.T) {
@@ -86,5 +88,74 @@ func TestCLIInvalidCatalogConfigurationPrecedesProviderConstruction(t *testing.T
 	err := run(context.Background(), []string{"match", "--book-id", "42", "--config", configPath}, &out, &stderr, providers)
 	if err == nil || providerCalls != 0 || strings.Contains(err.Error()+out.String()+stderr.String(), "private") {
 		t.Fatalf("invalid catalog configuration reached providers or leaked config: err=%v calls=%d", err, providerCalls)
+	}
+}
+
+func TestCLICatalogExportIsAccountScopedAndDoesNotConstructProviders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mappings.sqlite")
+	store, err := companion.OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping := companion.Mapping{Provider: "weread", SourceAccount: "source-label", BookID: "123", TargetAccount: "target-label", WorkID: 55, EditionID: 66, SourceTitle: "private-title-marker", SourceISBN: "private-isbn-marker"}
+	if err := store.Confirm(context.Background(), mapping, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	err = run(context.Background(), []string{"catalog", "export", "--account", mapping.SourceAccount, "--target-account", mapping.TargetAccount,
+		"--catalog-id", "shared", "--publisher", "public publisher", "--provenance-source", "public source", "--provenance-reference", "public ref", "--db", path}, &out, &stderr, clients{})
+	if err != nil || !json.Valid(out.Bytes()) {
+		t.Fatalf("catalog export failed: %v %s", err, out.String())
+	}
+	for _, private := range []string{mapping.SourceAccount, mapping.TargetAccount, mapping.SourceTitle, mapping.SourceISBN} {
+		if strings.Contains(out.String(), private) {
+			t.Fatalf("export disclosed private value %q", private)
+		}
+	}
+	out.Reset()
+	err = run(context.Background(), []string{"catalog", "export", "--catalog-id", "shared", "--publisher", "publisher", "--provenance-source", "source", "--provenance-reference", "ref", "--db", filepath.Join(t.TempDir(), "absent.sqlite")}, &out, &stderr, clients{})
+	if err == nil || out.Len() != 0 {
+		t.Fatalf("missing state exported partial data: err=%v stdout=%q", err, out.String())
+	}
+}
+
+func TestCLICatalogCommandsRequireExplicitSelections(t *testing.T) {
+	for _, args := range [][]string{
+		{"catalog", "export", "--catalog-id", "shared", "--publisher", "publisher", "--provenance-source", "source", "--provenance-reference", "ref"},
+		{"catalog", "merge", "--catalog-id", "merged", "--publisher", "publisher", "--input", "one.json"},
+	} {
+		var out, stderr bytes.Buffer
+		if err := run(context.Background(), args, &out, &stderr, clients{}); err == nil || out.Len() != 0 {
+			t.Fatalf("catalog command accepted incomplete explicit selection %v: err=%v output=%q", args, err, out.String())
+		}
+	}
+}
+
+func TestCLICatalogMergeWritesOnlyCompleteValidatedOutput(t *testing.T) {
+	dir := t.TempDir()
+	input := `{"catalog_schema_version":1,"catalog_id":"one","publisher":"p","assertions":[],"hints":[]}`
+	first, second := filepath.Join(dir, "one.json"), filepath.Join(dir, "two.json")
+	if err := os.WriteFile(first, []byte(input), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte(strings.Replace(input, `"one"`, `"two"`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	err := run(context.Background(), []string{"catalog", "merge", "--catalog-id", "merged", "--publisher", "chosen", "--input", first, "--input", second}, &out, &stderr, clients{})
+	if err != nil || !json.Valid(out.Bytes()) {
+		t.Fatalf("valid merge failed: %v %s", err, out.String())
+	}
+	out.Reset()
+	bad := filepath.Join(dir, "invalid-private-path.json")
+	if err := os.WriteFile(bad, []byte(`{"broken":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = run(context.Background(), []string{"catalog", "merge", "--catalog-id", "merged", "--publisher", "chosen", "--input", first, "--input", bad}, &out, &stderr, clients{})
+	if err == nil || out.Len() != 0 || strings.Contains(err.Error()+stderr.String(), bad) {
+		t.Fatalf("invalid merge emitted output or exposed local path: err=%v stdout=%q stderr=%q", err, out.String(), stderr.String())
 	}
 }

@@ -39,6 +39,9 @@ Explicit local mappings (never remote status writes):
            [--edition-id ID] [--replace] [--db PATH]
   links    [--db PATH]
   unlink   --book-id ID --account LABEL --target-account LABEL [--db PATH]
+  catalog export --account LABEL --target-account LABEL --catalog-id ID
+                  --publisher NAME --provenance-source TEXT --provenance-reference TEXT [--db PATH]
+  catalog merge --catalog-id ID --publisher NAME --input PATH --input PATH [...]
   serve    [--config PATH] [--db PATH]
 
 Use COMMAND -h for flags. Credentials come from WEREAD_API_KEY and
@@ -66,6 +69,9 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, providers cl
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		_, err := io.WriteString(out, usage)
 		return err
+	}
+	if args[0] == "catalog" {
+		return runCatalog(ctx, args[1:], out, errOut)
 	}
 	command := args[0]
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)

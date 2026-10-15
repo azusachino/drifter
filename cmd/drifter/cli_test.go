@@ -108,7 +108,7 @@ func TestCLIReadCommands(t *testing.T) {
 }
 
 func TestCLIHelpAndInvalidInputsDoNotNeedCredentials(t *testing.T) {
-	for _, args := range [][]string{nil, {"help"}, {"--help"}, {"link", "-h"}, {"inspect", "--help"}} {
+	for _, args := range [][]string{nil, {"help"}, {"--help"}, {"link", "-h"}, {"inspect", "--help"}, {"catalog", "--help"}, {"catalog", "export", "--help"}} {
 		var out, stderr bytes.Buffer
 		if err := run(context.Background(), args, &out, &stderr, clients{}); err != nil {
 			t.Fatal(err)

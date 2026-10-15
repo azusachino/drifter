@@ -19,12 +19,14 @@ implemented.
   hints with provenance; they never select or confirm a mapping.
 - Confirm, explicitly replace, list, and unlink local mappings through the CLI
   or a foreground HTTP server with a local mapping interface.
+- Export explicitly selected confirmed mappings or merge named local community
+  catalogs with the offline `catalog` CLI commands.
 - Keep confirmed mappings in a private, versioned SQLite database shared by
   both interfaces.
 
-The project does not synchronize reading status, add catalog entries, poll in
-background, import Kindle Unlimited books, or deploy a service. See the
-[matching-worklist plan](docs/plans/matching-worklist.md) for later matching
+The project does not synchronize reading status, provide a catalog contribution
+service, poll in background, import Kindle Unlimited books, or deploy a service.
+See the [matching-worklist plan](docs/plans/matching-worklist.md) for later matching
 work and the [HTTP server acceptance map](docs/plans/http-server.md) for the
 current server stories and executable evidence. See the
 [community matching catalog contract](docs/plans/matching-catalogs.md) for
@@ -69,7 +71,24 @@ bin/drifter links
 
 Numbers and account labels above are examples, not captured account data. The
 labels are namespaces you choose, not authenticated provider identities. Always
-review the source and target yourself before confirming a mapping.
+review the source and target yourself before confirming a mapping. Catalog
+exports intentionally disclose selected WeRead source IDs and are not
+anonymous; see the [catalog CLI reference](docs/cli.md#local-catalog-export-and-merge)
+before sharing one. Export requires explicit source/target labels and public
+provenance, and uses read-only current-schema state:
+
+```sh
+bin/drifter catalog export --account my-weread --target-account my-hardcover \
+  --catalog-id my-crosswalk --publisher 'My community project' \
+  --provenance-source 'public review' \
+  --provenance-reference 'https://example.org/ref' \
+  > catalog.json
+```
+
+`bin/drifter catalog merge --catalog-id combined --publisher 'Selected publisher'`
+accepts two or more repeated `--input PATH` local documents. It runs offline and
+preserves evidence without truncation; both commands write JSON to stdout, so
+protect redirected files yourself.
 
 ## Local HTTP server
 

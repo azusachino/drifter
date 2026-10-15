@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/azusachino/drifter/internal/matchingcatalog"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -21,9 +22,10 @@ type Store struct {
 }
 
 var (
-	ErrInvalidMapping    = errors.New("invalid mapping")
-	ErrInvalidMappingKey = errors.New("invalid mapping key")
-	ErrMappingConflict   = errors.New("mapping already exists with different target IDs")
+	ErrInvalidMapping     = errors.New("invalid mapping")
+	ErrInvalidMappingKey  = errors.New("invalid mapping key")
+	ErrMappingConflict    = errors.New("mapping already exists with different target IDs")
+	errCatalogExportLimit = errors.New("catalog export record limit exceeded")
 )
 
 type Mapping struct {
@@ -261,6 +263,31 @@ func (s *Store) List(ctx context.Context) ([]Mapping, error) {
 	for rows.Next() {
 		var m Mapping
 		if err := rows.Scan(&m.Provider, &m.SourceAccount, &m.BookID, &m.TargetAccount, &m.WorkID, &m.EditionID, &m.SourceTitle, &m.SourceISBN); err != nil {
+			return nil, err
+		}
+		result = append(result, m)
+	}
+	return result, rows.Err()
+}
+
+// listCatalogMappings selects only public catalog fields and reads at most one
+// row beyond the shared v1 record limit to detect overflow.
+func (s *Store) listCatalogMappings(ctx context.Context, sourceAccount, targetAccount string) ([]Mapping, error) {
+	limit := matchingcatalog.MaxRecordsPerCatalog
+	rows, err := s.db.QueryContext(ctx, `SELECT provider,book_id,work_id,edition_id
+		FROM mappings WHERE source_account=? AND target_account=?
+		ORDER BY provider,book_id,work_id,edition_id LIMIT ?`, sourceAccount, targetAccount, limit+1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]Mapping, 0, limit)
+	for rows.Next() {
+		if len(result) == limit {
+			return nil, errCatalogExportLimit
+		}
+		var m Mapping
+		if err := rows.Scan(&m.Provider, &m.BookID, &m.WorkID, &m.EditionID); err != nil {
 			return nil, err
 		}
 		result = append(result, m)
