@@ -36,6 +36,9 @@ var errProviderUnavailable = errors.New("provider unavailable")
 //go:embed templates/*.html
 var htmlTemplates embed.FS
 
+//go:embed assets/favicon.svg
+var favicon []byte
+
 type pageData struct {
 	Mappings []companion.Mapping
 	Token    string
@@ -107,6 +110,8 @@ func New(options Options) (*Server, error) {
 	}}}
 	router.Get("/", s.handleRoot)
 	router.Head("/", s.handleRoot)
+	router.Get("/favicon.svg", s.handleFavicon)
+	router.Head("/favicon.svg", s.handleFavicon)
 	router.Method(http.MethodGet, "/healthz", probesHandler("/healthz", ready, options.Logger))
 	router.Method(http.MethodHead, "/healthz", probesHandler("/healthz", ready, options.Logger))
 	router.Method(http.MethodGet, "/readyz", probesHandler("/readyz", ready, options.Logger))
@@ -148,6 +153,25 @@ func (s *Server) confirmationTarget() (companion.Target, error) {
 		}
 	})
 	return s.target, s.targetErr
+}
+
+func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		methodNotAllowed(w, "GET, HEAD")
+		return
+	}
+	if r.URL.RawQuery != "" || !noBody(w, r) {
+		if r.URL.RawQuery != "" {
+			http.Error(w, "unexpected query", http.StatusBadRequest)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Content-Length", strconv.Itoa(len(favicon)))
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(favicon)
+	}
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
@@ -782,7 +806,7 @@ func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
 }
 
 func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, error) {

@@ -173,6 +173,31 @@ func TestRootRendersMappingInterface(t *testing.T) {
 	}
 }
 
+func TestFaviconIsEmbeddedAndHostBoundWithoutProviderCalls(t *testing.T) {
+	now := time.Now()
+	source := &sourceStub{now: now}
+	_, base, _, _ := newTestServer(t, source, filepath.Join(t.TempDir(), "db.sqlite"), now)
+	response := request(t, base, http.MethodGet, "/favicon.svg", nil, nil)
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "image/svg+xml" || !strings.Contains(string(body), "<svg") {
+		t.Fatalf("favicon response status=%d content-type=%q", response.StatusCode, response.Header.Get("Content-Type"))
+	}
+	head := request(t, base, http.MethodHead, "/favicon.svg", nil, nil)
+	if head.StatusCode != http.StatusOK || head.Header.Get("Content-Type") != "image/svg+xml" {
+		t.Fatalf("favicon HEAD status=%d content-type=%q", head.StatusCode, head.Header.Get("Content-Type"))
+	}
+	wrongHost := request(t, base, http.MethodGet, "/favicon.svg", map[string]string{"Host": "attacker.invalid"}, nil)
+	if wrongHost.StatusCode != http.StatusMisdirectedRequest {
+		t.Fatalf("wrong-host favicon status=%d", wrongHost.StatusCode)
+	}
+	if source.calls != 0 || source.bookCalls.Load() != 0 {
+		t.Fatal("favicon request contacted a provider")
+	}
+}
+
 func TestHTTPRequestsLogOnlySanitizedMetadata(t *testing.T) {
 	now := time.Now()
 	var logs bytes.Buffer
@@ -341,7 +366,7 @@ func TestMappingInterfaceReadsWithoutProviderCalls(t *testing.T) {
 	if pageResponse.StatusCode != http.StatusOK || !strings.Contains(string(page), "Request pending books") || source.calls != 0 || source.bookCalls.Load() != 0 || target.calls.Load() != 0 {
 		t.Fatalf("mapping interface status=%d provider calls=%d", pageResponse.StatusCode, source.calls)
 	}
-	if pageResponse.Header.Get("Cache-Control") != "no-store" || pageResponse.Header.Get("X-Frame-Options") != "DENY" || pageResponse.Header.Get("Referrer-Policy") != "strict-origin-when-cross-origin" || !strings.Contains(pageResponse.Header.Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+	if pageResponse.Header.Get("Cache-Control") != "no-store" || pageResponse.Header.Get("X-Frame-Options") != "DENY" || pageResponse.Header.Get("Referrer-Policy") != "strict-origin-when-cross-origin" || !strings.Contains(pageResponse.Header.Get("Content-Security-Policy"), "frame-ancestors 'none'") || !strings.Contains(pageResponse.Header.Get("Content-Security-Policy"), "img-src 'self'") {
 		t.Fatalf("mapping interface missing browser security headers: %v", pageResponse.Header)
 	}
 	mappings := request(t, base, http.MethodGet, "/api/mappings", nil, nil)

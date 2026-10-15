@@ -1,5 +1,7 @@
 # Drifter
 
+![Drifter book mark](docs/branding/brand-mark.svg)
+
 Drifter is a local reading-status companion for **WeRead and Hardcover**. It
 helps you inspect source reading data, review Hardcover candidates, and keep an
 explicit local mapping between a WeRead book and a Hardcover work or edition.
