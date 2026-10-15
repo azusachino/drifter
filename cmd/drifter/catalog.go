@@ -8,18 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func (app *cliApp) catalogCommand() *cobra.Command {
-	command := app.command(&cobra.Command{
-		Use:   "catalog",
-		Short: "Export or merge community catalogs",
-	}, func(cmd *cobra.Command, _ []string) error {
-		return cmd.Help()
-	})
-	command.AddCommand(app.catalogExportCommand(), app.catalogMergeCommand())
-	return command
-}
-
-func (app *cliApp) catalogExportCommand() *cobra.Command {
+func (app *cliApp) exportCommand() *cobra.Command {
 	var account, targetAccount, catalogID, publisher string
 	var provenanceSource, provenanceReference, dbPath string
 	command := &cobra.Command{Use: "export", Short: "Export selected confirmed mappings as a public catalog"}
@@ -56,7 +45,7 @@ func (app *cliApp) catalogExportCommand() *cobra.Command {
 	})
 }
 
-func (app *cliApp) catalogMergeCommand() *cobra.Command {
+func (app *cliApp) mergeCommand() *cobra.Command {
 	var catalogID, publisher string
 	var inputs []string
 	command := &cobra.Command{Use: "merge", Short: "Merge explicitly named local catalogs"}

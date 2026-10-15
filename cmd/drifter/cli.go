@@ -94,7 +94,8 @@ come only from WEREAD_API_KEY and HARDCOVER_API_KEY in the process environment.`
 		app.linkCommand(),
 		app.linksCommand(),
 		app.unlinkCommand(),
-		app.catalogCommand(),
+		app.exportCommand(),
+		app.mergeCommand(),
 		app.serveProbesCommand(),
 		app.serveCommand(),
 	)

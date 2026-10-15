@@ -64,10 +64,10 @@ HTTP request ──────┘                  │
 Matching performs bounded exact-edition lookup first, then bounded candidate
 search; configured catalogs load only during the shared core `Match` operation
 and return separate, untrusted assertions and hints. They do not alter provider
-search or confirmation. `catalog export` uses a current-schema SQLite read-only
+search or confirmation. `export` uses a current-schema SQLite read-only
 query filtered by both explicitly supplied account labels and selects only the
 catalog-eligible identity columns; it never creates or migrates state. The
-standalone `catalog merge` operation loads only explicitly named local documents
+standalone `merge` operation loads only explicitly named local documents
 through the shared bounded loader and validates the complete output against the
 bundled v1 schema. Neither command contacts providers or mutates personal state.
 Pending reads use WeRead and SQLite only. The local page and mapping list read

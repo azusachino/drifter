@@ -78,14 +78,14 @@ before sharing one. Export requires explicit source/target labels and public
 provenance, and uses read-only current-schema state:
 
 ```sh
-bin/drifter catalog export --account my-weread --target-account my-hardcover \
+bin/drifter export --account my-weread --target-account my-hardcover \
   --catalog-id my-crosswalk --publisher 'My community project' \
   --provenance-source 'public review' \
   --provenance-reference 'https://example.org/ref' \
   > catalog.json
 ```
 
-`bin/drifter catalog merge --catalog-id combined --publisher 'Selected publisher'`
+`bin/drifter merge --catalog-id combined --publisher 'Selected publisher'`
 accepts two or more repeated `--input PATH` local documents. It runs offline and
 preserves evidence without truncation; both commands write JSON to stdout, so
 protect redirected files yourself.

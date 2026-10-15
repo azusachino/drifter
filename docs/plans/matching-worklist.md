@@ -17,8 +17,8 @@ bounded schema/loader/core/CLI slice under the existing owner authorization;
 that slice is implemented and passed its owning gates on this branch. It does
 not authorize automatic linking or any deferred behavior. Only
 explicit owner selection may create a local mapping. The parent-approved local
-catalog export/merge extension is recorded as delivery 6 and is limited to the
-privacy, provenance and collision contract in
+export/merge extension for community catalogs is recorded as delivery 6 and is
+limited to the privacy, provenance and collision contract in
 [matching-catalogs.md](matching-catalogs.md). No LLM calls, new credentials,
 remote status writes, catalog contribution service, HTTP server work (#6),
 deployment or whole-backlog bootstrap enters this scope. No agent reviewer or
@@ -224,8 +224,8 @@ cancellation; focused core/CLI race tests, then `make check`.
 
 ### 6. Export and merge community catalogs locally
 
-**Outcome:** `catalog export` creates a deliberately public, account-scoped v1
-catalog from confirmed local mappings; `catalog merge` combines only explicitly
+**Outcome:** `export` creates a deliberately public, account-scoped v1 catalog
+from confirmed local mappings; `merge` combines only explicitly
 named local documents into a new v1 catalog. Both write JSON to stdout and make
 no provider requests. This is not anonymous sharing: export discloses selected
 WeRead source IDs.

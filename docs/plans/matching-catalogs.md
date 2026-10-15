@@ -176,12 +176,12 @@ today's behavior.
 ## Explicit local catalog tools: export and merge
 
 These additions keep schema v1 unchanged and add no HTTP endpoint, provider
-call, mapping creation, persistence, cache, plugin or background work. User
-commands use the `catalog` noun and emit JSON to stdout only; a caller who uses
-shell redirection is responsible for the destination file and its permissions.
+call, mapping creation, persistence, cache, plugin or background work. The root
+`export` and `merge` commands emit JSON to stdout only; a caller who uses shell
+redirection is responsible for the destination file and its permissions.
 Neither command accepts remote URLs.
 
-`drifter catalog export` requires `--account LABEL`, `--target-account LABEL`,
+`drifter export` requires `--account LABEL`, `--target-account LABEL`,
 `--catalog-id ID`, `--publisher NAME`, `--provenance-source TEXT`, and
 `--provenance-reference TEXT`; `--db PATH` is optional and defaults to the
 usual state database path. It opens the current-schema database through the
@@ -198,7 +198,7 @@ no output; a current database with no mappings in the selected account pair
 produces a valid empty catalog. If the selected rows exceed v1 output limits,
 export fails without partial output or truncation.
 
-`drifter catalog merge` requires `--catalog-id ID`, `--publisher NAME`, and
+`drifter merge` requires `--catalog-id ID`, `--publisher NAME`, and
 at least two repeated `--input PATH` flags (at most eight). Inputs are local
 JSON files, with relative paths resolved literally against the working
 directory; there is no shell/environment expansion. Repeated lexically
@@ -250,7 +250,7 @@ Acceptance tests use the approved seams only:
 
 | Seam | Required evidence |
 | --- | --- |
-| CLI | Cobra root/nested help exposes all commands; required-flag, unknown-command and unknown-flag failures are sanitized, produce no side effects, and do not duplicate usage/errors. `match --config` loads an explicitly selected local catalog; empty config preserves legacy output; malformed/unavailable sources print incomplete JSON and exit nonzero before leaking source URLs or content. Settings still use strict `config.Load` TOML, published `matching.catalogs`, existing config precedence and env-only credentials; no Viper binding. `catalog export` proves required explicit selection, safe output, empty/no-state behavior and no provider construction; `catalog merge` proves local-only atomic validated output and sanitized errors. |
+| CLI | Cobra root help lists flat `export` and `merge` commands; nested `catalog` paths fail cleanly with no side effects. Required-flag, unknown-command and unknown-flag failures are sanitized, produce no side effects, and do not duplicate usage/errors. `match --config` loads an explicitly selected local catalog; empty config preserves legacy output; malformed/unavailable sources print incomplete JSON and exit nonzero before leaking source URLs or content. Settings still use strict `config.Load` TOML, published `matching.catalogs`, existing config precedence and env-only credentials; no Viper binding. `export` proves required explicit selection, safe output, empty/no-state behavior and no provider construction; `merge` proves local-only atomic validated output and sanitized errors. |
 | Export core/store | Exact two-label SQL filtering selects only provider/source/work/edition columns; export under daemon ownership is read-only; existing empty state emits an empty catalog, absent or unsupported state is rejected without create/migration; personal metadata is absent. |
 | Merge core | Input order, duplicate paths/IDs, original lineage, assertions/hints/conflicts, deterministic collision IDs, byte-for-byte idempotency, provenance overflow, malformed and oversized input, final-output limits and no partial output are covered. |
 | HTTP | Existing Host/Origin/CSRF, strict JSON, read-only route and provider-laziness tests remain green; `TestRootRendersMappingInterface` confirms `/api/match` remains 404 without provider calls. The server has no catalog loader; no fetch occurs on `/`, `/api/mappings`, `/readyz` or pending. Any later HTTP match route must call the shared core operation. |
@@ -264,7 +264,8 @@ These behavior tests were written against the exported loader/core/CLI
 operations with injected resolver/transport seams. They are implementation tests,
 not a claim that the prior Chi refactor or the current Cobra/package rename was
 developed test-first. The CLI refactor preserves the approved command behavior;
-existing CLI, config, core and server tests are its regression gate.
+existing CLI, config, core and server tests are its regression gate. The later
+flat-command correction below was test-first.
 
 - Loader: its previously recorded red-green phase predates the behavior-preserving
   package rename. That historical phase
@@ -289,6 +290,21 @@ existing CLI, config, core and server tests are its regression gate.
   including deterministic ID collisions, provenance overflow and input/output
   size failures. The original red phase predates the package rename; no new red
   phase is claimed for that rename.
+- Flat CLI command correction: the tests first failed with the grouped help
+  omitting root-level `export`/`merge`, direct `export`/`merge` being rejected,
+  and the removed `catalog` parent still opening the exporter. After root-level
+  registration and parent removal, this test command passes:
+
+  ```sh
+  pattern='TestCLIHelpAndInvalidInputsDoNotNeedCredentials'
+  pattern+='|TestCLIRequiredFlagsFailBeforeSideEffects'
+  pattern+='|TestCLIRemovedCatalogParentFailsWithoutSideEffects'
+  pattern+='|TestCLICatalog'
+  mise exec -- go test ./cmd/drifter -run "$pattern" -count=1
+  ```
+
+  This red-green record is only for the approved flat command correction,
+  not the earlier Cobra/package migration.
 - Export and CLI tools: `mise exec -- go test -race
   ./internal/catalog ./internal/companion ./cmd/drifter` passes the
   account-filtered, read-only export, privacy, no-state/empty-state, CLI

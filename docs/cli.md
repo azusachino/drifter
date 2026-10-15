@@ -33,9 +33,9 @@ or account captures.
 
 ## Command tree and flags
 
-The CLI uses Cobra v1.10.2 for nested commands, flag validation and generated
-help (`drifter --help`, `drifter catalog --help`, and
-`drifter catalog export --help`). The default shell-completion command is
+The CLI uses Cobra v1.10.2 for the flat command tree, flag validation and
+generated help (`drifter --help`, `drifter export --help`, and
+`drifter merge --help`). The default shell-completion command is
 disabled to avoid adding an unrelated command. Required flags are rejected
 before command handlers run. Cobra owns only argument parsing and help; Drifter
 continues to load settings with its strict TOML validator. `match` and `serve`
@@ -226,7 +226,7 @@ yourself.
 Export only a deliberately selected account pair:
 
 ```sh
-bin/drifter catalog export \
+bin/drifter export \
   --account my-weread --target-account my-hardcover \
   --catalog-id my-crosswalk --publisher 'My community project' \
   --provenance-source 'public mapping review' \
@@ -252,7 +252,7 @@ output or truncation. No providers are contacted.
 Merge two to eight explicitly named local documents offline:
 
 ```sh
-bin/drifter catalog merge --catalog-id combined \
+bin/drifter merge --catalog-id combined \
   --publisher 'Selected publisher' --input examples/first.json \
   --input /private/catalogs/second.json > combined.json
 ```
@@ -353,8 +353,8 @@ Default database:
   absolute path.
 - Otherwise `$HOME/.local/state/drifter/mappings.sqlite`.
 
-Use `--db PATH` on `link`, `links`, `unlink` or `catalog export` to override it.
-Local listing may initialize an empty database; catalog export never does. New
+Use `--db PATH` on `link`, `links`, `unlink` or `export` to override it.
+Local listing may initialize an empty database; `export` never does. New
 application directories are mode 700 and the database must be a regular,
 non-symlink mode-600 file. The daemon also leaves a
 mode-600 `.owner.lock` sidecar; the kernel releases its lock on process exit,

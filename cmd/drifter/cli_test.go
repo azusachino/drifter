@@ -117,10 +117,8 @@ func TestCLIHelpAndInvalidInputsDoNotNeedCredentials(t *testing.T) {
 		{[]string{"--help"}, "Available Commands:"},
 		{[]string{"link", "-h"}, "--book-id"},
 		{[]string{"inspect", "--help"}, "--progress"},
-		{[]string{"catalog"}, "merge"},
-		{[]string{"catalog", "--help"}, "export"},
-		{[]string{"catalog", "export", "--help"}, "--provenance-reference"},
-		{[]string{"catalog", "merge", "--help"}, "--input"},
+		{[]string{"export", "--help"}, "--provenance-reference"},
+		{[]string{"merge", "--help"}, "--input"},
 	} {
 		var out, stderr bytes.Buffer
 		if err := run(context.Background(), tc.args, &out, &stderr, clients{}); err != nil {
@@ -129,8 +127,15 @@ func TestCLIHelpAndInvalidInputsDoNotNeedCredentials(t *testing.T) {
 		if !strings.Contains(out.String(), tc.want) || stderr.Len() != 0 {
 			t.Fatalf("unexpected Cobra help for %v: stdout=%q stderr=%q", tc.args, out.String(), stderr.String())
 		}
-		if tc.args == nil && strings.Contains(out.String(), "  completion ") {
-			t.Fatalf("Cobra added an unrequested completion command: %s", out.String())
+		if tc.args == nil {
+			for _, command := range []string{"export", "merge"} {
+				if !strings.Contains(out.String(), "  "+command+" ") {
+					t.Fatalf("root help omitted top-level command %q: %s", command, out.String())
+				}
+			}
+			if strings.Contains(out.String(), "  catalog ") || strings.Contains(out.String(), "  completion ") {
+				t.Fatalf("root help retained a removed or unrequested command: %s", out.String())
+			}
 		}
 	}
 	secret := "synthetic-secret-never-echo"
@@ -164,8 +169,8 @@ func TestCLIRequiredFlagsFailBeforeSideEffects(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"link", "--db", path},
-		{"catalog", "export", "--db", path},
-		{"catalog", "merge", "--catalog-id", "combined", "--publisher", "publisher", "--input", "not-read.json"},
+		{"export", "--db", path},
+		{"merge", "--catalog-id", "combined", "--publisher", "publisher", "--input", "not-read.json"},
 		{"search"},
 	} {
 		var out, stderr bytes.Buffer
@@ -178,6 +183,32 @@ func TestCLIRequiredFlagsFailBeforeSideEffects(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("required-flag failure created database state: %v", err)
+	}
+}
+
+func TestCLIRemovedCatalogParentFailsWithoutSideEffects(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mappings.sqlite")
+	providerCalls := 0
+	providers := clients{
+		source: func() (source, error) { providerCalls++; return nil, errors.New("unexpected source construction") },
+		target: func() (target, error) { providerCalls++; return nil, errors.New("unexpected target construction") },
+	}
+	for _, args := range [][]string{
+		{"catalog", "export", "--account", "source", "--target-account", "target", "--catalog-id", "out", "--publisher", "p", "--provenance-source", "source", "--provenance-reference", "ref", "--db", path},
+		{"catalog", "merge", "--catalog-id", "out", "--publisher", "p", "--input", "missing-one.json", "--input", "missing-two.json"},
+	} {
+		var out, stderr bytes.Buffer
+		err := run(context.Background(), args, &out, &stderr, providers)
+		rejected := err != nil && (strings.Contains(err.Error(), "invalid command") || strings.Contains(err.Error(), "invalid flags"))
+		if !rejected || out.Len() != 0 || stderr.Len() != 0 {
+			t.Fatalf("removed catalog parent did not fail cleanly: args=%v err=%v stdout=%q stderr=%q", args, err, out.String(), stderr.String())
+		}
+	}
+	if providerCalls != 0 {
+		t.Fatalf("removed catalog parent constructed providers %d times", providerCalls)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("removed catalog export created database state: %v", err)
 	}
 }
 
