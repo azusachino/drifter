@@ -1,276 +1,429 @@
-# Drifter: matching worklist in small deliveries
+# Drifter: actionable matching and status milestones
 
-## Intent and authority
+## Intent, authority and record ownership
 
-Keep [issue #7](https://github.com/azusachino/drifter/issues/7)'s matching
-worklist goal, but deliver it through five independently verified slices. The
-owner selected smaller slices and confirmed the behavior below through a design
-interview on 2026-10-13. That original approval covered recording the plan, not
-implementation or merging either PR. The parent has since approved the bounded
-catalog slice under the owner's existing authorization. Issue #7 remains the
-acceptance and live-work ledger. This document records ordering and rationale,
-not completion status. The delivered first slice's [plan](read-only-matching.md) remains
-historical; it is not overwritten. The owner replaced the earlier single-file
-`--hints` proposal with the
-[community catalog contract](matching-catalogs.md). Parent approved the
-bounded schema/loader/core/CLI slice under the existing owner authorization;
-that slice is implemented and passed its owning gates on this branch. It does
-not authorize automatic linking or any deferred behavior. Only
-explicit owner selection may create a local mapping. The parent-approved local
-export/merge extension for community catalogs is recorded as delivery 6 and is
-limited to the privacy, provenance and collision contract in
-[matching-catalogs.md](matching-catalogs.md). No LLM calls, new credentials,
-remote status writes, catalog contribution service, HTTP server work (#6),
-deployment or whole-backlog bootstrap enters this scope. No agent reviewer or
-coordination service is needed for this planning pass. Pi-subagents may be
-used if agent review is actually needed; no delegation has occurred. Continue in
-this session on this device, without a handoff unless the owner explicitly
-requests one. Remaining slices and any scope beyond the approved catalog
-contract require separate approval.
+Turn the [design review](../research/2026-10-15-design-review.md) and its
+user-story coverage assessment into small, testable deliveries. The first
+milestone completes this reader journey:
 
-## Revalidated starting point
+> List recent books, inspect useful identity evidence, explicitly link or record
+> a review decision, restart, and resume without losing choices.
 
-Inspected `main` at `111f4678e00223d8e50cdf2470244bff19aa93eb`:
+The owner requested an actionable plan on 2026-10-15. That authorizes this
+planning revision, not implementation, provider mutations, deployment, merging,
+new agents or changes to accepted sharing policy. The workstation task playbook
+owns this tier-1 planning deliverable. Implementation involving a migration or
+changed interface follows intent-to-verified-result at tier 2.
+The subsequent owner request selected native Pi subagents with Luna 6 at medium
+effort for implementation; the bounded A1 result is recorded in the handoff below.
+That checkpoint does not claim approval or completion of later interface changes.
 
-- `OpenStore` creates the mapping table without `PRAGMA user_version`.
-- WeRead's operation allowlist has search, book info and progress only; pending
-  needs a separately validated shelf reader, not just a CLI filter.
-- Book IDs are numeric-only. Imported `CB_` IDs cannot use today's book/link
-  validation path.
-- `Hardcover.Match` tries valid ISBN variants first, then bounded title search.
-  Contributor names are already available. A hint must preserve this path,
-  including exact-edition short-circuiting.
-- `link` fetches the source, validates target work/edition membership, then calls
-  `Store.Confirm`, which enforces idempotency and explicit replacement. Review
-  must share that entire confirmation path, not just the store insertion.
+This revises the existing incomplete plan in place. The
+[matching worklist issue](https://github.com/azusachino/drifter/issues/7) remains
+the acceptance/live-work ledger for matching; the
+[server and future sync proposal](https://github.com/azusachino/drifter/issues/6)
+owns the related operator-surface decisions. Do not create a parallel local
+status checklist or close either issue from this plan alone. Before a new
+implementation slice, reconcile its acceptance with those records. Changes to
+existing issue bodies/comments require owner authorization; new distinct work
+must be checked for duplicates before filing.
 
-The issue's measured matching evidence is in
-[PR #8](https://github.com/azusachino/drifter/pull/8), still open when this plan
-was drafted. Its diff was inspected; it is not present on the main revision
-above. The owner chose to review its evidence and checks, then request merge
-authorization; do not merge it automatically. Its merge remains a prerequisite
-for implementation. No private shelf captures or live provider calls are needed
-for this plan.
+The plan defines ordering and acceptance, not live completion status. PRs must
+record the exact tested revision and results. Historical approval and test
+claims belong to their original PRs, not to a new implementation checkpoint.
+The original plan is retained in Git history; the
+[first read-only plan](read-only-matching.md) remains historical.
 
-## Owner-confirmed behavior
+## Revalidated baseline
 
-- **Imported books:** classify `CB_` rows as imported, exclude them by default,
-  and allow explicit inclusion for worklist inspection only. Keep existing
-  numeric-only `match`/`link` validation; review reports imported rows as
-  unsupported rather than attempting ISBN matching. Supporting imported links
-  would be a separately verified extension. This chooses the exclusion option
-  offered by #7 without pretending unsupported IDs are invalid shelf rows.
-- **Window/privacy:** use last-opened `readUpdateTime`, not inferred completion.
-  Default to 90 days; require valid positive window input. Inject time in tests,
-  define cutoff inclusivity, and reject invalid/future timestamps rather than
-  invent activity. Private rows are filtered before enrichment or output unless
-  explicitly included. Unknown privacy fails closed. Missing translator evidence
-  must not silently become native classification.
-- **Namespaces:** pending and decisions use the same provider/source-account/
-  source-book/target-account key as mappings. Require explicit source and target
-  account labels for pending and review. Labels remain user-chosen namespaces,
-  not authenticated identities. Other account scopes must not hide a book or
-  change its decision.
-- **Decisions:** exclude and not-in-catalog suppress future pending results;
-  skip survives restart as a recorded choice but does not suppress the next
-  invocation. Thus #7's "no saved decision" means no suppressing decision.
-  A successful link is hidden by its mapping; lookup failures and EOF/cancel
-  save no terminal decision. Provide an explicit local reset of a decision so
-  catalog changes or accidental exclusion do not require manual SQL.
-- **Hints and catalogs:** the earlier single-file `--hints FILE` proposal is
-  superseded by the implemented
-  [catalog contract](matching-catalogs.md): explicit TOML-selected local/HTTPS
-  documents, stable provider IDs, separate assertions and title/ISBN hints,
-  provenance, and conflict reporting. The core match report surfaces untrusted
-  evidence without selecting a target or silently replacing `--query`. Preserve
-  the uncalibrated-confidence rule if later work uses hints for ranking:
-  confidence never filters, ranks or authorizes a link. Delivery 6 extends this
-  with explicit local export and offline merge only; its user story and exact
-  flags, selection, privacy exclusions, lineage and collision rules are in the
-  catalog contract before implementation.
-- **Ranking:** stable partition by normalized contributor-name equality
-  (trim, collapse whitespace, case-fold), not transliteration or fuzzy scores.
-  Keep the same candidate IDs and preserve provider order within both groups.
-  Missing authors do not count as matches. Exact-edition proposals are unchanged.
-- **Review:** the owner confirms interactively in the terminal, not through an
-  agent-approved decision file. Work selection records only the work; edition
-  selection is separate even when an exact ISBN edition is suggested. Allow
-  manual target work/edition IDs when the top three do not contain the right
-  result, through the same validation as standalone `link`.
-- **Partial failure:** continue after per-book provider lookup failures, preserve
-  successful decisions, summarize failed source book IDs and exit nonzero.
-  A failed lookup never means not-in-catalog or exclusion.
+Planning source: `main` at `ca5b47760cdcd53e45cf028c2762a3d7995fd452`.
+The only pre-existing uncommitted work was this session's design-review report.
+No source code changed during planning; no remote refs were fetched or updated.
 
-The lower-level choices below (version numbers, field decoding, normalization,
-request limits and command spelling) are implementation proposals within these
-boundaries. Verify the provider contracts before fixing their details; none may
-weaken the confirmed behavior or owning gates.
+Implemented prerequisites at this source:
 
-## Ordered deliveries
+- Version-1 SQLite mappings and transactional legacy migration.
+- Privacy-filtered, recently opened pending selection with explicit incomplete
+  reports and a 100-row enrichment bound.
+- Exact-identifier and bounded title candidates, always requiring confirmation.
+- Optional untrusted catalog evidence through shared core matching.
+- Explicit confirm/replace/unlink in CLI and foreground HTTP, with shared
+  validation and process-lifetime server ownership.
+- Offline public catalog export/merge. The
+  [catalog contract](matching-catalogs.md) remains authoritative and unchanged.
 
-Each slice gets a small owning PR and a green `make check` checkpoint. Do not
-start the next slice until the preceding dependency is integrated and its
-actual branch/full commit is recorded. Stop and split further if a slice cannot
-be verified in one focused session. These are delivery boundaries, not parallel
-agent assignments.
+These correspond to the earlier deliveries 1, 2, 3 and 6. Durable review
+choices and terminal batch review, earlier deliveries 4 and 5, are not
+implemented. Catalog evidence does not yet drive search or author ranking.
+The foreground server is not a status-sync daemon. Existing tests and earlier
+PR evidence are not a fresh test run for this plan.
 
-### 1. Version the existing database
+## Carry forward accepted behavior
 
-**Outcome:** existing CLI users can open their database safely with an explicit
-schema version. No new command or decision table yet.
+These are existing owner decisions, not new assumptions:
 
-**Acceptance:** new databases initialize at version 1; version-0 databases with
-the existing mapping schema migrate transactionally without changing any
-mapping; future versions are refused before application schema writes. Failed
-migration leaves neither a partial schema nor an advanced version. Existing
-permissions, secure-delete and account isolation remain enforced.
+- **Terminal-first review.** The recorded matching decision selects interactive
+  terminal confirmation, not an agent-approved file. Do not reopen the adapter
+  choice or build a second browser review interface in this milestone.
+- **Identity is not authority.** Only explicit owner selection confirms a
+  mapping. A work-only link never silently acquires an edition or permission to
+  change reading status. Source and target existence/membership validation is
+  shared with standalone linking.
+- **Privacy and activity.** Use last-opened `readUpdateTime`, default 90 elapsed
+  days and inclusive cutoff. Private rows are excluded before enrichment/output
+  unless explicitly included; unknown privacy always fails closed. Missing
+  translator evidence is not native classification. Future/invalid activity
+  stays explicit rather than becoming inferred reading activity.
+- **Imported IDs.** `CB_` rows are excluded by default and may be inspected when
+  explicitly included. They remain unsupported for matching/linking; review
+  reports that limitation instead of fabricating ISBN/work identity.
+- **Namespaces.** Mapping and decision keys include provider, source account,
+  source book and target account. Labels are operator-selected namespaces, not
+  verified account identities. Other namespaces must not affect eligibility.
+- **Decisions.** Exclude and not-in-catalog suppress subsequent pending results.
+  Skip is recorded durably but returns next invocation. Reset reverses a saved
+  choice subject to the ordinary filters. A link is hidden by its mapping.
+  Lookup failure, EOF and cancellation never create a terminal decision.
+- **Evidence.** Catalog assertions/hints remain distinct and untrusted, with all
+  conflicting alternatives and provenance visible. Confidence never selects,
+  filters, ranks or authorizes a target. There are no LLM calls or new secrets.
+- **Ranking.** If enabled in an approved suggestion slice, stable-partition the
+  same candidate IDs by contributor-name equality after trim, whitespace collapse
+  and case-folding. Preserve provider order in each group; missing authors do
+  not match. Do not transliterate, use fuzzy scores or change exact editions.
+- **Failures.** Continue past per-book provider failures, preserve completed
+  choices, summarize failed source IDs and exit nonzero. Failed or bounded
+  searches never prove catalog absence. Logs/errors omit titles, credentials
+  and raw bodies; interactive metadata must be terminal-safe.
 
-**Likely paths:** `internal/companion/store.go`, `store_test.go`, `README.md`.
-**Dependency:** owner-approved plan and evidence prerequisite.
-**Verification:** synthetic pre-versioning database with multiple namespaces;
-reopen/idempotency, future-version refusal and migration rollback tests;
-`go test -race ./internal/companion`, then `make check`.
+## Milestone 1: complete local matching review
 
-### 2. List recently opened, unmapped books
+### Acceptance map
 
-**Outcome:** `pending` emits a JSON worklist using WeRead plus local mappings;
-no Hardcover lookup or decision writes. Initially there are no decisions to
-filter; slice 4 extends this same predicate.
+| ID | Reader outcome | Required evidence | Delivery |
+| --- | --- | --- | --- |
+| M1 | Reach older eligible books despite recent failures. | More than 100 eligible rows; continuation reaches later rows without linking or excluding failed books. | C |
+| M2 | Save and reverse review choices across restart. | Decision persistence, reset, namespace isolation and migration rollback. | D |
+| M3 | Inspect suggestions without accepting them accidentally. | Explicit alternate query, untrusted hints, unchanged candidate set under author ranking and no automatic link. | E, F |
+| M4 | Confirm the intended work/edition safely. | Shared validation, separate edition choice, manual IDs, wrong-edition rejection and guarded replacement. | B, E |
+| M5 | Resume after cancellation or partial failure. | Scripted restart/retry journey with middle failure and later success; EOF saves no choice. | G |
+| M6 | Keep the current server responsive and mutations intentional. | Operation deadline, bounded admission, canceled pacing wait and stale-tab conflicts. | A, B |
+| M7 | Preserve privacy and exclusive state ownership. | Private/unknown privacy fixtures; writer refusal before provider calls; read-only readers still work. | C, D, E, G |
 
-**Acceptance:** window and account-scoped mapping filters work; privacy defaults
-are safe; translated/native/imported classifications are correct; imported
-inclusion does not broaden link validation. Decode only required shelf facts,
-validate pagination/completeness, and expose incomplete acquisition instead of
-claiming a complete worklist. Filter before per-book enrichment, bound requests,
-and report metadata failures without misclassifying rows.
+This milestone advances the original matching, privacy, attention and local
+removal stories. It does not complete any status-write acceptance case.
 
-**Likely paths:** `internal/companion/weread.go`, `weread_test.go`,
-`internal/cli/cli.go`, `cli_test.go`, `README.md`.
-**Dependency:** slice 1; synthetic contract for shelf/privacy/activity fields.
-**Verification:** synthetic HTTP fixtures for cutoff, private/unknown privacy,
-translator/no-translator/imported, pagination, malformed fields and provider
-failure; temp SQLite mappings in different account scopes; focused core/CLI
-race tests, then `make check`. No private captures enter fixtures.
+### Dependencies and delivery rule
 
-### 3. Improve suggestions with external hints
+```text
+A1 provider cancellation -> A2 HTTP operation budget
+B1 guarded store changes -> B2 guarded HTTP forms/API
+C1 continuation core     -> C2 pending CLI/HTTP inputs
+D1 decisions/migration   -> D2 local commands/pending filtering
+B1 + C + D               -> E terminal review -> F explicit hint use -> G acceptance
+```
 
-**Outcome:** the catalog slice loads explicitly selected catalogs through the
-shared core `Match` operation and surfaces exact assertions and title/ISBN
-hints with provenance and conflicts. It does not replace the current search
-query or choose a mapping. `pending` and standalone `link` remain usable without
-catalogs.
+Execute sequentially in this order: A, B, C, D, E, F, G. These are delivery
+boundaries, not parallel assignments. A numbered subdelivery is independently
+verified and integrated before its successor; split again if it exceeds one
+focused session. Keep source stable at each acceptance checkpoint. No general
+workflow engine, background queue, stored shelf archive or new framework.
 
-**Acceptance:** use the catalog contract's loader/security and core/CLI tests,
-then the existing HTTP/browser regression gates. Preserve legacy matching with
-no configured catalogs. Invalid or unavailable sources are reported incomplete
-without echoing source URLs or contents; conflicts retain all alternatives; no
-hint creates a mapping or provider write. Further use of hints to alter
-candidate searches or ranking needs separate parent review and approval.
+The following command spelling and new numerical bounds are **proposed for
+implementation approval**, not capabilities that already exist.
 
-**Likely paths:** `internal/cli/cli.go`, `cli_test.go`,
-`internal/companion/hardcover.go`, `hardcover_test.go`, `README.md`.
-**Dependency:** slice 2 for the worklist workflow; catalogs add no stored state.
-**Verification:** synthetic core and CLI fixtures prove source-ID matching,
-separated assertions/hints, conflict preservation, incomplete-source reporting
-and no mapping/provider writes. Catalog transport tests use injected resolver
-and fetcher seams; run focused core/CLI race tests, then `make check`.
+### A. Bound provider-backed work
 
-### 4. Persist review decisions without linking
+**A1 — cancellation-aware transport.** Replace the uncancelable mutex wait with
+a context-aware serialization/pacing gate. Preserve fixed destinations,
+per-client pacing, response bounds, no redirects and no automatic retry.
 
-**Outcome:** introduce a version-1-to-2 migration for the account-scoped decisions
-table and a local decision/reset operation. Pending suppresses only exclude and
-not-in-catalog. This makes durable choices useful before interactive review.
+**A2 — HTTP budget.** Propose one active provider-backed operation per server,
+no waiting queue, and a 90-second total deadline, below the existing two-minute
+response write timeout. Busy requests return sanitized 503 before provider
+calls; timed-out operations return a stable timeout outcome, not success. Local
+page/list/probe routes do not consume this slot. Pacing still applies across
+operations; these limits are not a provider quota guarantee.
 
-**Acceptance:** exclude/not-in-catalog remain hidden after restart, skip returns
-next invocation, and reset restores eligibility subject to window/privacy and
-mapping filters. Decisions in another namespace have no effect. Upgrade from
-both version 0 and version 1 preserves every mapping; failed migration rolls
-back. Persist only decision kind and minimal keyed metadata, not provider bodies,
-hints, progress or credentials.
+- Acceptance: a blocked fake provider plus a canceled waiter finishes promptly;
+  excess requests make no provider calls; a timed-out pending report is explicitly
+  incomplete and preserves completed rows when still returnable. Never report a
+  confirmation as successful without checking its local result.
+- Paths: A1 `internal/companion/http.go` and transport tests; A2
+  `internal/httpserver/server.go`, handler tests and HTTP contract documentation.
+- Verify: A1 `mise exec -- go test -race ./internal/companion`; A2 also
+  `mise exec -- go test -race ./internal/httpserver`, then owning gates below.
+- Approval: accept the proposed budget/admission/error contract before A2.
 
-**Likely paths:** `internal/companion/store.go`, `store_test.go`,
-`internal/cli/cli.go`, `cli_test.go`, `README.md`.
-**Dependency:** slices 1 and 2. Exact local command syntax is settled before this
-slice; avoid a daemon-facing API or general decision framework.
-**Verification:** temp SQLite restart/reset/isolation and migration-chain tests,
-pending CLI fixtures with each decision type; focused core/CLI race tests, then
-`make check`.
+### B. Refuse stale mapping intentions
 
-### 5. Walk the worklist and explicitly confirm mappings
+**B1 — core/store precondition.** Add an expected existing work/edition tuple
+for guarded replace/unlink. Compare and mutate atomically. A guarded replace
+updates an existing row; it must not upsert after another action deleted it.
+A changed row, or a vanished row on replacement, reports conflict without
+changing state. An already absent unlink remains idempotent; it cannot affect a
+new target. Keep ordinary confirmation idempotent. A tuple precondition avoids
+adding a second schema migration just for revisions.
 
-**Outcome:** `review` walks eligible books and displays up to three work
-suggestions, with optional hints, supporting link, skip, exclude and
-not-in-catalog, plus manual target ID entry. An empty/bounded result is not proof
-of global catalog absence; not-in-catalog is an explicit owner choice.
+**B2 — HTTP adapter.** Include the displayed expected tuple in native forms
+and require it for JSON replace/unlink. Return 409 with a reload instruction on
+conflict. Never silently fall back to an unconditional write. Keep Host,
+Origin, strict body and CSRF checks ahead of provider calls. Existing explicit
+standalone CLI replacement/unlink semantics remain documented; terminal review
+uses the guarded path because it presents previously observed state.
 
-**Acceptance:** work-only and explicit-edition selection use the exact shared
-`link` source/target validation and replacement path. Failed validation stores
-no mapping. Lookup failure is reported per book without a suppressing decision;
-the batch continues, other decisions remain durable and rerunning retries the
-failed book. Report failed book IDs and exit nonzero for partial failure. Work
-selection never silently selects an edition. EOF/cancel never means consent.
-Titles/authors rendered interactively are terminal-safe;
-errors/logs contain no titles, tokens or raw bodies. No provider mutation exists.
+- Acceptance: two sessions reading A cannot unknowingly replace/delete B; stale
+  replacement cannot resurrect a deleted mapping; a fresh change and identical
+  confirmation still work. Wrong edition leaves state unchanged.
+- Paths: B1 `internal/companion/store.go`, shared confirmation operations and
+  focused tests; B2 handlers, template, adapter tests and HTTP payload reference.
+- Verify: B1 `mise exec -- go test -race ./internal/companion`; B2 also
+  `mise exec -- go test -race ./internal/httpserver` and native-form Playwright.
+- Approval: B2 changes the existing JSON mutation contract; record acceptance
+  and examples before making fields required. No catalog schema change.
 
-**Likely paths:** `internal/cli/cli.go`, a small review helper and its tests,
-`cli_test.go`, `README.md`. Extract shared confirmation only as needed here;
-do not build a generic workflow engine in earlier slices.
-**Dependency:** slices 3 and 4.
-**Verification:** scripted input/output with fake providers and temp databases;
-wrong edition membership, differing mapping replacement refusal, explicit
-replacement, manual target ID entry, separate edition choice, failure in the
-middle of a batch with later successes and nonzero exit, rerun, restart and
-cancellation; focused core/CLI race tests, then `make check`.
+### C. Add bounded worklist continuation
 
-### 6. Export and merge community catalogs locally
+**C1 — selection contract.** Propose a versioned seek cursor binding the fixed
+as-of time, window, account scope, inclusion flags and last attempted sort tuple
+(last-opened descending, book ID ascending). Validate it as untrusted input.
+Apply existing privacy/mapping filters before enrichment; D later extends this
+same predicate with decision suppression. Cap each page at 100.
+Advance across attempted failures, not just returned books, so one bad batch
+cannot hide all older books. Never advance past rows not yet attempted.
 
-**Outcome:** `export` creates a deliberately public, account-scoped v1 catalog
-from confirmed local mappings; `merge` combines only explicitly
-named local documents into a new v1 catalog. Both write JSON to stdout and make
-no provider requests. This is not anonymous sharing: export discloses selected
-WeRead source IDs.
+This is a live shelf scan, not a snapshot guarantee: a book moved ahead of the
+cursor by new activity, or made newly eligible by a decision reset, may require
+a fresh scan. No cursor persists provider bodies or authenticates the caller.
+Treat source IDs/account scope as personal output; do not log cursor values.
+A scan's fixed cutoff does not drift between pages. Incomplete shelf acquisition
+remains incomplete even at the final page.
 
-**Acceptance:** export requires exact source/target account labels, catalog ID,
-publisher, provenance source/reference and accepts optional `--db`. The query
-filters both labels and selects only source IDs and confirmed Hardcover work /
-optional edition; no account labels, stored title/ISBN, progress, timestamps,
-paths or secrets enter output. It uses read-only current-schema store access,
-creates/migrates no database, errors without output for absent/unsupported
-state, and emits an empty valid catalog for an existing DB with no selected
-rows. Merge requires a new ID and publisher plus 2–8 repeated local `--input`
-paths, validates inputs and final bytes against bundled v1, preserves all
-assertions/hints/conflicts/provenance and source identity, adds lineage without
-truncation, and never mutates state. Exact repeated paths, duplicate source
-catalog IDs and output/source ID collision fail atomically. Record-ID collision
-is resolved deterministically in input order by retaining the first ID and
-SHA-256-reidentifying later collisions; same ordered inputs and metadata produce
-identical output. Output budget/schema failures reject the complete result. No
-schema evolution is included.
+**C2 — adapters.** Add proposed `pending --after CURSOR` and JSON `next_cursor`,
+with the matching strict HTTP query field. Preserve the current nonzero CLI
+exit/incomplete report behavior when more work or failures remain. Document
+continuation and retry separately: continuing may pass a failed row; a new scan
+or explicit retry revisits it.
 
-**Likely paths:** `internal/catalog`, `internal/companion`,
-`internal/cli`, their tests, README, CLI/architecture docs, this contract and the
-story-test map.
-**Dependency:** implemented v1 catalog contract and read-only current-schema
-store.
-**Verification:** CLI tests prove exact selection/privacy exclusions, no-state
-and empty behavior, no provider calls, atomic malformed/over-limit merge,
-lineage and collision/idempotency behavior. Run focused race tests, then
-`make check`, changed-Markdown lint and existing browser probe/E2E.
+- Acceptance: 101+ rows, equal-time ties, failures in the first page, changed
+  shelf activity, wrong-scope/malformed cursor and cancellation before the page
+  ends. Later pages do not re-enrich all prior rows or reveal private rows.
+- Paths: C1 `internal/companion/pending.go` and selection tests; C2 pending CLI,
+  HTTP query parsing, adapter tests and CLI contract.
+- Verify: `mise exec -- go test -race ./internal/companion ./internal/cli
+  ./internal/httpserver`, then owning gates.
+- Approval: accept the cursor/report extension before implementing C2.
 
-## Coverage and approval
+### D. Persist decisions and expose local controls
 
-Every slice retains synthetic HTTP/temp SQLite tests, privacy-safe error handling
-and the owning gate. Final #7 coverage: pending/classification in 2 and 4;
-hints/no automatic links in 3; decision persistence in 4 and 5; exact link
-validation and per-book failure recovery in 5; legacy/future database safety in
-1 and 4. Full `make check` means formatting, vet, module verification,
-race-enabled tests and CLI build, not a reduced substitute.
+**D1 — state.** Migrate version 1 to version 2 transactionally, retaining legacy
+version-0 upgrade support. Store only the namespace key and decision kind plus
+necessary schema metadata, never shelf snapshots, titles, hints, progress or
+credentials. Preserve every mapping. Refuse future versions before application
+schema writes; failed migration rolls back both tables and version.
 
-The owner-confirmed worklist behavior and parent-approved catalog extension
-remain separate delivery scopes. This approval covers only delivery 6 and does
-not authorize the deferred worklist review UI, HTTP changes, provider writes or
-schema evolution. Keep #7 open until all its criteria pass. Each PR records its
-actual revision, commands/results and remaining criteria; do not claim later
-deliveries. Parent review is required before PR12 publication. No continuing
-handoff is needed during this same-session, same-device work unless explicitly
-requested.
+**D2 — reader-facing controls.** Proposed commands:
+
+```text
+drifter decide --book-id ID --account SOURCE --target-account TARGET \
+  --decision skip|exclude|not-in-catalog [--db PATH]
+drifter decisions --account SOURCE --target-account TARGET [--db PATH]
+drifter reset-decision --book-id ID --account SOURCE --target-account TARGET \
+  [--db PATH]
+```
+
+Shared pending selection suppresses only exclude/not-in-catalog. Skip returns
+next invocation. Resetting an absent choice is idempotent. Linking and unlinking
+do not silently rewrite an independent decision; if an older suppressing choice
+still applies after unlink, surface it with the exact reset command. These local
+commands require no providers. Readers use the existing current-schema read-only
+path under server ownership; standalone decision writes refuse an active owner.
+
+- Acceptance: fresh/version-0/version-1 upgrade, rollback, reopen, future-schema
+  refusal, every decision/reset type, other-account isolation, unknown decision
+  rejection and no provider construction. Exclusions may affect pending only
+  inside their exact namespace. Old binaries refuse version 2 honestly.
+- Paths: D1 store/migration/decision tests; D2 CLI decision handlers, shared
+  pending orchestration, focused tests and CLI reference.
+- Verify: `mise exec -- go test -race ./internal/companion ./internal/cli`, then
+  owning gates. Back up privately before migration; no downgrade promise.
+- Approval: migration and exact command contract are accepted before D1/D2.
+
+### E. Deliver the smallest terminal review loop
+
+Proposed entrypoint:
+
+```text
+drifter review --account SOURCE --target-account TARGET [--days 90] \
+  [--db PATH] [--config PATH]
+```
+
+Use the same pending predicate and continuation, and acquire exclusive database
+ownership before provider calls or prompts. A running server or another review
+causes immediate refusal with a useful instruction, not forwarding or lock
+bypass. Stop the foreground server before terminal review. Hold the lease
+through review and release it on every exit; read-only CLI listing remains
+possible against the current schema. Resolve the database path once and use it
+for selection, decisions and confirmation; document its config/flag precedence.
+
+Construct providers lazily. Show terminal-safe source metadata and up to three
+work suggestions with visible author/IDs; also show exact-edition proposals as
+unconfirmed evidence. Offer link, skip, exclude, not-in-catalog and quit. Permit
+manual target work/edition IDs. Choose work-only versus a specific edition
+separately, display the final selection and require explicit confirmation. Reuse
+the complete shared source/target validation and guarded replacement path.
+
+- Acceptance: script pending -> work-only link -> explicit-edition link ->
+  persisted state; rejected membership stores nothing; no-match can be skipped,
+  excluded or manually resolved. Imported rows cannot enter linking. EOF,
+  default input, provider errors and cancellation never mean consent.
+- Paths: small `internal/cli/review.go` and tests, command registration, shared
+  operations only where needed, and CLI usage documentation. No review engine.
+- Verify: `mise exec -- go test -race ./internal/cli ./internal/companion`, then
+  owning gates. Use fake providers and temporary SQLite, not captured accounts.
+- Approval: approve the foreground ownership/command contract before E.
+
+### F. Make original-title evidence useful without automatic search
+
+Within review, display configured catalog hints, conflicting assertions and
+provenance as unverified evidence. Let the owner explicitly choose a hinted
+title/author or enter an alternate query before issuing a new bounded search.
+Do not silently replace the native query, turn an assertion into a selection,
+search every hint, or use confidence to rank anything. Missing hints preserve
+the ordinary matching path. Invalid catalogs remain visibly incomplete.
+
+Place optional author-aware stable partitioning in shared matching logic, not
+in a CLI-only matcher. Preserve candidate IDs and within-group provider order;
+exact-edition results remain unchanged. Keep standalone `match` unchanged unless
+its new explicit option is separately included in the approved contract.
+
+- Acceptance: absent/wrong/conflicting hints never link; a selected title makes
+  the same provider query as explicit `match --query`; author reordering neither
+  drops/adds candidates nor changes exact editions. Terminal escape sequences in
+  source or catalog text cannot execute. No new credential or LLM dependency.
+- Paths: shared match options/operations and tests, review prompt and tests;
+  catalog schema/loader/security policy remain unchanged.
+- Verify: `mise exec -- go test -race ./internal/catalog ./internal/companion
+  ./internal/cli`, then owning gates.
+- Approval: earlier catalog approval covered surfacing only. Explicit search
+  reuse and ranking require acceptance before F, even though their direction
+  is recorded in the original matching decisions.
+
+### G. Prove restart, failure and resume as one reader journey
+
+Add scripted end-to-end CLI journeys, not merely a list of unit-test names:
+
+1. Review a synthetic batch: link A, skip B, exclude C, mark D not-in-catalog;
+   close all handles and start a fresh invocation against the same private DB.
+2. Verify A/C/D are absent and B returns; reset C and verify eligibility returns
+   only in that account pair. Reach an older page despite a failed recent row.
+3. Fail lookup/validation in the middle, then successfully process a later book.
+   Preserve successful choices, report failed source IDs and exit nonzero.
+   Retry resolves only pending work; EOF/cancel adds no choice or mapping.
+
+Propose a 60-second deadline for each provider-backed review stage (candidate
+lookup or final confirmation), retaining individual call bounds. A stalled
+provider must not trap the entire review indefinitely, but time spent waiting
+for owner input is not a provider timeout. If cancellation affects later work,
+summarize completed and unattempted items honestly. Prove ownership release after
+cancellation, provider failure and input failure. No hidden remote writes or
+sensitive logs.
+
+- Paths: review orchestration/tests and
+  [executable walkthroughs](../walkthroughs/README.md), with exact synthetic
+  reproduction commands and expected outcomes. Document existing browser
+  journeys as regression coverage, not terminal-review evidence.
+- Verify: focused uncached review tests, full `make check`, changed-doc lint,
+  `make e2e-probe ROUTE=/`, and `make e2e`. Update the acceptance/story map with
+  actual test names and revisions, not proposed names treated as passing tests.
+- Exit: owner reviews M1-M7 evidence. Matching work is complete only when the
+  owning acceptance record agrees, including its superseded hints contract.
+
+## Verification and iteration
+
+All code checks run from the owning checkout with its pinned mise tools.
+Focused checks above are iteration checks, never substitutes for acceptance.
+Every implemented subdelivery requires `make check` (format, vet, module
+verification, race tests and both executable builds) and pinned Markdown lint
+for its changed docs. HTTP/shared mapping changes additionally require
+`make e2e-probe ROUTE=/` and `make e2e`; retain these as the milestone's final
+browser regression gate. Tests use synthetic HTTP/providers and temp SQLite.
+
+A missing/failing gate blocks that delivery. Do not weaken assertions, skip
+failures, change the pinned runtime or push to let CI substitute for local gates.
+Record source revision, any working diff and exact commands/results in the
+owning PR. The owner is the final reviewer; an independent agent review requires
+an explicit separate request. No live credentials are needed for this milestone.
+
+## Later milestones: close the original status stories
+
+These are dependency-gated scopes for later acceptance work, not authorization
+or a claim that provider semantics are established. Write each finite contract
+before implementation; reuse the original research stories rather than invent a
+second definition of sync success.
+
+| Milestone | Concrete outcome / exit evidence | Depends on / original stories |
+| --- | --- | --- |
+| 2. Verify account and provider contracts | Bind stable account identity/fingerprints to labels; token rotation for the same account works, switching accounts refuses baseline reuse. Establish a documented/verified WeRead identity route for accounts with no own review, or explicitly block those accounts. Obtain a representative sanitized completion/reread contract. Under separate approval, test one target book with status-only mutation, replay/no-op and before/after checks of edition, dates, history, privacy, ratings and reviews. Synthetic tests cover uncertain responses; no blind retry. | Milestone 1 for useful matching; explicit read/write experiment permission. Gates US1/US4/US8/US11. |
+| 3. Preview one-book bootstrap | For missing, matching and differing target records, produce create/no-op/conflict proposals with no writes. Define explicit privacy, per-target source authority and policy version; mappings alone grant none. Verify status catalog and target identity. Freeze durable conflict evidence; namespace labels alone are insufficient. | Verified contracts. Covers the decision portion of US1/US5/US6/US8. |
+| 4. Apply one approved bootstrap safely | Persist intent before send, apply only approved fields, read back, record receipt and accepted baseline. Restart reconciles uncertain outcomes before another mutation. A failed book does not block safe books; unlink remains local-only and mapping correction cannot roll back unrelated target activity. | Approved preview/authority. Completes bounded first-sync US1 and post-link US2; exercises US7/US11. |
+| 5. Reconcile changes before scheduling | Manually trigger three-way source/target/baseline comparison first. Test rereading, source-unchanged/target-edited, conflicting two-source input, source disappearance and obsolete intents. Persist holds, use Drifter's monotonic run sequence, expose freshness/partial failures and reconcile restarts. Only then choose polling frequency against verified quota, batch target reads and approve scheduling/deployment. | Baselines/receipts and verified reread facts. US3-US8/US10-US11. A synthetic second source tests authority without claiming KU exists. |
+| 6. Resolve KU feasibility separately | Inspect an authorized region-appropriate source/export sample. Prove book identity plus actual reading status, distinct from loans; otherwise provide separately approved owner-declared manual input with manual provenance or report unsupported. No scraping/access workaround by assumption. | Separate acquisition approval, not a prerequisite for WeRead-only usefulness. US9 and real second-source US6. |
+
+For US12, Drifter continues to stop at Hardcover. A later approved one-book
+update may be observed by Iroha's independently owned job; do not change Iroha,
+call it from Drifter or make Drifter success depend on that job.
+
+## Explicitly deferred decisions and non-goals
+
+- **Public sharing consent:** current export publishes every mapping in the
+  selected account pair, including manually linked private reading identities.
+  Before promoting community sharing, choose explicit per-book selection versus
+  an unmistakable account-wide choice, then define the corresponding acceptance
+  case. Do not change offline export or frozen catalog v1 implicitly in this
+  matching milestone. IDs are not anonymous.
+- **Personal backup/restore:** public catalogs are not lossless personal exports.
+  Before unattended persistent deployment, document and exercise a private,
+  SQLite-consistent backup/restore procedure against synthetic state, including
+  mappings, decisions, permissions, ownership and supported schema version.
+  Future portable import must retain the accepted account-fingerprint rule;
+  lack of identity evidence is a blocker, not permission for fingerprint-free
+  import. Never test destructive restore against the owner's live database.
+- **Operator onboarding:** retain the accepted friendly-empty-state requirement
+  for the future operator-surface round. Current manual-ID forms are not proof
+  of that onboarding story. Browser candidate review, run history and holds
+  follow their own accepted server scope, not this terminal-first delivery.
+- No automatic mapping, LLM integration, shared-catalog write/enrichment,
+  provider status mutation, background refresh, notification system, KU adapter,
+  public hosting or deployment is part of milestone 1.
+
+## Continuing handoff
+
+A1 tested code checkpoint: `fix/provider-cancellation` at
+`87006388ebf3a053260c6b43de1373abc39878af`, based on the baseline above.
+The owner selected `openai-codex/gpt-6-luna` with medium effort through native
+Pi subagents. One worker owned the transport/test seam; the parent inspected
+the actual diff and saved gate output. This is implementation plus parent
+self-review, not an independent-review claim.
+
+A1 replaces the uncancelable mutex wait with a context-aware per-client gate.
+Its synthetic regression proves canceled waiters return `context.Canceled`
+without sending a request, and subsequent requests can still acquire the gate.
+The initial full gate also exposed a pre-existing HTTP test-helper cleanup race.
+The authorized correction closes idle test-client connections before server
+cancellation; the one-second assertion and production timeouts remain unchanged.
+
+The [review's implementation checkpoint](../research/2026-10-15-design-review.md#a1-implementation-checkpoint)
+records exact commands, baseline comparison and limits. Focused race tests,
+`make check` including both builds, the browser probe and all three browser
+journeys passed on this code. Documentation lint/whitespace checks apply to the
+later documentation-only checkpoint; no provider experiments occurred.
+
+**Next action:** review A1's owning PR/checkpoint, then approve A2's proposed
+HTTP budget/admission/error contract before its implementation. A2 and B-G,
+including persistent decisions and terminal review, remain undelivered. Do not
+start schema changes or a review interface while silently leaving prerequisites
+unresolved. Before resuming, compare current Git with the code checkpoint and
+read intervening commits; documentation-only commits may follow it. Each next
+subdelivery records its actual revision, results and remaining acceptance.
+Asobi, extra agents and cross-device coordination remain opt-in.
