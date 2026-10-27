@@ -42,7 +42,7 @@ func TestProgressRejectsMissingOrInvalidFacts(t *testing.T) {
 
 func TestHardcoverRejectsMissingEditionList(t *testing.T) {
 	for _, body := range []string{`{"data":{}}`, `{"data":{"editions":null}}`, `{"data":{"editions":[{"id":0,"book_id":2}]}}`} {
-		h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) { io.WriteString(rw, body) })}
+		h := testHardcover(t, func(rw http.ResponseWriter, _ *http.Request) { io.WriteString(rw, body) })
 		if _, err := h.Match(context.Background(), Book{Title: "synthetic", ISBN: "9780306406157"}, ""); err == nil {
 			t.Fatalf("invalid edition response accepted: %s", body)
 		}
@@ -50,14 +50,14 @@ func TestHardcoverRejectsMissingEditionList(t *testing.T) {
 }
 
 func TestHardcoverRejectsWrongReturnedMembership(t *testing.T) {
-	h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+	h := testHardcover(t, func(rw http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if strings.Contains(string(body), "query Edition") {
 			io.WriteString(rw, `{"data":{"editions":[{"id":99,"book_id":3}]}}`)
 		} else {
 			io.WriteString(rw, `{"data":{"books":[{"id":2}]}}`)
 		}
-	})}
+	})
 	if err := h.ValidateLink(context.Background(), 2, 99); err == nil {
 		t.Fatal("edition from another work accepted")
 	}

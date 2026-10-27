@@ -21,6 +21,11 @@ func testAPI(t *testing.T, handler http.HandlerFunc) *api {
 	return a
 }
 
+func testHardcover(t *testing.T, handler http.HandlerFunc) *Hardcover {
+	t.Helper()
+	return &Hardcover{api: testAPI(t, handler), userID: 183276}
+}
+
 func TestWeReadSearchAndWhitelist(t *testing.T) {
 	w := &WeRead{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer private-test-token" {

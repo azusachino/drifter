@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/azusachino/drifter/internal/catalog"
@@ -13,11 +14,15 @@ import (
 
 const hardcoverURL = "https://api.hardcover.app/v1/graphql"
 
-type Hardcover struct{ api *api }
+type Hardcover struct {
+	api    *api
+	userMu sync.Mutex
+	userID int64
+}
 
 func NewHardcover(token string) (*Hardcover, error) {
 	a, err := newAPI("Hardcover", hardcoverURL, token, 1100*time.Millisecond)
-	return &Hardcover{a}, err
+	return &Hardcover{api: a}, err
 }
 
 func (h *Hardcover) query(ctx context.Context, query string, variables any, target any) error {
@@ -249,17 +254,23 @@ func (h *Hardcover) ValidateLink(ctx context.Context, workID, editionID int64) e
 	return nil
 }
 
-// ResolveAccountFingerprint queries the authenticated Hardcover user and returns its stable identity fingerprint.
-func (h *Hardcover) ResolveAccountFingerprint(ctx context.Context) (string, error) {
+// GetUserID queries and caches the authenticated user ID on Hardcover.
+func (h *Hardcover) GetUserID(ctx context.Context) (int64, error) {
+	h.userMu.Lock()
+	defer h.userMu.Unlock()
+	if h.userID > 0 {
+		return h.userID, nil
+	}
+
 	var response struct {
 		Me json.RawMessage `json:"me"`
 	}
 	q := `query Me { me { id username } }`
 	if err := h.query(ctx, q, nil, &response); err != nil {
-		return "", err
+		return 0, err
 	}
 	if len(response.Me) == 0 || string(response.Me) == "null" {
-		return "", fmt.Errorf("Hardcover user identity missing or invalid in query response")
+		return 0, fmt.Errorf("Hardcover user identity missing or invalid in query response")
 	}
 
 	// Try unmarshaling as array (live GraphQL query)
@@ -269,9 +280,10 @@ func (h *Hardcover) ResolveAccountFingerprint(ctx context.Context) (string, erro
 	}
 	if err := json.Unmarshal(response.Me, &meList); err == nil && len(meList) > 0 {
 		if meList[0].ID <= 0 {
-			return "", fmt.Errorf("Hardcover user identity missing or invalid in query response")
+			return 0, fmt.Errorf("Hardcover user identity missing or invalid in query response")
 		}
-		return fmt.Sprintf("hardcover:%d", meList[0].ID), nil
+		h.userID = meList[0].ID
+		return h.userID, nil
 	}
 
 	// Try unmarshaling as single object
@@ -280,8 +292,18 @@ func (h *Hardcover) ResolveAccountFingerprint(ctx context.Context) (string, erro
 		Username string `json:"username"`
 	}
 	if err := json.Unmarshal(response.Me, &meObj); err == nil && meObj.ID > 0 {
-		return fmt.Sprintf("hardcover:%d", meObj.ID), nil
+		h.userID = meObj.ID
+		return h.userID, nil
 	}
 
-	return "", fmt.Errorf("Hardcover user identity missing or invalid in query response")
+	return 0, fmt.Errorf("Hardcover user identity missing or invalid in query response")
+}
+
+// ResolveAccountFingerprint queries the authenticated Hardcover user and returns its stable identity fingerprint.
+func (h *Hardcover) ResolveAccountFingerprint(ctx context.Context) (string, error) {
+	id, err := h.GetUserID(ctx)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("hardcover:%d", id), nil
 }
