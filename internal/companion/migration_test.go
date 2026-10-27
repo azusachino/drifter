@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strconv"
 	"testing"
+	"time"
 )
 
 // Keep the pre-versioning schema independent of the current migration.
@@ -75,8 +76,8 @@ func TestStoreVersionsNewAndLegacyDatabases(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if schemaVersion(t, s.db) != 3 {
-					t.Fatal("database not upgraded to version 3")
+				if schemaVersion(t, s.db) != 4 {
+					t.Fatal("database not upgraded to version 4")
 				}
 				rows, err := s.List(context.Background())
 				if err != nil || !reflect.DeepEqual(rows, want) {
@@ -91,7 +92,7 @@ func TestStoreVersionsNewAndLegacyDatabases(t *testing.T) {
 }
 
 func TestStoreRefusesUnsupportedVersionsWithoutCreatingSchema(t *testing.T) {
-	for _, version := range []int{4, -1} {
+	for _, version := range []int{5, -1} {
 		path := filepath.Join(t.TempDir(), "mappings.sqlite")
 		db := fixtureDB(t, path)
 		if _, err := db.Exec("PRAGMA user_version = " + strconv.Itoa(version)); err != nil {
@@ -143,5 +144,115 @@ func TestStoreVersionedDatabaseCannotSilentlyRecreateMissingSchema(t *testing.T)
 	var tables int
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE name = 'mappings'").Scan(&tables); err != nil || tables != 0 {
 		t.Fatalf("missing schema silently recreated: %d, %v", tables, err)
+	}
+}
+
+func TestStatusBaselineAndAuthorityMigrationFromVersionThreePreservesData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mappings.sqlite")
+	db := fixtureDB(t, path)
+
+	v3Schema := `
+CREATE TABLE mappings (
+	provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+	target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+	edition_id INTEGER NOT NULL CHECK(edition_id >= 0), source_title TEXT NOT NULL, source_isbn TEXT NOT NULL,
+	PRIMARY KEY(provider, source_account, book_id, target_account));
+CREATE TABLE user_books (
+	target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+	user_book_id INTEGER NOT NULL CHECK(user_book_id > 0),
+	PRIMARY KEY(target_account, work_id));
+CREATE TABLE edition_searches (
+	work_id INTEGER NOT NULL CHECK(work_id > 0),
+	source_isbn TEXT NOT NULL, query TEXT NOT NULL,
+	edition_id INTEGER NOT NULL CHECK(edition_id >= 0),
+	cached_at TEXT NOT NULL,
+	PRIMARY KEY(work_id, source_isbn, query));
+CREATE TABLE account_fingerprints (
+	provider TEXT NOT NULL, account TEXT NOT NULL,
+	fingerprint TEXT NOT NULL, created_at TEXT NOT NULL,
+	last_verified_at TEXT NOT NULL,
+	PRIMARY KEY(provider, account));
+PRAGMA user_version = 3;
+`
+	if _, err := db.Exec(v3Schema); err != nil {
+		t.Fatal(err)
+	}
+
+	mapping := testMapping()
+	if _, err := db.Exec(`INSERT INTO mappings VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		mapping.Provider, mapping.SourceAccount, mapping.BookID, mapping.TargetAccount,
+		mapping.WorkID, mapping.EditionID, mapping.SourceTitle, mapping.SourceISBN); err != nil {
+		t.Fatal(err)
+	}
+
+	t0 := "2026-10-27T12:00:00Z"
+	if _, err := db.Exec(`INSERT INTO account_fingerprints VALUES (?, ?, ?, ?, ?)`,
+		"weread", "mine", "weread:12345", t0, t0); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	ctx := context.Background()
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("failed to open store from v3: %v", err)
+	}
+	defer s.Close()
+
+	if schemaVersion(t, s.db) != 4 {
+		t.Fatalf("expected version 4, got %d", schemaVersion(t, s.db))
+	}
+
+	// Verify existing data preserved
+	mGot, err := s.GetMapping(ctx, mapping.Provider, mapping.SourceAccount, mapping.BookID, mapping.TargetAccount)
+	if err != nil || mGot == nil || *mGot != mapping {
+		t.Fatalf("mapping preservation failed: got %+v, err %v", mGot, err)
+	}
+	fpGot, err := s.GetAccountFingerprint(ctx, "weread", "mine")
+	if err != nil || fpGot == nil || fpGot.Fingerprint != "weread:12345" {
+		t.Fatalf("account fingerprint preservation failed: got %+v, err %v", fpGot, err)
+	}
+
+	// Verify v4 tables are functional
+	now := time.Date(2026, 10, 27, 14, 0, 0, 0, time.UTC)
+	baseline := StatusBaseline{
+		Provider:          mapping.Provider,
+		SourceAccount:     mapping.SourceAccount,
+		BookID:            mapping.BookID,
+		TargetAccount:     mapping.TargetAccount,
+		WorkID:            mapping.WorkID,
+		EditionID:         mapping.EditionID,
+		SourceStatusID:    HardcoverStatusCurrentlyReading,
+		TargetStatusID:    HardcoverStatusCurrentlyReading,
+		PolicyVersion:     "v1",
+		SourceFingerprint: "weread:12345",
+		TargetFingerprint: "hardcover:67890",
+		LastSyncedAt:      now,
+	}
+	if err := s.SaveStatusBaseline(ctx, baseline); err != nil {
+		t.Fatalf("save status baseline failed: %v", err)
+	}
+	bGot, err := s.GetStatusBaseline(ctx, mapping.Provider, mapping.SourceAccount, mapping.BookID, mapping.TargetAccount)
+	if err != nil || bGot == nil || !reflect.DeepEqual(*bGot, baseline) {
+		t.Fatalf("get status baseline failed: got %+v, want %+v, err %v", bGot, baseline, err)
+	}
+
+	auth := TargetAuthority{
+		TargetAccount:      mapping.TargetAccount,
+		WorkID:             mapping.WorkID,
+		AuthorizedProvider: mapping.Provider,
+		AuthorizedAccount:  mapping.SourceAccount,
+		AuthorizedBookID:   mapping.BookID,
+		PolicyVersion:      "v1",
+		PrivacyMode:        "default",
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	if err := s.SetTargetAuthority(ctx, auth); err != nil {
+		t.Fatalf("set target authority failed: %v", err)
+	}
+	aGot, err := s.GetTargetAuthority(ctx, mapping.TargetAccount, mapping.WorkID)
+	if err != nil || aGot == nil || !reflect.DeepEqual(*aGot, auth) {
+		t.Fatalf("get target authority failed: got %+v, want %+v, err %v", aGot, auth, err)
 	}
 }

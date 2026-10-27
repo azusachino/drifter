@@ -122,6 +122,39 @@ These cases exercise Milestone 2 contracts against in-process synthetic doubles:
    transitions, idempotent no-op replay (zero mutations sent on matching
    status), and uncertain 504 timeout holds.
 
+## Bootstrap preview and three-way evaluation
+
+```sh
+mise exec -- go test -race -count=1 ./internal/companion \
+  -run '^Test.*Preview' -v
+mise exec -- go test -race -count=1 ./internal/cli \
+  -run '^TestCLIPreview' -v
+```
+
+These cases exercise Milestone 3 contracts against in-process synthetic doubles:
+
+1. **Schema v4 migration**: Upgrades v3 SQLite databases to v4, introducing
+   `status_baselines` and `target_authorities` tables while preserving all
+   existing mappings, decisions, and account fingerprints.
+2. **Three-way status evaluation (US1, US5, US6, US8)**:
+   - Missing target record evaluates to `create` proposal.
+   - Matching target record evaluates to zero-mutation `no-op` proposal.
+   - Differing target record on bootstrap evaluates to `conflict` with frozen
+     immutable `ConflictEvidence` and nil baseline.
+   - Manual target edit on Hardcover (target changed while source unchanged)
+     evaluates to `conflict` with baseline evidence, protecting manual edits.
+   - Source progress advancement with unchanged target evaluates to `update`.
+   - Independent convergent progress evaluates to `no-op`.
+   - Divergent changes evaluate to `conflict`.
+   - Competing source mappings without exclusive `target_authorities` record
+     evaluate to `conflict`.
+   - Private source reading without explicit `--allow-private` consent is
+     held (`private_book_excluded`); private source mapped to public target
+     record conflicts to prevent silent exposure.
+3. **Zero mutations and fingerprint enforcement**: `drifter preview` binds
+   account fingerprints in SQLite on first use, fails closed on credential
+   mismatch, and asserts zero mutations are dispatched to target providers.
+
 ## Full local gates
 
 ```sh
