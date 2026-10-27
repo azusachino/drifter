@@ -71,6 +71,7 @@ var approvedMutationFields = map[string]bool{
 	"status_id":          true,
 	"privacy_setting_id": true,
 	"input":              true,
+	"object":             true,
 }
 
 // validateMutationFields ensures only approved status and identity fields are sent in GraphQL variables.
@@ -180,21 +181,35 @@ func (h *Hardcover) ApplyStatusMutation(ctx context.Context, req StatusMutationR
 				ID       int64   `json:"id"`
 				StatusID int     `json:"status_id"`
 				Error    *string `json:"error"`
+				UserBook *struct {
+					ID       int64 `json:"id"`
+					StatusID int   `json:"status_id"`
+				} `json:"user_book"`
 			} `json:"update_user_book"`
 		}
-		m := `mutation UpdateUserBook($id: Int!, $status_id: Int!) { update_user_book(id: $id, input: {status_id: $status_id}) { id status_id error } }`
-		vars := map[string]any{"id": existing.ID, "status_id": req.StatusID}
+		m := `mutation UpdateUserBook($id: Int!, $object: UserBookUpdateInput!) { update_user_book(id: $id, object: $object) { id error user_book { id status_id } } }`
+		vars := map[string]any{"id": existing.ID, "object": map[string]any{"status_id": req.StatusID}}
 		if err := h.mutate(ctx, m, vars, &resp); err != nil {
 			return StatusMutationOutcome{}, err
 		}
 		if resp.Update == nil || (resp.Update.Error != nil && *resp.Update.Error != "") {
 			return StatusMutationOutcome{}, fmt.Errorf("Hardcover update_user_book failed")
 		}
+		updatedStatus := resp.Update.StatusID
+		updatedID := resp.Update.ID
+		if resp.Update.UserBook != nil {
+			if resp.Update.UserBook.StatusID > 0 {
+				updatedStatus = resp.Update.UserBook.StatusID
+			}
+			if resp.Update.UserBook.ID > 0 {
+				updatedID = resp.Update.UserBook.ID
+			}
+		}
 		return StatusMutationOutcome{
 			Skipped:        false,
 			PreviousStatus: existing.StatusID,
-			CurrentStatus:  resp.Update.StatusID,
-			UserBookID:     resp.Update.ID,
+			CurrentStatus:  updatedStatus,
+			UserBookID:     updatedID,
 		}, nil
 	}
 
@@ -215,20 +230,34 @@ func (h *Hardcover) ApplyStatusMutation(ctx context.Context, req StatusMutationR
 			ID       int64   `json:"id"`
 			StatusID int     `json:"status_id"`
 			Error    *string `json:"error"`
+			UserBook *struct {
+				ID       int64 `json:"id"`
+				StatusID int   `json:"status_id"`
+			} `json:"user_book"`
 		} `json:"insert_user_book"`
 	}
-	m := `mutation InsertUserBook($input: UsersBooksInput!) { insert_user_book(input: $input) { id status_id error } }`
-	vars := map[string]any{"input": input}
+	m := `mutation InsertUserBook($object: UserBookCreateInput!) { insert_user_book(object: $object) { id error user_book { id status_id } } }`
+	vars := map[string]any{"object": input}
 	if err := h.mutate(ctx, m, vars, &resp); err != nil {
 		return StatusMutationOutcome{}, err
 	}
 	if resp.Insert == nil || (resp.Insert.Error != nil && *resp.Insert.Error != "") {
 		return StatusMutationOutcome{}, fmt.Errorf("Hardcover insert_user_book failed")
 	}
+	insertedStatus := resp.Insert.StatusID
+	insertedID := resp.Insert.ID
+	if resp.Insert.UserBook != nil {
+		if resp.Insert.UserBook.StatusID > 0 {
+			insertedStatus = resp.Insert.UserBook.StatusID
+		}
+		if resp.Insert.UserBook.ID > 0 {
+			insertedID = resp.Insert.UserBook.ID
+		}
+	}
 	return StatusMutationOutcome{
 		Skipped:        false,
 		PreviousStatus: 0,
-		CurrentStatus:  resp.Insert.StatusID,
-		UserBookID:     resp.Insert.ID,
+		CurrentStatus:  insertedStatus,
+		UserBookID:     insertedID,
 	}, nil
 }

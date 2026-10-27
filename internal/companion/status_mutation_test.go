@@ -44,9 +44,12 @@ func TestHardcoverStatusMutationTransitions(t *testing.T) {
 		case strings.HasPrefix(trimmed, "mutation InsertUserBook"):
 			callLog = append(callLog, "insert_user_book")
 			lastMutationVars = body.Variables
-			input := body.Variables["input"].(map[string]any)
-			statusID := int(input["status_id"].(float64))
-			bookID := int64(input["book_id"].(float64))
+			obj, ok := body.Variables["object"].(map[string]any)
+			if !ok {
+				obj = body.Variables["input"].(map[string]any)
+			}
+			statusID := int(obj["status_id"].(float64))
+			bookID := int64(obj["book_id"].(float64))
 			ratingVal := 5
 			state.userBook = &UserBookStatus{
 				ID:       101,
@@ -55,12 +58,17 @@ func TestHardcoverStatusMutationTransitions(t *testing.T) {
 				Rating:   &ratingVal,
 				Review:   "user notes must stay untouched",
 			}
-			io.WriteString(rw, `{"data":{"insert_user_book":{"id":101,"status_id":1,"error":null}}}`)
+			io.WriteString(rw, `{"data":{"insert_user_book":{"id":101,"status_id":1,"error":null,"user_book":{"id":101,"status_id":1}}}}`)
 
 		case strings.HasPrefix(trimmed, "mutation UpdateUserBook"):
 			callLog = append(callLog, "update_user_book")
 			lastMutationVars = body.Variables
-			statusID := int(body.Variables["status_id"].(float64))
+			var statusID int
+			if obj, ok := body.Variables["object"].(map[string]any); ok {
+				statusID = int(obj["status_id"].(float64))
+			} else {
+				statusID = int(body.Variables["status_id"].(float64))
+			}
 			state.userBook.StatusID = statusID
 			resp, _ := json.Marshal(map[string]any{
 				"data": map[string]any{
@@ -68,6 +76,10 @@ func TestHardcoverStatusMutationTransitions(t *testing.T) {
 						"id":        state.userBook.ID,
 						"status_id": statusID,
 						"error":     nil,
+						"user_book": map[string]any{
+							"id":        state.userBook.ID,
+							"status_id": statusID,
+						},
 					},
 				},
 			})
@@ -88,7 +100,13 @@ func TestHardcoverStatusMutationTransitions(t *testing.T) {
 	if res1.Skipped || res1.CurrentStatus != HardcoverStatusWantToRead || res1.UserBookID != 101 {
 		t.Fatalf("unexpected res1: %+v", res1)
 	}
-	if input, ok := lastMutationVars["input"].(map[string]any); !ok || input["book_id"] != float64(42) {
+	var insertBookID float64
+	if obj, ok := lastMutationVars["object"].(map[string]any); ok {
+		insertBookID = obj["book_id"].(float64)
+	} else if input, ok := lastMutationVars["input"].(map[string]any); ok {
+		insertBookID = input["book_id"].(float64)
+	}
+	if insertBookID != float64(42) {
 		t.Fatalf("unexpected insert variables: %+v", lastMutationVars)
 	}
 
@@ -100,7 +118,13 @@ func TestHardcoverStatusMutationTransitions(t *testing.T) {
 	if res2.Skipped || res2.PreviousStatus != 1 || res2.CurrentStatus != 2 {
 		t.Fatalf("unexpected res2: %+v", res2)
 	}
-	if lastMutationVars["id"] != float64(101) || lastMutationVars["status_id"] != float64(2) {
+	var updateStatusID float64
+	if obj, ok := lastMutationVars["object"].(map[string]any); ok {
+		updateStatusID = obj["status_id"].(float64)
+	} else if sid, ok := lastMutationVars["status_id"].(float64); ok {
+		updateStatusID = sid
+	}
+	if lastMutationVars["id"] != float64(101) || updateStatusID != float64(2) {
 		t.Fatalf("unexpected update variables: %+v", lastMutationVars)
 	}
 
