@@ -8,6 +8,13 @@ import (
 	"github.com/azusachino/drifter/internal/catalog"
 )
 
+const (
+	DefaultSourceAccount  = "default"
+	DefaultTargetAccount  = "default"
+	DefaultSourceProvider = "weread"
+	DefaultTargetProvider = "hardcover"
+)
+
 // Source and Target are the provider dependencies of core operations. Adapters
 // (CLI or server) supply authenticated clients; core never reads credentials.
 type Source interface {
@@ -21,6 +28,25 @@ type Target interface {
 	Match(context.Context, Book, string) (MatchReport, error)
 	ValidateLink(context.Context, int64, int64) error
 }
+
+// SourceProvider represents a complete intake source provider.
+type SourceProvider interface {
+	Source
+	ResolveAccountFingerprint(ctx context.Context, declaredVID string) (string, error)
+}
+
+// TargetProvider represents a complete catalog destination provider.
+type TargetProvider interface {
+	Target
+	GetUserBookStatus(ctx context.Context, workID int64) (*UserBookStatus, error)
+	ApplyStatusMutation(ctx context.Context, req StatusMutationRequest) (StatusMutationOutcome, error)
+	ResolveAccountFingerprint(ctx context.Context) (string, error)
+}
+
+var (
+	_ SourceProvider = (*WeRead)(nil)
+	_ TargetProvider = (*Hardcover)(nil)
+)
 
 type Inspection struct {
 	Book     Book      `json:"book"`

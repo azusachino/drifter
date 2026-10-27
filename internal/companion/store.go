@@ -93,6 +93,56 @@ func OpenStoreForRead(path string) (*Store, error) {
 	return store, nil
 }
 
+// ResolveAccounts resolves source and target account namespaces.
+// Non-empty arguments are validated and used directly.
+// Empty arguments default to DefaultSourceAccount / DefaultTargetAccount, or to the single
+// existing account pair recorded in the store if exactly one exists.
+func (s *Store) ResolveAccounts(ctx context.Context, sourceAccount, targetAccount string) (string, string, error) {
+	if sourceAccount != "" && targetAccount != "" {
+		if !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) {
+			return "", "", ErrInvalidMappingKey
+		}
+		return sourceAccount, targetAccount, nil
+	}
+
+	// If one or both are empty, check if store has a single existing account pair in mappings
+	if s != nil && s.db != nil {
+		rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT source_account, target_account FROM mappings`)
+		if err == nil {
+			defer rows.Close()
+			var pairs [][2]string
+			for rows.Next() {
+				var sa, ta string
+				if err := rows.Scan(&sa, &ta); err == nil && ValidLabel(sa) && ValidLabel(ta) {
+					pairs = append(pairs, [2]string{sa, ta})
+				}
+			}
+			if len(pairs) == 1 {
+				resolvedSource := sourceAccount
+				resolvedTarget := targetAccount
+				if resolvedSource == "" {
+					resolvedSource = pairs[0][0]
+				}
+				if resolvedTarget == "" {
+					resolvedTarget = pairs[0][1]
+				}
+				return resolvedSource, resolvedTarget, nil
+			}
+		}
+	}
+
+	if sourceAccount == "" {
+		sourceAccount = DefaultSourceAccount
+	}
+	if targetAccount == "" {
+		targetAccount = DefaultTargetAccount
+	}
+	if !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) {
+		return "", "", ErrInvalidMappingKey
+	}
+	return sourceAccount, targetAccount, nil
+}
+
 // OpenStoreReadOnly never creates files or migrates schema.
 func OpenStoreReadOnly(path string) (*Store, error) {
 	if err := checkLockSupport(); err != nil {
@@ -659,6 +709,25 @@ func (s *Store) SaveStatusBaseline(ctx context.Context, b StatusBaseline) error 
 	return err
 }
 
+// DeleteStatusBaseline removes an accepted baseline for a book mapping, allowing fresh re-evaluation.
+func (s *Store) DeleteStatusBaseline(ctx context.Context, provider, sourceAccount, bookID, targetAccount string) (bool, error) {
+	if !ValidLabel(provider) || !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) || !ValidBookID(bookID) {
+		return false, ErrInvalidMappingKey
+	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	res, err := s.db.ExecContext(ctx, `DELETE FROM status_baselines WHERE provider=? AND source_account=? AND book_id=? AND target_account=?`,
+		provider, sourceAccount, bookID, targetAccount)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // GetTargetAuthority returns the status write authority for a target work, returning nil, nil if none is set.
 func (s *Store) GetTargetAuthority(ctx context.Context, targetAccount string, workID int64) (*TargetAuthority, error) {
 	if !ValidLabel(targetAccount) || workID <= 0 {
@@ -1070,6 +1139,41 @@ func (s *Store) ListSyncHolds(ctx context.Context, sourceAccount, targetAccount 
 		holds = append(holds, h)
 	}
 	return holds, rows.Err()
+}
+
+// ClearSyncHolds removes sync hold records, optionally filtered by provider and book ID.
+func (s *Store) ClearSyncHolds(ctx context.Context, provider, sourceAccount, targetAccount, bookID string) (int64, error) {
+	if !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) {
+		return 0, ErrInvalidMappingKey
+	}
+	if provider != "" && !ValidLabel(provider) {
+		return 0, ErrInvalidMappingKey
+	}
+	if bookID != "" && !ValidBookID(bookID) {
+		return 0, ErrInvalidMappingKey
+	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+
+	query := `DELETE FROM sync_holds WHERE source_account=? AND target_account=?`
+	args := []any{sourceAccount, targetAccount}
+	if provider != "" {
+		query += ` AND provider=?`
+		args = append(args, provider)
+	}
+	if bookID != "" {
+		query += ` AND book_id=?`
+		args = append(args, bookID)
+	}
+
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // ListSyncRuns returns recent sync runs, optionally filtered by account pair.

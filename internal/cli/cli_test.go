@@ -162,8 +162,8 @@ func TestCLIHelpAndInvalidInputsDoNotNeedCredentials(t *testing.T) {
 	secret := "synthetic-secret-never-echo"
 	for _, args := range [][]string{
 		{"daemon"}, {"secret-command-never-echo"}, {secret}, {"search"}, {"inspect", "--book-id", "0"},
-		{"link", "--book-id", "123", "--work-id", "42"},
-		{"unlink", "--book-id", "123", "--account", "source"},
+		{"link", "--book-id", "123"},
+		{"unlink"},
 		{"link", "--work-id", secret}, {"search", "--api-key", secret},
 		{"links", secret},
 	} {

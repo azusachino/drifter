@@ -26,17 +26,17 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 	var includePrivate, includeImported bool
 	cmd := &cobra.Command{Use: "review", Short: "Review pending books, save decisions, and confirm local links"}
 	f := cmd.Flags()
-	f.StringVar(&account, "account", "", "source account namespace (required; not an authenticated ID)")
-	f.StringVar(&targetAccount, "target-account", "", "target account namespace (required; not an authenticated ID)")
+	f.StringVar(&account, "source-account", "", "source account namespace (default: default or inferred)")
+	f.StringVar(&account, "account", "", "alias for --source-account")
+	f.StringVar(&targetAccount, "target-account", "", "target account namespace (default: default or inferred)")
 	f.IntVar(&days, "days", 90, "recently opened window in days (1–36500)")
 	f.StringVar(&dbPath, "db", "", "private SQLite path (config database.path overrides this; otherwise default)")
 	f.StringVar(&configPath, "config", "config.toml", "settings-only TOML path (missing file uses defaults)")
 	f.BoolVar(&includePrivate, "include-private", false, "explicitly include privacy-marked books")
 	f.BoolVar(&includeImported, "include-imported", false, "inspect imported books (linking unsupported)")
-	markRequiredFlags(cmd, "account", "target-account")
 	return app.command(cmd, func(c *cobra.Command, _ []string) (reviewErr error) {
-		if !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) || days < 1 || days > 36500 {
-			return fmt.Errorf("valid account labels and --days between 1 and 36500 required")
+		if days < 1 || days > 36500 {
+			return fmt.Errorf("--days between 1 and 36500 required")
 		}
 		cfg, err := config.Load(configPath)
 		if err != nil {
@@ -61,7 +61,8 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 			return fmt.Errorf("cannot start review: database is in use; stop the server or other review first")
 		}
 		defer owner.Close()
-		source, err := app.providers.source()
+
+		source, err := app.getSource()
 		if err != nil {
 			return err
 		}
@@ -71,6 +72,11 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 			return err
 		}
 		defer store.Close()
+
+		account, targetAccount, err = store.ResolveAccounts(c.Context(), account, targetAccount)
+		if err != nil {
+			return err
+		}
 		terminal := bufio.NewReader(app.input)
 		var failedBooks []string
 		var unfinished []string
@@ -101,7 +107,7 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 		targetLoaded := false
 		loadTarget := func() (target, error) {
 			if !targetLoaded {
-				reviewTarget, reviewTargetErr = app.providers.target()
+				reviewTarget, reviewTargetErr = app.getTarget()
 				targetLoaded = true
 			}
 			return reviewTarget, reviewTargetErr

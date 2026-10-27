@@ -54,9 +54,6 @@ func TestCLIPreviewMissingRequiredFlags(t *testing.T) {
 		args []string
 	}{
 		{"no flags", []string{"preview"}},
-		{"missing book-id", []string{"preview", "--account", "mine", "--target-account", "default"}},
-		{"missing account", []string{"preview", "--book-id", "123", "--target-account", "default"}},
-		{"missing target-account", []string{"preview", "--book-id", "123", "--account", "mine"}},
 	}
 
 	for _, tc := range cases {
@@ -67,6 +64,60 @@ func TestCLIPreviewMissingRequiredFlags(t *testing.T) {
 				t.Fatalf("expected error for %s, got nil", tc.name)
 			}
 		})
+	}
+}
+
+func TestCLIPreviewZeroFlagsDefaultAccounts(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "state.sqlite")
+	store, err := companion.OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	mapping := companion.Mapping{
+		Provider:      "weread",
+		SourceAccount: companion.DefaultSourceAccount,
+		BookID:        "123456",
+		TargetAccount: companion.DefaultTargetAccount,
+		WorkID:        500,
+		EditionID:     600,
+		SourceTitle:   "Preview Book",
+		SourceISBN:    "9780123456789",
+	}
+	if err := store.Confirm(ctx, mapping, false); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	src := &cliMockPreviewSource{
+		book:        companion.Book{ID: "123456", Title: "Preview Book"},
+		progress:    companion.Progress{Status: "reading", Percent: 33, Started: true},
+		fingerprint: "weread:10001",
+	}
+	tgt := &cliMockPreviewTarget{
+		status:      nil,
+		fingerprint: "hardcover:20002",
+	}
+
+	var out, stderr bytes.Buffer
+	err = run(context.Background(), []string{
+		"preview",
+		"--book-id", "123456",
+		"--db", dbPath,
+	}, &out, &stderr, clients{
+		previewSource: func() (companion.PreviewSource, error) { return src, nil },
+		previewTarget: func() (companion.PreviewTarget, error) { return tgt, nil },
+	})
+	if err != nil {
+		t.Fatalf("cli preview failed with zero account flags: %v", err)
+	}
+
+	var prop companion.SyncProposal
+	if err := json.Unmarshal(out.Bytes(), &prop); err != nil {
+		t.Fatalf("failed to parse JSON output: %v, raw: %s", err, out.String())
+	}
+	if prop.Action != companion.ActionCreate {
+		t.Fatalf("expected action create, got %q", prop.Action)
 	}
 }
 

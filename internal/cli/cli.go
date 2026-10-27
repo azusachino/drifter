@@ -111,6 +111,11 @@ come only from WEREAD_API_KEY and HARDCOVER_API_KEY in the process environment.`
 		app.previewCommand(),
 		app.syncCommand(),
 		app.reconcileCommand(),
+		app.targetCommand(),
+		app.baselinesCommand(),
+		app.resetBaselineCommand(),
+		app.holdsCommand(),
+		app.clearHoldCommand(),
 		app.serveProbesCommand(),
 	)
 	return root
@@ -142,6 +147,46 @@ func encodeJSON(cmd *cobra.Command, value any) error {
 	return encoder.Encode(value)
 }
 
+func (app *cliApp) getSource() (companion.Source, error) {
+	if app.providers.source == nil {
+		return nil, fmt.Errorf("source provider not configured")
+	}
+	return app.providers.source()
+}
+
+func (app *cliApp) getTarget() (companion.Target, error) {
+	if app.providers.target == nil {
+		return nil, fmt.Errorf("target provider not configured")
+	}
+	return app.providers.target()
+}
+
+func resolveAccountsForPath(ctx context.Context, dbPath, sourceAccount, targetAccount string) (string, string, error) {
+	if sourceAccount != "" && targetAccount != "" {
+		if !companion.ValidLabel(sourceAccount) || !companion.ValidLabel(targetAccount) {
+			return "", "", companion.ErrInvalidMappingKey
+		}
+		return sourceAccount, targetAccount, nil
+	}
+	if _, err := os.Stat(dbPath); err == nil {
+		store, err := companion.OpenStoreForRead(dbPath)
+		if err == nil {
+			defer store.Close()
+			return store.ResolveAccounts(ctx, sourceAccount, targetAccount)
+		}
+	}
+	if sourceAccount == "" {
+		sourceAccount = companion.DefaultSourceAccount
+	}
+	if targetAccount == "" {
+		targetAccount = companion.DefaultTargetAccount
+	}
+	if !companion.ValidLabel(sourceAccount) || !companion.ValidLabel(targetAccount) {
+		return "", "", companion.ErrInvalidMappingKey
+	}
+	return sourceAccount, targetAccount, nil
+}
+
 func (app *cliApp) searchCommand() *cobra.Command {
 	var title string
 	command := &cobra.Command{Use: "search", Short: "Search WeRead books by title"}
@@ -151,7 +196,7 @@ func (app *cliApp) searchCommand() *cobra.Command {
 		if title == "" {
 			return fmt.Errorf("--title required")
 		}
-		reader, err := app.providers.source()
+		reader, err := app.getSource()
 		if err != nil {
 			return err
 		}
@@ -174,7 +219,7 @@ func (app *cliApp) inspectCommand() *cobra.Command {
 		if !companion.ValidBookID(bookID) {
 			return fmt.Errorf("valid --book-id required")
 		}
-		reader, err := app.providers.source()
+		reader, err := app.getSource()
 		if err != nil {
 			return err
 		}
@@ -205,11 +250,11 @@ func (app *cliApp) matchCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		reader, err := app.providers.source()
+		reader, err := app.getSource()
 		if err != nil {
 			return err
 		}
-		hardcover, err := app.providers.target()
+		hardcover, err := app.getTarget()
 		if err != nil {
 			return err
 		}
@@ -233,15 +278,33 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 	var includePrivate, includeImported bool
 	command := &cobra.Command{Use: "pending", Short: "List recently opened eligible WeRead books"}
 	flags := command.Flags()
-	flags.StringVar(&account, "account", "", "source account namespace (required; not an authenticated ID)")
-	flags.StringVar(&targetAccount, "target-account", "", "target account namespace (required; not an authenticated ID)")
+	flags.StringVar(&account, "source-account", "", "source account namespace (default: default or inferred)")
+	flags.StringVar(&account, "account", "", "alias for --source-account")
+	flags.StringVar(&targetAccount, "target-account", "", "target account namespace (default: default or inferred)")
 	flags.IntVar(&days, "days", 90, "recently opened window in days (1–36500; browsing counts)")
 	flags.BoolVar(&includePrivate, "include-private", false, "explicitly include privacy-marked books (unknown privacy remains excluded)")
 	flags.BoolVar(&includeImported, "include-imported", false, "include imported books for inspection only; match/link remain unsupported")
 	flags.StringVar(&after, "after", "", "continue a pending worklist using its next_cursor")
 	flags.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
-	markRequiredFlags(command, "account", "target-account")
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
+		if dbPath == "" {
+			var err error
+			dbPath, err = defaultDB()
+			if err != nil {
+				return err
+			}
+		}
+		if s, err := companion.OpenStoreForRead(dbPath); err == nil {
+			account, targetAccount, _ = s.ResolveAccounts(cmd.Context(), account, targetAccount)
+			s.Close()
+		} else {
+			if account == "" {
+				account = companion.DefaultSourceAccount
+			}
+			if targetAccount == "" {
+				targetAccount = companion.DefaultTargetAccount
+			}
+		}
 		if !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
 			return fmt.Errorf("valid --account and --target-account required")
 		}
@@ -260,7 +323,7 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 				return err
 			}
 		}
-		reader, err := app.providers.source()
+		reader, err := app.getSource()
 		if err != nil {
 			return err
 		}
@@ -294,10 +357,10 @@ func (app *cliApp) decisionKeyFlags(command *cobra.Command, bookID, account, tar
 		flags.StringVar(bookID, "book-id", "", "WeRead book ID (required)")
 		markRequiredFlags(command, "book-id")
 	}
-	flags.StringVar(account, "account", "", "source account namespace (required; not an authenticated ID)")
-	flags.StringVar(targetAccount, "target-account", "", "target account namespace (required; not an authenticated ID)")
+	flags.StringVar(account, "source-account", "", "source account namespace (default: default or inferred)")
+	flags.StringVar(account, "account", "", "alias for --source-account")
+	flags.StringVar(targetAccount, "target-account", "", "target account namespace (default: default or inferred)")
 	flags.StringVar(dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
-	markRequiredFlags(command, "account", "target-account")
 }
 
 func (app *cliApp) decideCommand() *cobra.Command {
@@ -311,8 +374,8 @@ func (app *cliApp) decideCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		if !companion.ValidBookID(bookID) || !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
-			return fmt.Errorf("valid book ID and account labels required")
+		if !companion.ValidBookID(bookID) {
+			return fmt.Errorf("valid book ID required")
 		}
 		if kind != "skip" && kind != "exclude" && kind != "not-in-catalog" {
 			return fmt.Errorf("--decision must be skip, exclude, or not-in-catalog")
@@ -325,6 +388,10 @@ func (app *cliApp) decideCommand() *cobra.Command {
 			return err
 		}
 		defer store.Close()
+		account, targetAccount, err = store.ResolveAccounts(cmd.Context(), account, targetAccount)
+		if err != nil {
+			return err
+		}
 		if err := store.SaveDecision(cmd.Context(), companion.Decision{Provider: "weread", SourceAccount: account, BookID: bookID, TargetAccount: targetAccount, Kind: kind}); err != nil {
 			return err
 		}
@@ -341,14 +408,15 @@ func (app *cliApp) decisionsCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		if !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
-			return fmt.Errorf("valid account labels required")
-		}
 		store, err := companion.OpenStoreForRead(path)
 		if err != nil {
 			return err
 		}
 		defer store.Close()
+		account, targetAccount, err = store.ResolveAccounts(cmd.Context(), account, targetAccount)
+		if err != nil {
+			return err
+		}
 		rows, err := store.ListDecisions(cmd.Context(), "weread", account, targetAccount)
 		if err != nil {
 			return err
@@ -366,8 +434,8 @@ func (app *cliApp) resetDecisionCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		if !companion.ValidBookID(bookID) || !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
-			return fmt.Errorf("valid book ID and account labels required")
+		if !companion.ValidBookID(bookID) {
+			return fmt.Errorf("valid book ID required")
 		}
 		if err := companion.CheckDatabaseWriteAvailable(path); err != nil {
 			return err
@@ -377,6 +445,10 @@ func (app *cliApp) resetDecisionCommand() *cobra.Command {
 			return err
 		}
 		defer store.Close()
+		account, targetAccount, err = store.ResolveAccounts(cmd.Context(), account, targetAccount)
+		if err != nil {
+			return err
+		}
 		if err := store.ResetDecision(cmd.Context(), "weread", account, bookID, targetAccount); err != nil {
 			return err
 		}
@@ -393,17 +465,15 @@ func (app *cliApp) linkCommand() *cobra.Command {
 	flags.StringVar(&bookID, "book-id", "", "WeRead book ID (required)")
 	flags.Int64Var(&workID, "work-id", 0, "explicitly selected Hardcover work ID (required)")
 	flags.Int64Var(&editionID, "edition-id", 0, "optional confirmed edition; omitted means work-only")
-	flags.StringVar(&account, "account", "", "source account namespace (required; not an authenticated ID)")
-	flags.StringVar(&targetAccount, "target-account", "", "target account namespace (required; not an authenticated ID)")
+	flags.StringVar(&account, "source-account", "", "source account namespace (default: default or inferred)")
+	flags.StringVar(&account, "account", "", "alias for --source-account")
+	flags.StringVar(&targetAccount, "target-account", "", "target account namespace (default: default or inferred)")
 	flags.BoolVar(&replace, "replace", false, "explicitly replace an existing local mapping")
 	flags.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
-	markRequiredFlags(command, "book-id", "work-id", "account", "target-account")
+	markRequiredFlags(command, "book-id", "work-id")
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
 		if !companion.ValidBookID(bookID) {
 			return fmt.Errorf("valid --book-id required")
-		}
-		if !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
-			return fmt.Errorf("valid --account and --target-account required")
 		}
 		if workID <= 0 || editionID < 0 {
 			return fmt.Errorf("positive --work-id and nonnegative --edition-id required")
@@ -418,11 +488,16 @@ func (app *cliApp) linkCommand() *cobra.Command {
 		if err := companion.CheckDatabaseWriteAvailable(dbPath); err != nil {
 			return err
 		}
-		reader, err := app.providers.source()
+		var err error
+		account, targetAccount, err = resolveAccountsForPath(cmd.Context(), dbPath, account, targetAccount)
 		if err != nil {
 			return err
 		}
-		hardcover, err := app.providers.target()
+		reader, err := app.getSource()
+		if err != nil {
+			return err
+		}
+		hardcover, err := app.getTarget()
 		if err != nil {
 			return err
 		}
@@ -467,16 +542,14 @@ func (app *cliApp) unlinkCommand() *cobra.Command {
 	command := &cobra.Command{Use: "unlink", Short: "Remove one local mapping"}
 	flags := command.Flags()
 	flags.StringVar(&bookID, "book-id", "", "WeRead book ID (required)")
-	flags.StringVar(&account, "account", "", "source account namespace (required; not an authenticated ID)")
-	flags.StringVar(&targetAccount, "target-account", "", "target account namespace (required; not an authenticated ID)")
+	flags.StringVar(&account, "source-account", "", "source account namespace (default: default or inferred)")
+	flags.StringVar(&account, "account", "", "alias for --source-account")
+	flags.StringVar(&targetAccount, "target-account", "", "target account namespace (default: default or inferred)")
 	flags.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
-	markRequiredFlags(command, "book-id", "account", "target-account")
+	markRequiredFlags(command, "book-id")
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
 		if !companion.ValidBookID(bookID) {
 			return fmt.Errorf("valid --book-id required")
-		}
-		if !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
-			return fmt.Errorf("valid --account and --target-account required")
 		}
 		if dbPath == "" {
 			var err error
@@ -490,6 +563,10 @@ func (app *cliApp) unlinkCommand() *cobra.Command {
 			return err
 		}
 		defer store.Close()
+		account, targetAccount, err = store.ResolveAccounts(cmd.Context(), account, targetAccount)
+		if err != nil {
+			return err
+		}
 		if err := store.Unlink(cmd.Context(), "weread", account, bookID, targetAccount); err != nil {
 			return err
 		}

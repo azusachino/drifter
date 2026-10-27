@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testMapping() Mapping {
@@ -276,5 +277,147 @@ func TestValidLabel(t *testing.T) {
 		if !ValidLabel(label) {
 			t.Fatalf("valid label rejected: %q", label)
 		}
+	}
+}
+
+func TestStoreResolveAccounts(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "accounts.sqlite")
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// 1. Explicit accounts are returned directly
+	src, dst, err := s.ResolveAccounts(ctx, "custom-src", "custom-dst")
+	if err != nil || src != "custom-src" || dst != "custom-dst" {
+		t.Fatalf("unexpected resolve: got (%q, %q), err: %v", src, dst, err)
+	}
+
+	// 2. Empty accounts on empty store fall back to default/default
+	src, dst, err = s.ResolveAccounts(ctx, "", "")
+	if err != nil || src != DefaultSourceAccount || dst != DefaultTargetAccount {
+		t.Fatalf("unexpected fallback: got (%q, %q), err: %v", src, dst, err)
+	}
+
+	// 3. Store with a single unique mapping pair infers that pair
+	m := Mapping{
+		Provider: "weread", SourceAccount: "mine", BookID: "100",
+		TargetAccount: "custom-hardcover", WorkID: 200, SourceTitle: "Title",
+	}
+	if err := s.Confirm(ctx, m, false); err != nil {
+		t.Fatal(err)
+	}
+	src, dst, err = s.ResolveAccounts(ctx, "", "")
+	if err != nil || src != "mine" || dst != "custom-hardcover" {
+		t.Fatalf("unexpected inferred pair: got (%q, %q), err: %v", src, dst, err)
+	}
+
+	// Partially empty: specified source, empty target
+	src, dst, err = s.ResolveAccounts(ctx, "override-src", "")
+	if err != nil || src != "override-src" || dst != "custom-hardcover" {
+		t.Fatalf("unexpected partial resolve: got (%q, %q), err: %v", src, dst, err)
+	}
+}
+
+func TestStoreDeleteStatusBaseline(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "baselines.sqlite")
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	b := StatusBaseline{
+		Provider: "weread", SourceAccount: "src", BookID: "123",
+		TargetAccount: "dst", WorkID: 42, EditionID: 10,
+		SourceStatusID: 2, TargetStatusID: 2, PolicyVersion: "v1",
+		SourceFingerprint: "weread:1", TargetFingerprint: "hardcover:2",
+		LastSyncedAt: time.Now().UTC(),
+	}
+	if err := s.SaveStatusBaseline(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.GetStatusBaseline(ctx, "weread", "src", "123", "dst")
+	if err != nil || got == nil {
+		t.Fatalf("expected baseline, got: %+v, err: %v", got, err)
+	}
+
+	deleted, err := s.DeleteStatusBaseline(ctx, "weread", "src", "123", "dst")
+	if err != nil || !deleted {
+		t.Fatalf("expected deletion, got deleted=%v, err=%v", deleted, err)
+	}
+
+	gotAfter, err := s.GetStatusBaseline(ctx, "weread", "src", "123", "dst")
+	if err != nil || gotAfter != nil {
+		t.Fatalf("expected baseline to be deleted, got: %+v, err: %v", gotAfter, err)
+	}
+
+	// Second delete returns false (not found)
+	deletedAgain, err := s.DeleteStatusBaseline(ctx, "weread", "src", "123", "dst")
+	if err != nil || deletedAgain {
+		t.Fatalf("expected deleted=false on absent, got: %v, err: %v", deletedAgain, err)
+	}
+}
+
+func TestStoreClearSyncHolds(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "holds.sqlite")
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	runID, err := s.CreateSyncRun(ctx, "src", "dst", "v1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h1 := SyncHold{
+		RunID: runID, Provider: "weread", SourceAccount: "src", TargetAccount: "dst",
+		BookID: "101", WorkID: 1, Reason: "conflict", Message: "conflict msg",
+		CreatedAt: time.Now().UTC(),
+	}
+	h2 := SyncHold{
+		RunID: runID, Provider: "weread", SourceAccount: "src", TargetAccount: "dst",
+		BookID: "102", WorkID: 2, Reason: "uncertain", Message: "uncertain msg",
+		CreatedAt: time.Now().UTC(),
+	}
+	if _, err := s.RecordSyncHold(ctx, h1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordSyncHold(ctx, h2); err != nil {
+		t.Fatal(err)
+	}
+
+	holds, err := s.ListSyncHolds(ctx, "src", "dst")
+	if err != nil || len(holds) != 2 {
+		t.Fatalf("expected 2 holds, got %d, err: %v", len(holds), err)
+	}
+
+	// Clear specific hold for 101
+	cleared, err := s.ClearSyncHolds(ctx, "weread", "src", "dst", "101")
+	if err != nil || cleared != 1 {
+		t.Fatalf("expected 1 cleared, got %d, err: %v", cleared, err)
+	}
+
+	holdsAfter, err := s.ListSyncHolds(ctx, "src", "dst")
+	if err != nil || len(holdsAfter) != 1 || holdsAfter[0].BookID != "102" {
+		t.Fatalf("expected 1 remaining hold for 102, got: %+v, err: %v", holdsAfter, err)
+	}
+
+	// Clear remaining holds for account pair
+	clearedRest, err := s.ClearSyncHolds(ctx, "weread", "src", "dst", "")
+	if err != nil || clearedRest != 1 {
+		t.Fatalf("expected 1 cleared, got %d, err: %v", clearedRest, err)
+	}
+
+	holdsFinal, err := s.ListSyncHolds(ctx, "src", "dst")
+	if err != nil || len(holdsFinal) != 0 {
+		t.Fatalf("expected 0 holds, got %d, err: %v", len(holdsFinal), err)
 	}
 }
