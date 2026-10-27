@@ -155,6 +155,34 @@ These cases exercise Milestone 3 contracts against in-process synthetic doubles:
    account fingerprints in SQLite on first use, fails closed on credential
    mismatch, and asserts zero mutations are dispatched to target providers.
 
+## Safe bootstrap mutation, intents and restart reconciliation
+
+```sh
+mise exec -- go test -race -count=1 ./internal/companion \
+  -run '^TestApplySync' -v
+mise exec -- go test -race -count=1 ./internal/cli \
+  -run '^TestCLISync' -v
+```
+
+These cases exercise Milestone 4 contracts against in-process synthetic doubles:
+
+1. **Schema v5 migration**: Upgrades v4 SQLite databases to v5, introducing
+   `sync_intents` and `sync_receipts` tables while preserving all existing
+   mappings, decisions, account fingerprints, baselines, and target
+   authorities.
+2. **Durable two-phase write intent (US7)**: Persists an intent record before
+   sending status mutations to Hardcover, transitions through `pending` and
+   `in_flight`, and reads back target state to verify before marking `applied`.
+3. **Approved field boundaries (US1, US2)**: Strictly passes approved status
+   fields (`work_id`, `edition_id`, `status_id`) without touching user reviews,
+   ratings, dates, or tags.
+4. **Restart reconciliation (US7)**: Detects prior `uncertain` or `in_flight`
+   intents on next run, queries target state, and reconciles to `applied` with
+   an audit receipt and updated baseline if the mutation landed, avoiding
+   duplicate remote mutations.
+5. **Zero-mutation dry-run**: `drifter sync --dry-run` performs pure three-way
+   evaluation identical to `preview` with zero provider writes.
+
 ## Full local gates
 
 ```sh

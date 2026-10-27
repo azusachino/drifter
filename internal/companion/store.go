@@ -152,7 +152,7 @@ func openStore(path string, readOnly bool, owner *DatabaseOwnership) (*Store, er
 	return &Store{db: db, path: path, owner: owner, readOnly: readOnly}, nil
 }
 
-const storeVersion = 4
+const storeVersion = 5
 
 func validateStoreSchema(db *sql.DB) error {
 	var version int
@@ -192,6 +192,20 @@ func validateStoreSchema(db *sql.DB) error {
 		return err
 	}
 	rows, err = db.Query(`SELECT target_account,work_id,authorized_provider,authorized_account,authorized_book_id,policy_version,privacy_mode,created_at,updated_at FROM target_authorities LIMIT 0`)
+	if err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	rows, err = db.Query(`SELECT id,provider,source_account,book_id,target_account,work_id,edition_id,proposed_status_id,policy_version,source_fingerprint,target_fingerprint,state,created_at,updated_at FROM sync_intents LIMIT 0`)
+	if err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	rows, err = db.Query(`SELECT id,intent_id,provider,source_account,book_id,target_account,work_id,edition_id,target_status_id,applied_at FROM sync_receipts LIMIT 0`)
 	if err != nil {
 		return err
 	}
@@ -284,6 +298,39 @@ func migrateStore(db *sql.DB) error {
 			return err
 		}
 		version = 4
+	}
+	if version == 4 {
+		if _, err := tx.Exec(`CREATE TABLE sync_intents (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+			target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+			edition_id INTEGER NOT NULL CHECK(edition_id >= 0),
+			proposed_status_id INTEGER NOT NULL CHECK(proposed_status_id >= 1 AND proposed_status_id <= 5),
+			privacy_setting_id INTEGER,
+			policy_version TEXT NOT NULL, source_fingerprint TEXT NOT NULL,
+			target_fingerprint TEXT NOT NULL,
+			state TEXT NOT NULL CHECK(state IN ('pending', 'in_flight', 'applied', 'failed', 'uncertain')),
+			error_message TEXT,
+			created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`CREATE INDEX idx_sync_intents_lookup ON sync_intents(provider, source_account, book_id, target_account)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`CREATE TABLE sync_receipts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			intent_id INTEGER NOT NULL REFERENCES sync_intents(id),
+			provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+			target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+			edition_id INTEGER NOT NULL CHECK(edition_id >= 0),
+			target_status_id INTEGER NOT NULL CHECK(target_status_id >= 1 AND target_status_id <= 5),
+			applied_at TEXT NOT NULL)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 5"); err != nil {
+			return err
+		}
+		version = 5
 	}
 	return tx.Commit()
 }
@@ -596,4 +643,191 @@ func (s *Store) SetTargetAuthority(ctx context.Context, a TargetAuthority) error
 		a.TargetAccount, a.WorkID, a.AuthorizedProvider, a.AuthorizedAccount,
 		a.AuthorizedBookID, a.PolicyVersion, a.PrivacyMode, createdStr, updatedStr)
 	return err
+}
+
+// SyncIntent records a durable intent to mutate target reading status before dispatch.
+type SyncIntent struct {
+	ID                int64     `json:"id"`
+	Provider          string    `json:"provider"`
+	SourceAccount     string    `json:"source_account"`
+	BookID            string    `json:"book_id"`
+	TargetAccount     string    `json:"target_account"`
+	WorkID            int64     `json:"work_id"`
+	EditionID         int64     `json:"edition_id,omitempty"`
+	ProposedStatusID  int       `json:"proposed_status_id"`
+	PrivacySettingID  *int      `json:"privacy_setting_id,omitempty"`
+	PolicyVersion     string    `json:"policy_version"`
+	SourceFingerprint string    `json:"source_fingerprint"`
+	TargetFingerprint string    `json:"target_fingerprint"`
+	State             string    `json:"state"` // "pending", "in_flight", "applied", "failed", "uncertain"
+	ErrorMessage      string    `json:"error_message,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+func (i SyncIntent) valid() bool {
+	return ValidLabel(i.Provider) && ValidLabel(i.SourceAccount) && ValidLabel(i.TargetAccount) &&
+		ValidBookID(i.BookID) && i.WorkID > 0 && i.EditionID >= 0 &&
+		ValidHardcoverStatus(i.ProposedStatusID) && i.PolicyVersion != "" &&
+		ValidFingerprint(i.SourceFingerprint) && ValidFingerprint(i.TargetFingerprint) &&
+		(i.State == "pending" || i.State == "in_flight" || i.State == "applied" || i.State == "failed" || i.State == "uncertain") &&
+		!i.CreatedAt.IsZero() && !i.UpdatedAt.IsZero()
+}
+
+// SyncReceipt records an immutable confirmation of an applied status mutation.
+type SyncReceipt struct {
+	ID             int64     `json:"id"`
+	IntentID       int64     `json:"intent_id"`
+	Provider       string    `json:"provider"`
+	SourceAccount  string    `json:"source_account"`
+	BookID         string    `json:"book_id"`
+	TargetAccount  string    `json:"target_account"`
+	WorkID         int64     `json:"work_id"`
+	EditionID      int64     `json:"edition_id,omitempty"`
+	TargetStatusID int       `json:"target_status_id"`
+	AppliedAt      time.Time `json:"applied_at"`
+}
+
+func (r SyncReceipt) valid() bool {
+	return r.IntentID > 0 && ValidLabel(r.Provider) && ValidLabel(r.SourceAccount) &&
+		ValidLabel(r.TargetAccount) && ValidBookID(r.BookID) && r.WorkID > 0 && r.EditionID >= 0 &&
+		ValidHardcoverStatus(r.TargetStatusID) && !r.AppliedAt.IsZero()
+}
+
+// RecordIntent persists a new write intent, returning the assigned intent ID.
+func (s *Store) RecordIntent(ctx context.Context, intent SyncIntent) (int64, error) {
+	if !intent.valid() {
+		return 0, fmt.Errorf("invalid sync intent")
+	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	createdStr := intent.CreatedAt.UTC().Format(time.RFC3339)
+	updatedStr := intent.UpdatedAt.UTC().Format(time.RFC3339)
+	r, err := s.db.ExecContext(ctx, `INSERT INTO sync_intents (
+		provider, source_account, book_id, target_account, work_id, edition_id,
+		proposed_status_id, privacy_setting_id, policy_version, source_fingerprint,
+		target_fingerprint, state, error_message, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		intent.Provider, intent.SourceAccount, intent.BookID, intent.TargetAccount,
+		intent.WorkID, intent.EditionID, intent.ProposedStatusID, intent.PrivacySettingID,
+		intent.PolicyVersion, intent.SourceFingerprint, intent.TargetFingerprint,
+		intent.State, intent.ErrorMessage, createdStr, updatedStr)
+	if err != nil {
+		return 0, err
+	}
+	return r.LastInsertId()
+}
+
+// UpdateIntentState updates the state and error message of an existing intent.
+func (s *Store) UpdateIntentState(ctx context.Context, id int64, state, errorMessage string, updatedAt time.Time) error {
+	if id <= 0 || (state != "pending" && state != "in_flight" && state != "applied" && state != "failed" && state != "uncertain") {
+		return fmt.Errorf("invalid intent state update")
+	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return err
+	}
+	defer release()
+	updatedStr := updatedAt.UTC().Format(time.RFC3339)
+	_, err = s.db.ExecContext(ctx, `UPDATE sync_intents SET state=?, error_message=?, updated_at=? WHERE id=?`,
+		state, errorMessage, updatedStr, id)
+	return err
+}
+
+// GetActiveIntent returns the latest pending, in_flight, or uncertain intent for a mapping, if any.
+func (s *Store) GetActiveIntent(ctx context.Context, provider, sourceAccount, bookID, targetAccount string) (*SyncIntent, error) {
+	if !ValidLabel(provider) || !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) || !ValidBookID(bookID) {
+		return nil, ErrInvalidMappingKey
+	}
+	var i SyncIntent
+	var priv sql.NullInt64
+	var errStr sql.NullString
+	var createdStr, updatedStr string
+	err := s.db.QueryRowContext(ctx, `SELECT id, provider, source_account, book_id, target_account, work_id, edition_id,
+		proposed_status_id, privacy_setting_id, policy_version, source_fingerprint, target_fingerprint,
+		state, error_message, created_at, updated_at
+		FROM sync_intents WHERE provider=? AND source_account=? AND book_id=? AND target_account=?
+		AND state IN ('pending', 'in_flight', 'uncertain') ORDER BY id DESC LIMIT 1`,
+		provider, sourceAccount, bookID, targetAccount).
+		Scan(&i.ID, &i.Provider, &i.SourceAccount, &i.BookID, &i.TargetAccount, &i.WorkID, &i.EditionID,
+			&i.ProposedStatusID, &priv, &i.PolicyVersion, &i.SourceFingerprint, &i.TargetFingerprint,
+			&i.State, &errStr, &createdStr, &updatedStr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if priv.Valid {
+		pVal := int(priv.Int64)
+		i.PrivacySettingID = &pVal
+	}
+	if errStr.Valid {
+		i.ErrorMessage = errStr.String
+	}
+	ct, err := time.Parse(time.RFC3339, createdStr)
+	if err != nil {
+		return nil, fmt.Errorf("corrupt created_at in sync_intents: %w", err)
+	}
+	ut, err := time.Parse(time.RFC3339, updatedStr)
+	if err != nil {
+		return nil, fmt.Errorf("corrupt updated_at in sync_intents: %w", err)
+	}
+	i.CreatedAt = ct
+	i.UpdatedAt = ut
+	return &i, nil
+}
+
+// RecordReceipt writes an immutable audit receipt for an applied status mutation.
+func (s *Store) RecordReceipt(ctx context.Context, r SyncReceipt) (int64, error) {
+	if !r.valid() {
+		return 0, fmt.Errorf("invalid sync receipt")
+	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	appliedStr := r.AppliedAt.UTC().Format(time.RFC3339)
+	res, err := s.db.ExecContext(ctx, `INSERT INTO sync_receipts (
+		intent_id, provider, source_account, book_id, target_account,
+		work_id, edition_id, target_status_id, applied_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.IntentID, r.Provider, r.SourceAccount, r.BookID, r.TargetAccount,
+		r.WorkID, r.EditionID, r.TargetStatusID, appliedStr)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// GetLatestReceipt returns the most recent receipt for a mapping, returning nil, nil if none exists.
+func (s *Store) GetLatestReceipt(ctx context.Context, provider, sourceAccount, bookID, targetAccount string) (*SyncReceipt, error) {
+	if !ValidLabel(provider) || !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) || !ValidBookID(bookID) {
+		return nil, ErrInvalidMappingKey
+	}
+	var r SyncReceipt
+	var appliedStr string
+	err := s.db.QueryRowContext(ctx, `SELECT id, intent_id, provider, source_account, book_id, target_account,
+		work_id, edition_id, target_status_id, applied_at
+		FROM sync_receipts WHERE provider=? AND source_account=? AND book_id=? AND target_account=?
+		ORDER BY id DESC LIMIT 1`,
+		provider, sourceAccount, bookID, targetAccount).
+		Scan(&r.ID, &r.IntentID, &r.Provider, &r.SourceAccount, &r.BookID, &r.TargetAccount,
+			&r.WorkID, &r.EditionID, &r.TargetStatusID, &appliedStr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	at, err := time.Parse(time.RFC3339, appliedStr)
+	if err != nil {
+		return nil, fmt.Errorf("corrupt applied_at in sync_receipts: %w", err)
+	}
+	r.AppliedAt = at
+	return &r, nil
 }
