@@ -222,6 +222,8 @@ Update `docs/walkthroughs/README.md` with reproducible commands:
 mise exec -- go test -race -count=1 ./internal/companion \
   -run '^TestAccountFingerprint' -v
 mise exec -- go test -race -count=1 ./internal/companion \
+  -run '^Test(Hardcover|WeRead)ResolveAccountFingerprint' -v
+mise exec -- go test -race -count=1 ./internal/companion \
   -run '^TestHardcoverStatusMutation' -v
 ```
 
