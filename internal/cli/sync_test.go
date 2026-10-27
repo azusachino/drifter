@@ -163,3 +163,58 @@ func TestCLISyncSuccessfulApply(t *testing.T) {
 		t.Fatalf("expected 1 mutation, got %d", len(tgt.mutations))
 	}
 }
+
+func TestCLISyncZeroFlagsDefaultAccounts(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "state.sqlite")
+	store, err := companion.OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping := companion.Mapping{
+		Provider:      "weread",
+		SourceAccount: companion.DefaultSourceAccount,
+		BookID:        "123456",
+		TargetAccount: companion.DefaultTargetAccount,
+		WorkID:        500,
+		EditionID:     600,
+		SourceTitle:   "Sync Book",
+		SourceISBN:    "9780123456789",
+	}
+	if err := store.Confirm(context.Background(), mapping, false); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	src := &cliMockPreviewSource{
+		book:        companion.Book{ID: "123456", Title: "Sync Book"},
+		progress:    companion.Progress{Status: "reading", Percent: 50, Started: true},
+		fingerprint: "weread:10001",
+	}
+	tgt := &cliMockApplyTarget{
+		cliMockPreviewTarget: cliMockPreviewTarget{
+			fingerprint: "hardcover:20002",
+		},
+	}
+
+	var out, stderr bytes.Buffer
+	err = run(context.Background(), []string{
+		"sync",
+		"--book-id", "123456",
+		"--db", dbPath,
+	}, &out, &stderr, clients{
+		previewSource: func() (companion.PreviewSource, error) { return src, nil },
+		previewTarget: func() (companion.PreviewTarget, error) { return tgt, nil },
+		applyTarget:   func() (companion.ApplyTarget, error) { return tgt, nil },
+	})
+	if err != nil {
+		t.Fatalf("sync with zero account flags failed: %v", err)
+	}
+
+	var res companion.ApplyResult
+	if err := json.Unmarshal(out.Bytes(), &res); err != nil {
+		t.Fatalf("failed to decode sync result: %v", err)
+	}
+	if res.Action != "applied" {
+		t.Fatalf("expected action applied, got %q", res.Action)
+	}
+}

@@ -13,7 +13,8 @@ func (app *cliApp) exportCommand() *cobra.Command {
 	var provenanceSource, provenanceReference, dbPath string
 	command := &cobra.Command{Use: "export", Short: "Export selected confirmed mappings as a public catalog"}
 	flags := command.Flags()
-	flags.StringVar(&account, "account", "", "selected source account label (required; not exported)")
+	flags.StringVar(&account, "source-account", "", "selected source account label (required; not exported)")
+	flags.StringVar(&account, "account", "", "alias for --source-account")
 	flags.StringVar(&targetAccount, "target-account", "", "selected target account label (required; not exported)")
 	flags.StringVar(&catalogID, "catalog-id", "", "explicit output catalog ID (required)")
 	flags.StringVar(&publisher, "publisher", "", "explicit output publisher (required)")
