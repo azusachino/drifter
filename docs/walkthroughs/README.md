@@ -94,12 +94,41 @@ and recovered by a fresh scan. This explicitly proves a live-scan limitation,
 not a shelf snapshot guarantee. Existing seek cases preserve attempted-failure
 and cancellation semantics.
 
+## Account fingerprints and status mutation contracts
+
+```sh
+mise exec -- go test -race -count=1 ./internal/companion \
+  -run '^TestAccountFingerprint' -v
+mise exec -- go test -race -count=1 ./internal/companion \
+  -run '^Test(Hardcover|WeRead)ResolveAccountFingerprint' -v
+mise exec -- go test -race -count=1 ./internal/companion \
+  -run '^TestHardcoverStatusMutation' -v
+```
+
+These cases exercise Milestone 2 contracts against in-process synthetic doubles:
+
+1. **Fingerprint binding and re-auth**: First run records `hardcover:<id>` or
+   `weread:<vid>`. Re-authentication with the same identity updates
+   `last_verified_at`; credential mismatch returns
+   `ErrAccountFingerprintMismatch` and fails closed without overwriting state.
+2. **Schema v3 migration**: Upgrades v2 SQLite databases, preserving all
+   existing mappings and review decisions. Conflicting tables roll back
+   transactionally.
+3. **WeRead zero-review discovery**: Resolves `userVid` when reviews exist,
+   accepts declared VID fallback for 0-review accounts, and fails closed with
+   actionable guidance when unconfigured.
+4. **Hardcover status mutation**: Proves status-only updates, zero-touch
+   preservation of ratings, reviews and historical reading logs during reread
+   transitions, idempotent no-op replay (zero mutations sent on matching
+   status), and uncertain 504 timeout holds.
+
 ## Full local gates
 
 ```sh
 make check
 mise exec -- rumdl check README.md docs/architecture.md docs/cli.md \
   docs/plans/http-server.md docs/plans/matching-worklist.md \
+  docs/plans/account-and-provider-contracts.md \
   docs/research/2026-10-15-design-review.md docs/walkthroughs/README.md
 make e2e-probe ROUTE=/
 make e2e
@@ -113,8 +142,9 @@ and self-review evidence, not an independent review or live-provider experiment.
 
 ## Later milestones remain unimplemented
 
-Account fingerprint binding, provider status writes, sync authority/baselines,
-bootstrap reconciliation, conflict holds, scheduling, KU intake, private backup
-and restore, deployment and public-sharing policy changes are not exercised or
+Live provider write experiments, sync authority/baselines, bootstrap
+reconciliation, conflict holds, scheduling, KU intake, private backup and
+restore, deployment and public-sharing policy changes are not exercised or
 authorized by these tests. A mapping confirms identity only, not status-write
-authority. See the [owning milestone plan](../plans/matching-worklist.md).
+authority. See the [matching plan](../plans/matching-worklist.md) and
+[Milestone 2 plan](../plans/account-and-provider-contracts.md).

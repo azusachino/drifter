@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -19,7 +21,7 @@ func NewWeRead(token string) (*WeRead, error) {
 func (w *WeRead) call(ctx context.Context, name string, args map[string]any, target any) error {
 	// Only explicit read operations exist; there is no generic exported gateway.
 	switch name {
-	case "/store/search", "/book/info", "/book/getprogress", "/shelf/sync":
+	case "/store/search", "/book/info", "/book/getprogress", "/shelf/sync", "/review/list/mine":
 	default:
 		return fmt.Errorf("unsupported WeRead operation")
 	}
@@ -133,4 +135,73 @@ func (w *WeRead) Progress(ctx context.Context, id string) (Progress, error) {
 		return Progress{}, fmt.Errorf("WeRead progress identity or required fields missing")
 	}
 	return progressStatus(*row.Book.Percent, *row.Book.Started, row.Book.Finished)
+}
+
+// ValidVID checks whether a WeRead user VID string is non-empty, numeric, and within standard bounds (1-32 digits).
+func ValidVID(vid string) bool {
+	vid = strings.TrimSpace(vid)
+	if vid == "" || len(vid) > 32 {
+		return false
+	}
+	for _, r := range vid {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func parseVID(raw any) string {
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case float64:
+		if v > 0 && v == float64(int64(v)) {
+			return strconv.FormatInt(int64(v), 10)
+		}
+	case int64:
+		if v > 0 {
+			return strconv.FormatInt(v, 10)
+		}
+	case int:
+		if v > 0 {
+			return strconv.Itoa(v)
+		}
+	}
+	return ""
+}
+
+// ResolveAccountFingerprint queries WeRead for the caller's user VID.
+// If reviews exist on /review/list/mine, it extracts userVid.
+// If zero reviews exist, it falls back to declaredVID if valid, or returns an actionable error.
+func (w *WeRead) ResolveAccountFingerprint(ctx context.Context, declaredVID string) (string, error) {
+	var response struct {
+		Reviews []struct {
+			Review struct {
+				UserVID any `json:"userVid"`
+				Author  struct {
+					UserVID any `json:"userVid"`
+				} `json:"author"`
+			} `json:"review"`
+		} `json:"reviews"`
+	}
+	if err := w.call(ctx, "/review/list/mine", map[string]any{}, &response); err != nil {
+		return "", err
+	}
+	for _, item := range response.Reviews {
+		raw := item.Review.UserVID
+		if raw == nil {
+			raw = item.Review.Author.UserVID
+		}
+		if raw != nil {
+			vidStr := parseVID(raw)
+			if ValidVID(vidStr) {
+				return fmt.Sprintf("weread:%s", vidStr), nil
+			}
+		}
+	}
+	if ValidVID(declaredVID) {
+		return fmt.Sprintf("weread:%s", strings.TrimSpace(declaredVID)), nil
+	}
+	return "", fmt.Errorf("WeRead account has zero reviews and no valid declared VID; write at least one review or configure source_vid to bind account identity")
 }
