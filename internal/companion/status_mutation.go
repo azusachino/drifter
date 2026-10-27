@@ -72,7 +72,8 @@ type StatusMutationRequest struct {
 	WorkID           int64
 	EditionID        int64 // optional; 0 means work-only
 	StatusID         int
-	PrivacySettingID int // optional (e.g. 1=public, 3=private); 0 means unstated
+	PrivacySettingID int     // optional (e.g. 1=public, 3=private); 0 means unstated
+	LastReadDate     *string // optional completion date string in "YYYY-MM-DD" format
 }
 
 // StatusMutationOutcome describes the result of an applied or skipped status mutation.
@@ -89,6 +90,7 @@ var approvedMutationFields = map[string]bool{
 	"edition_id":         true,
 	"status_id":          true,
 	"privacy_setting_id": true,
+	"last_read_date":     true,
 	"input":              true,
 	"object":             true,
 }
@@ -207,7 +209,11 @@ func (h *Hardcover) ApplyStatusMutation(ctx context.Context, req StatusMutationR
 			} `json:"update_user_book"`
 		}
 		m := `mutation UpdateUserBook($id: Int!, $object: UserBookUpdateInput!) { update_user_book(id: $id, object: $object) { id error user_book { id status_id } } }`
-		vars := map[string]any{"id": existing.ID, "object": map[string]any{"status_id": req.StatusID}}
+		object := map[string]any{"status_id": req.StatusID}
+		if req.LastReadDate != nil && *req.LastReadDate != "" {
+			object["last_read_date"] = *req.LastReadDate
+		}
+		vars := map[string]any{"id": existing.ID, "object": object}
 		if err := h.mutate(ctx, m, vars, &resp); err != nil {
 			return StatusMutationOutcome{}, err
 		}
@@ -242,6 +248,9 @@ func (h *Hardcover) ApplyStatusMutation(ctx context.Context, req StatusMutationR
 	}
 	if req.PrivacySettingID > 0 {
 		input["privacy_setting_id"] = req.PrivacySettingID
+	}
+	if req.LastReadDate != nil && *req.LastReadDate != "" {
+		input["last_read_date"] = *req.LastReadDate
 	}
 
 	var resp struct {

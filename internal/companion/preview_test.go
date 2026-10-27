@@ -225,6 +225,20 @@ func TestManualTargetEditProtection_US5(t *testing.T) {
 		}
 	})
 
+	t.Run("source finished populates last_read_date", func(t *testing.T) {
+		p := baseParams
+		p.SourceProgress = Progress{Status: "read", Percent: 100, Started: true, FinishedAt: 1752627658}
+		p.TargetStatus = nil
+
+		prop := EvaluateStatus(p)
+		if prop.ProposedStatusID != HardcoverStatusRead {
+			t.Fatalf("expected proposed status %d, got %d", HardcoverStatusRead, prop.ProposedStatusID)
+		}
+		if prop.LastReadDate == nil || *prop.LastReadDate != "2025-07-16" {
+			t.Fatalf("expected last_read_date 2025-07-16, got %v", prop.LastReadDate)
+		}
+	})
+
 	t.Run("convergent agreement when both changed to same status", func(t *testing.T) {
 		p := baseParams
 		p.SourceProgress = Progress{Status: "read", Percent: 100, Started: true}

@@ -182,6 +182,7 @@ type SyncProposal struct {
 	ProposedStatusID  int               `json:"proposed_status_id,omitempty"`
 	ProposedStatus    string            `json:"proposed_status,omitempty"`
 	PrivacySettingID  int               `json:"privacy_setting_id,omitempty"`
+	LastReadDate      *string           `json:"last_read_date,omitempty"`
 	AuthorityStatus   string            `json:"authority_status"`
 	ConflictEvidence  *ConflictEvidence `json:"conflict_evidence,omitempty"`
 }
@@ -208,6 +209,7 @@ type StatusEvaluationParams struct {
 
 	PolicyVersion    string
 	AllowPrivateSync bool
+	AdoptSource      bool
 	Now              time.Time
 }
 
@@ -221,6 +223,12 @@ func EvaluateStatus(p StatusEvaluationParams) SyncProposal {
 	}
 
 	proposedStatusID := SourceStatusToHardcover(p.SourceProgress.Status)
+
+	var lastReadDate *string
+	if proposedStatusID == HardcoverStatusRead && p.SourceProgress.FinishedAt > 0 {
+		dateStr := time.Unix(p.SourceProgress.FinishedAt, 0).UTC().Format("2006-01-02")
+		lastReadDate = &dateStr
+	}
 
 	prop := SyncProposal{
 		PolicyVersion:     p.PolicyVersion,
@@ -236,6 +244,7 @@ func EvaluateStatus(p StatusEvaluationParams) SyncProposal {
 		EditionID:         p.EditionID,
 		ProposedStatusID:  proposedStatusID,
 		ProposedStatus:    HardcoverStatusName(proposedStatusID),
+		LastReadDate:      lastReadDate,
 		AuthorityStatus:   "authorized",
 	}
 
@@ -364,6 +373,13 @@ func EvaluateStatus(p StatusEvaluationParams) SyncProposal {
 			prop.Message = fmt.Sprintf("target record already has status %s (%d); zero mutations required", prop.CurrentStatus, proposedStatusID)
 			return prop
 		}
+		if p.AdoptSource {
+			prop.Action = ActionUpdate
+			prop.Reason = ReasonSourceAdvanced
+			prop.Message = fmt.Sprintf("bootstrap adopt-source approved: updating target status from %s (%d) to source status %s (%d)",
+				prop.CurrentStatus, p.TargetStatus.StatusID, prop.ProposedStatus, proposedStatusID)
+			return prop
+		}
 		// Target exists with differing status on first sync: do not overwrite without explicit approval.
 		return makeConflict(
 			ReasonDifferingTargetOnBootstrap,
@@ -447,6 +463,7 @@ type PreviewSyncOptions struct {
 	PolicyVersion     string
 	AllowPrivateSync  bool
 	DeclaredSourceVID string
+	AdoptSource       bool
 	Now               time.Time
 }
 
@@ -543,6 +560,7 @@ func PreviewSync(
 		HasCompetingMappings: len(competing) > 1,
 		PolicyVersion:        opts.PolicyVersion,
 		AllowPrivateSync:     opts.AllowPrivateSync,
+		AdoptSource:          opts.AdoptSource,
 		Now:                  now,
 	}
 

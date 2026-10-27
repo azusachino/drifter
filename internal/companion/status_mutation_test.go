@@ -308,3 +308,40 @@ func TestParseHardcoverStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestHardcoverStatusMutationWithLastReadDate(t *testing.T) {
+	var observedDate string
+	h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if strings.HasPrefix(strings.TrimSpace(body.Query), "query UserBook") {
+			io.WriteString(rw, `{"data":{"user_books":[]}}`)
+			return
+		}
+		if obj, ok := body.Variables["object"].(map[string]any); ok {
+			if lrd, ok := obj["last_read_date"].(string); ok {
+				observedDate = lrd
+			}
+		}
+		io.WriteString(rw, `{"data":{"insert_user_book":{"id":200,"status_id":3,"user_book":{"id":200,"status_id":3}}}}`)
+	})}
+
+	date := "2025-07-16"
+	res, err := h.ApplyStatusMutation(context.Background(), StatusMutationRequest{
+		WorkID:       42,
+		StatusID:     HardcoverStatusRead,
+		LastReadDate: &date,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.CurrentStatus != HardcoverStatusRead || res.UserBookID != 200 {
+		t.Fatalf("unexpected outcome: %+v", res)
+	}
+	if observedDate != "2025-07-16" {
+		t.Fatalf("expected last_read_date 2025-07-16, got %q", observedDate)
+	}
+}

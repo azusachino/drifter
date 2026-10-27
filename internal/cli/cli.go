@@ -274,14 +274,16 @@ func (app *cliApp) matchCommand() *cobra.Command {
 
 func (app *cliApp) pendingCommand() *cobra.Command {
 	var account, targetAccount, dbPath, after string
-	var days int
-	var includePrivate, includeImported bool
+	var days, year int
+	var includePrivate, includeImported, finishedOnly bool
 	command := &cobra.Command{Use: "pending", Short: "List recently opened eligible WeRead books"}
 	flags := command.Flags()
 	flags.StringVar(&account, "source-account", "", "source account namespace (default: default or inferred)")
 	flags.StringVar(&account, "account", "", "alias for --source-account")
 	flags.StringVar(&targetAccount, "target-account", "", "target account namespace (default: default or inferred)")
 	flags.IntVar(&days, "days", 90, "recently opened window in days (1–36500; browsing counts)")
+	flags.IntVar(&year, "year", 0, "filter books opened in calendar year (e.g. 2025)")
+	flags.BoolVar(&finishedOnly, "finished", false, "filter to finished/completed books only")
 	flags.BoolVar(&includePrivate, "include-private", false, "explicitly include privacy-marked books (unknown privacy remains excluded)")
 	flags.BoolVar(&includeImported, "include-imported", false, "include imported books for inspection only; match/link remain unsupported")
 	flags.StringVar(&after, "after", "", "continue a pending worklist using its next_cursor")
@@ -311,8 +313,14 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 		if days < 1 || days > 36500 {
 			return fmt.Errorf("--days must be between 1 and 36500")
 		}
-		options := companion.PendingOptions{SourceAccount: account, TargetAccount: targetAccount, Days: days,
-			IncludePrivate: includePrivate, IncludeImported: includeImported, After: after, Now: time.Now()}
+		if year != 0 && (year < 2000 || year > 2100) {
+			return fmt.Errorf("--year must be between 2000 and 2100")
+		}
+		options := companion.PendingOptions{
+			SourceAccount: account, TargetAccount: targetAccount, Days: days,
+			Year: year, FinishedOnly: finishedOnly,
+			IncludePrivate: includePrivate, IncludeImported: includeImported, After: after, Now: time.Now(),
+		}
 		if err := companion.ValidatePendingCursor(options); err != nil {
 			return err
 		}
@@ -327,10 +335,7 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		report, err := companion.PendingWorklist(cmd.Context(), reader, dbPath, companion.PendingOptions{
-			SourceAccount: account, TargetAccount: targetAccount, Days: days,
-			IncludePrivate: includePrivate, IncludeImported: includeImported, After: after, Now: time.Now(),
-		})
+		report, err := companion.PendingWorklist(cmd.Context(), reader, dbPath, options)
 		if err != nil {
 			return err
 		}
