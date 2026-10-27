@@ -211,6 +211,33 @@ These cases exercise Milestone 5 contracts against in-process synthetic doubles:
    across all account mappings without mutating remote providers or creating
    live runs.
 
+## End-to-end sync use cases (US1–US12)
+
+```sh
+mise exec -- go test -race -count=1 ./internal/cli \
+  -run '^TestUseCase' -v
+```
+
+These end-to-end scenario tests tie together the full user journeys:
+
+1. **UC-1 Full first-sync journey (US1 + US2 + US3)**: Confirms a mapping via
+   `link`, verifies `preview` proposes `create` with zero mutations, executes
+   `sync` applying status and writing baseline, asserts immediate re-`sync` is
+   an idempotent zero-mutation `no-op`, and confirms account-wide `reconcile`.
+2. **UC-2 Reread policy (US4)**: Previously read target with active reading
+   evidence allows forward restart to Currently Reading without fabricating
+   older history rows, dates, or ratings.
+3. **UC-3 Loan return is not completion (US9)**: An unstarted or returned loan
+   does not infer completion or DNF mutations on Hardcover.
+4. **UC-4 Source disappearance / disconnect (US11)**: Disappeared source books
+   never delete or clear target records on Hardcover; account substitution
+   fails closed with fingerprint mismatch.
+5. **UC-5 Rate-limited provider (US7 + US10)**: 429/504 throttles fail safely
+   into uncertain intents without blind retries; subsequent runs recover and
+   reconcile with zero duplicate target mutations.
+6. **UC-6 Iroha boundary (US12)**: Verified companion updates rely solely on
+   their own receipts and provider boundaries, making zero downstream calls.
+
 ## Full local gates
 
 ```sh
