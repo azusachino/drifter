@@ -151,7 +151,7 @@ func openStore(path string, readOnly bool, owner *DatabaseOwnership) (*Store, er
 	return &Store{db: db, path: path, owner: owner, readOnly: readOnly}, nil
 }
 
-const storeVersion = 2
+const storeVersion = 3
 
 func validateStoreSchema(db *sql.DB) error {
 	var version int
@@ -170,6 +170,13 @@ func validateStoreSchema(db *sql.DB) error {
 		return err
 	}
 	rows, err = db.Query(`SELECT provider,source_account,book_id,target_account,kind FROM decisions LIMIT 0`)
+	if err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	rows, err = db.Query(`SELECT provider,account,fingerprint,created_at,last_verified_at FROM account_fingerprints LIMIT 0`)
 	if err != nil {
 		return err
 	}
@@ -223,6 +230,19 @@ func migrateStore(db *sql.DB) error {
 		if _, err := tx.Exec("PRAGMA user_version = 2"); err != nil {
 			return err
 		}
+		version = 2
+	}
+	if version == 2 {
+		if _, err := tx.Exec(`CREATE TABLE account_fingerprints (
+			provider TEXT NOT NULL, account TEXT NOT NULL, fingerprint TEXT NOT NULL,
+			created_at TEXT NOT NULL, last_verified_at TEXT NOT NULL,
+			PRIMARY KEY(provider, account))`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 3"); err != nil {
+			return err
+		}
+		version = 3
 	}
 	return tx.Commit()
 }

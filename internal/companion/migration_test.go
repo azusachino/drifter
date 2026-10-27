@@ -75,8 +75,8 @@ func TestStoreVersionsNewAndLegacyDatabases(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if schemaVersion(t, s.db) != 2 {
-					t.Fatal("database not upgraded to version 2")
+				if schemaVersion(t, s.db) != 3 {
+					t.Fatal("database not upgraded to version 3")
 				}
 				rows, err := s.List(context.Background())
 				if err != nil || !reflect.DeepEqual(rows, want) {
@@ -91,7 +91,7 @@ func TestStoreVersionsNewAndLegacyDatabases(t *testing.T) {
 }
 
 func TestStoreRefusesUnsupportedVersionsWithoutCreatingSchema(t *testing.T) {
-	for _, version := range []int{3, -1} {
+	for _, version := range []int{4, -1} {
 		path := filepath.Join(t.TempDir(), "mappings.sqlite")
 		db := fixtureDB(t, path)
 		if _, err := db.Exec("PRAGMA user_version = " + strconv.Itoa(version)); err != nil {
