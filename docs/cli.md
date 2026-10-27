@@ -113,15 +113,16 @@ bin/drifter-server --config config.toml [--db PATH]
 ```
 
 The server uses `server.addr` (default `127.0.0.1:8081`), provides the same
-health routes, a server-rendered mapping interface at `/`, read-only
-`/api/mappings` and `/api/pending` (account and target labels, optional `days`
-and continuation `after` query parameters), and explicit local mapping
-maintenance. There is no `/admin` compatibility route. New
-confirmations use `ConfirmLinkOwned`, including source book lookup and target
-work/edition membership validation. The HTML form and
-JSON routes support separate confirm, replace and scoped unlink actions; neither
-accepts inferred matches. Work-only (`edition_id: 0` in JSON) and an explicit
-edition choice remain separate selections. `/api/mappings/confirm` and
+health routes, a server-rendered status and mapping interface at `/`, read-only
+`/api/mappings`, `/api/status`, `/api/runs`, `/api/holds`, `/api/pending`
+(account and target labels, optional `days` and continuation `after` query
+parameters), state export (`/api/export`) and import (`/api/import`), and
+explicit local mapping maintenance. There is no `/admin` compatibility route.
+New confirmations use `ConfirmLinkOwned`, including source book lookup and
+target work/edition membership validation. The HTML form and JSON routes
+support separate confirm, replace and scoped unlink actions; neither accepts
+inferred matches. Work-only (`edition_id: 0` in JSON) and an explicit edition
+choice remain separate selections. `/api/mappings/confirm` and
 `/api/mappings/replace` require POST; `/api/mappings/unlink` requires DELETE.
 JSON writes require `application/json`, a bounded strictly decoded body, same-
 origin Origin, Host allowlisting and the server's per-process CSRF token. This

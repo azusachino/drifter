@@ -972,21 +972,28 @@ func (s *Store) UpdateSyncRun(ctx context.Context, runID int64, status string, t
 	return err
 }
 
-// GetLatestSyncRun returns the most recent sync run for an account pair, or nil if none.
+// GetLatestSyncRun returns the most recent sync run, optionally filtered by account pair.
 func (s *Store) GetLatestSyncRun(ctx context.Context, sourceAccount, targetAccount string) (*SyncRun, error) {
-	if !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) {
-		return nil, ErrInvalidMappingKey
-	}
 	var r SyncRun
 	var startStr string
 	var finStr sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT id, source_account, target_account, policy_version, status,
-		total_count, applied_count, noop_count, conflict_count, hold_count, error_count, started_at, finished_at
-		FROM sync_runs WHERE source_account=? AND target_account=? ORDER BY id DESC LIMIT 1`,
-		sourceAccount, targetAccount).
-		Scan(&r.ID, &r.SourceAccount, &r.TargetAccount, &r.PolicyVersion, &r.Status,
-			&r.TotalCount, &r.AppliedCount, &r.NoOpCount, &r.ConflictCount, &r.HoldCount, &r.ErrorCount,
-			&startStr, &finStr)
+	var row *sql.Row
+	if sourceAccount != "" && targetAccount != "" {
+		if !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) {
+			return nil, ErrInvalidMappingKey
+		}
+		row = s.db.QueryRowContext(ctx, `SELECT id, source_account, target_account, policy_version, status,
+			total_count, applied_count, noop_count, conflict_count, hold_count, error_count, started_at, finished_at
+			FROM sync_runs WHERE source_account=? AND target_account=? ORDER BY id DESC LIMIT 1`,
+			sourceAccount, targetAccount)
+	} else {
+		row = s.db.QueryRowContext(ctx, `SELECT id, source_account, target_account, policy_version, status,
+			total_count, applied_count, noop_count, conflict_count, hold_count, error_count, started_at, finished_at
+			FROM sync_runs ORDER BY id DESC LIMIT 1`)
+	}
+	err := row.Scan(&r.ID, &r.SourceAccount, &r.TargetAccount, &r.PolicyVersion, &r.Status,
+		&r.TotalCount, &r.AppliedCount, &r.NoOpCount, &r.ConflictCount, &r.HoldCount, &r.ErrorCount,
+		&startStr, &finStr)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -1030,13 +1037,20 @@ func (s *Store) RecordSyncHold(ctx context.Context, hold SyncHold) (int64, error
 	return r.LastInsertId()
 }
 
-// ListSyncHolds returns the latest active holds for an account pair.
+// ListSyncHolds returns the latest active holds, optionally filtered by account pair.
 func (s *Store) ListSyncHolds(ctx context.Context, sourceAccount, targetAccount string) ([]SyncHold, error) {
-	if !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) {
-		return nil, ErrInvalidMappingKey
+	var rows *sql.Rows
+	var err error
+	if sourceAccount != "" && targetAccount != "" {
+		if !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) {
+			return nil, ErrInvalidMappingKey
+		}
+		rows, err = s.db.QueryContext(ctx, `SELECT id, run_id, provider, source_account, book_id, target_account, work_id, reason, message, evidence, created_at
+			FROM sync_holds WHERE source_account=? AND target_account=? ORDER BY id DESC`, sourceAccount, targetAccount)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `SELECT id, run_id, provider, source_account, book_id, target_account, work_id, reason, message, evidence, created_at
+			FROM sync_holds ORDER BY id DESC LIMIT 50`)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, run_id, provider, source_account, book_id, target_account, work_id, reason, message, evidence, created_at
-		FROM sync_holds WHERE source_account=? AND target_account=? ORDER BY id DESC`, sourceAccount, targetAccount)
 	if err != nil {
 		return nil, err
 	}
@@ -1056,4 +1070,82 @@ func (s *Store) ListSyncHolds(ctx context.Context, sourceAccount, targetAccount 
 		holds = append(holds, h)
 	}
 	return holds, rows.Err()
+}
+
+// ListSyncRuns returns recent sync runs, optionally filtered by account pair.
+func (s *Store) ListSyncRuns(ctx context.Context, sourceAccount, targetAccount string, limit int) ([]SyncRun, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	var rows *sql.Rows
+	var err error
+	if sourceAccount != "" && targetAccount != "" {
+		if !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) {
+			return nil, ErrInvalidMappingKey
+		}
+		rows, err = s.db.QueryContext(ctx, `SELECT id, source_account, target_account, policy_version, status,
+			total_count, applied_count, noop_count, conflict_count, hold_count, error_count, started_at, finished_at
+			FROM sync_runs WHERE source_account=? AND target_account=? ORDER BY id DESC LIMIT ?`,
+			sourceAccount, targetAccount, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `SELECT id, source_account, target_account, policy_version, status,
+			total_count, applied_count, noop_count, conflict_count, hold_count, error_count, started_at, finished_at
+			FROM sync_runs ORDER BY id DESC LIMIT ?`, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var runs []SyncRun
+	for rows.Next() {
+		var r SyncRun
+		var startStr string
+		var finStr sql.NullString
+		if err := rows.Scan(&r.ID, &r.SourceAccount, &r.TargetAccount, &r.PolicyVersion, &r.Status,
+			&r.TotalCount, &r.AppliedCount, &r.NoOpCount, &r.ConflictCount, &r.HoldCount, &r.ErrorCount,
+			&startStr, &finStr); err != nil {
+			return nil, err
+		}
+		st, err := time.Parse(time.RFC3339, startStr)
+		if err != nil {
+			return nil, fmt.Errorf("corrupt started_at in sync_runs: %w", err)
+		}
+		r.StartedAt = st
+		if finStr.Valid {
+			ft, err := time.Parse(time.RFC3339, finStr.String)
+			if err != nil {
+				return nil, fmt.Errorf("corrupt finished_at in sync_runs: %w", err)
+			}
+			r.FinishedAt = &ft
+		}
+		runs = append(runs, r)
+	}
+	return runs, rows.Err()
+}
+
+// ListStatusBaselines returns all status baselines.
+func (s *Store) ListStatusBaselines(ctx context.Context) ([]StatusBaseline, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT provider, source_account, book_id, target_account, work_id, edition_id,
+		source_status_id, target_status_id, policy_version, source_fingerprint, target_fingerprint, last_synced_at
+		FROM status_baselines ORDER BY provider, source_account, book_id, target_account`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []StatusBaseline
+	for rows.Next() {
+		var b StatusBaseline
+		var syncStr string
+		if err := rows.Scan(&b.Provider, &b.SourceAccount, &b.BookID, &b.TargetAccount, &b.WorkID, &b.EditionID,
+			&b.SourceStatusID, &b.TargetStatusID, &b.PolicyVersion, &b.SourceFingerprint, &b.TargetFingerprint, &syncStr); err != nil {
+			return nil, err
+		}
+		st, err := time.Parse(time.RFC3339, syncStr)
+		if err != nil {
+			return nil, fmt.Errorf("corrupt last_synced_at in status_baselines: %w", err)
+		}
+		b.LastSyncedAt = st
+		list = append(list, b)
+	}
+	return list, rows.Err()
 }

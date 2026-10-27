@@ -13,7 +13,8 @@ const unmatchedRoute = "unmatched"
 
 var safeRoutes = map[string]struct{}{
 	"/": {}, "/healthz": {}, "/readyz": {},
-	"/api/csrf": {}, "/api/mappings": {}, "/api/pending": {},
+	"/api/csrf": {}, "/api/status": {}, "/api/runs": {}, "/api/holds": {},
+	"/api/mappings": {}, "/api/pending": {}, "/api/export": {}, "/api/import": {},
 	"/api/mappings/confirm": {}, "/api/mappings/replace": {}, "/api/mappings/unlink": {},
 	"/mappings/confirm": {}, "/mappings/replace": {}, "/mappings/unlink": {},
 }

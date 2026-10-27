@@ -30,6 +30,7 @@ import (
 )
 
 const maxRequestBody = 8 << 10
+const maxImportRequestBody = 4 << 20
 const defaultOperationTimeout = 90 * time.Second
 
 var errProviderUnavailable = errors.New("provider unavailable")
@@ -41,9 +42,12 @@ var htmlTemplates embed.FS
 var favicon []byte
 
 type pageData struct {
-	Mappings []companion.Mapping
-	Token    string
-	Notice   string
+	Mappings     []companion.Mapping
+	Token        string
+	Notice       string
+	LatestRun    *companion.SyncRun
+	Holds        []companion.SyncHold
+	Fingerprints []companion.AccountFingerprint
 }
 
 var page = template.Must(template.ParseFS(htmlTemplates, "templates/index.html"))
@@ -126,12 +130,21 @@ func New(options Options) (*Server, error) {
 	router.Method(http.MethodHead, "/readyz", probesHandler("/readyz", ready, options.Logger))
 	router.Route("/api", func(api chi.Router) {
 		api.Get("/csrf", s.handleCSRF)
+		api.Get("/status", s.handleStatus)
+		api.Head("/status", s.handleStatus)
+		api.Get("/runs", s.handleRuns)
+		api.Head("/runs", s.handleRuns)
+		api.Get("/holds", s.handleHolds)
+		api.Head("/holds", s.handleHolds)
 		api.Get("/mappings", s.handleMappings)
 		api.Head("/mappings", s.handleMappings)
 		api.Get("/pending", s.handlePending)
 		api.Post("/mappings/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, false) })
 		api.Post("/mappings/replace", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, true) })
 		api.Delete("/mappings/unlink", s.handleJSONUnlink)
+		api.Get("/export", s.handleExport)
+		api.Head("/export", s.handleExport)
+		api.Post("/import", s.handleImport)
 	})
 	router.Route("/mappings", func(mappings chi.Router) {
 		mappings.Post("/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, false) })
@@ -228,10 +241,20 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	latestRun, _ := store.GetLatestSyncRun(r.Context(), "", "")
+	holds, _ := store.ListSyncHolds(r.Context(), "", "")
+	fingerprints, _ := store.ListAccountFingerprints(r.Context())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodGet {
-		_ = page.Execute(w, pageData{Mappings: mappings, Token: s.token, Notice: notice})
+		_ = page.Execute(w, pageData{
+			Mappings:     mappings,
+			Token:        s.token,
+			Notice:       notice,
+			LatestRun:    latestRun,
+			Holds:        holds,
+			Fingerprints: fingerprints,
+		})
 	}
 }
 
@@ -326,6 +349,253 @@ func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, r, report)
 	})
+}
+
+type daemonStatusResponse struct {
+	Ready            bool                           `json:"ready"`
+	MappingsCount    int                            `json:"mappings_count"`
+	Fingerprints     []companion.AccountFingerprint `json:"fingerprints"`
+	LatestRun        *companion.SyncRun             `json:"latest_run,omitempty"`
+	ActiveHoldsCount int                            `json:"active_holds_count"`
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if !readRequestAllowed(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		methodNotAllowed(w, "GET, HEAD")
+		return
+	}
+	if r.URL.RawQuery != "" || !noBody(w, r) {
+		if r.URL.RawQuery != "" {
+			http.Error(w, "unexpected query", http.StatusBadRequest)
+		}
+		return
+	}
+	store, err := companion.OpenOwnedStore(s.database, s.ownership)
+	if err != nil {
+		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer store.Close()
+	mappings, err := store.List(r.Context())
+	if err != nil {
+		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	fingerprints, err := store.ListAccountFingerprints(r.Context())
+	if err != nil {
+		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if fingerprints == nil {
+		fingerprints = []companion.AccountFingerprint{}
+	}
+	latestRun, err := store.GetLatestSyncRun(r.Context(), "", "")
+	if err != nil {
+		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	holds, err := store.ListSyncHolds(r.Context(), "", "")
+	if err != nil {
+		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, r, daemonStatusResponse{
+		Ready:            true,
+		MappingsCount:    len(mappings),
+		Fingerprints:     fingerprints,
+		LatestRun:        latestRun,
+		ActiveHoldsCount: len(holds),
+	})
+}
+
+func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
+	if !readRequestAllowed(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		methodNotAllowed(w, "GET, HEAD")
+		return
+	}
+	if !noBody(w, r) {
+		return
+	}
+	q := r.URL.Query()
+	for k := range q {
+		if k != "account" && k != "target_account" && k != "limit" {
+			http.Error(w, "unexpected query", http.StatusBadRequest)
+			return
+		}
+	}
+	sourceAccount := q.Get("account")
+	targetAccount := q.Get("target_account")
+	if (sourceAccount != "" && !companion.ValidLabel(sourceAccount)) || (targetAccount != "" && !companion.ValidLabel(targetAccount)) {
+		http.Error(w, "invalid account filter", http.StatusBadRequest)
+		return
+	}
+	limit := 50
+	if raw := q.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = parsed
+	}
+	store, err := companion.OpenOwnedStore(s.database, s.ownership)
+	if err != nil {
+		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer store.Close()
+	runs, err := store.ListSyncRuns(r.Context(), sourceAccount, targetAccount, limit)
+	if err != nil {
+		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if runs == nil {
+		runs = []companion.SyncRun{}
+	}
+	writeJSON(w, r, runs)
+}
+
+func (s *Server) handleHolds(w http.ResponseWriter, r *http.Request) {
+	if !readRequestAllowed(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		methodNotAllowed(w, "GET, HEAD")
+		return
+	}
+	if !noBody(w, r) {
+		return
+	}
+	q := r.URL.Query()
+	for k := range q {
+		if k != "account" && k != "target_account" {
+			http.Error(w, "unexpected query", http.StatusBadRequest)
+			return
+		}
+	}
+	sourceAccount := q.Get("account")
+	targetAccount := q.Get("target_account")
+	if (sourceAccount != "" && !companion.ValidLabel(sourceAccount)) || (targetAccount != "" && !companion.ValidLabel(targetAccount)) {
+		http.Error(w, "invalid account filter", http.StatusBadRequest)
+		return
+	}
+	store, err := companion.OpenOwnedStore(s.database, s.ownership)
+	if err != nil {
+		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer store.Close()
+	holds, err := store.ListSyncHolds(r.Context(), sourceAccount, targetAccount)
+	if err != nil {
+		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if holds == nil {
+		holds = []companion.SyncHold{}
+	}
+	writeJSON(w, r, holds)
+}
+
+func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
+	if !readRequestAllowed(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		methodNotAllowed(w, "GET, HEAD")
+		return
+	}
+	if r.URL.RawQuery != "" || !noBody(w, r) {
+		if r.URL.RawQuery != "" {
+			http.Error(w, "unexpected query", http.StatusBadRequest)
+		}
+		return
+	}
+	store, err := companion.OpenOwnedStore(s.database, s.ownership)
+	if err != nil {
+		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer store.Close()
+	export, err := companion.ExportState(r.Context(), store)
+	if err != nil {
+		http.Error(w, "export failed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Disposition", `attachment; filename="drifter-export.json"`)
+	writeJSON(w, r, export)
+}
+
+func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		apiError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
+	if !mutationOriginAllowed(w, r) {
+		return
+	}
+	q := r.URL.Query()
+	for k := range q {
+		if k != "reject_on_conflict" && k != "conflict" {
+			apiError(w, http.StatusBadRequest, "unexpected_query")
+			return
+		}
+	}
+	rejectOnConflict := q.Get("reject_on_conflict") == "true" || q.Get("conflict") == "reject"
+	if !validHeaderToken(r, s.token) {
+		apiError(w, http.StatusForbidden, "request_rejected")
+		return
+	}
+	if !hasContentType(r, "application/json") {
+		apiError(w, http.StatusUnsupportedMediaType, "application_json_required")
+		return
+	}
+	if len(r.TransferEncoding) != 0 || r.ContentLength > maxImportRequestBody {
+		apiError(w, http.StatusRequestEntityTooLarge, "request_body_too_large")
+		return
+	}
+	limited := http.MaxBytesReader(w, r.Body, maxImportRequestBody)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		var limitErr *http.MaxBytesError
+		if errors.As(err, &limitErr) {
+			apiError(w, http.StatusRequestEntityTooLarge, "request_body_too_large")
+		} else {
+			apiError(w, http.StatusBadRequest, "invalid_body")
+		}
+		return
+	}
+	var data companion.DrifterStateExport
+	if err := decodeStrictJSON(body, &data); err != nil {
+		apiError(w, http.StatusBadRequest, "invalid_import_data")
+		return
+	}
+	store, err := companion.OpenOwnedStore(s.database, s.ownership)
+	if err != nil {
+		apiError(w, http.StatusServiceUnavailable, "mapping_database_unavailable")
+		return
+	}
+	defer store.Close()
+	report, err := companion.ImportState(r.Context(), store, data, rejectOnConflict)
+	if err != nil {
+		if rejectOnConflict && len(report.Conflicts) > 0 {
+			writeJSONStatus(w, r, http.StatusConflict, map[string]any{
+				"error":     "state_conflict",
+				"message":   err.Error(),
+				"conflicts": report.Conflicts,
+			})
+			return
+		}
+		apiError(w, http.StatusBadRequest, "import_failed")
+		return
+	}
+	writeJSONStatus(w, r, http.StatusOK, report)
 }
 
 type explicitEditionID struct {
@@ -608,9 +878,19 @@ func (s *Server) renderFormFailure(w http.ResponseWriter, r *http.Request, statu
 		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	latestRun, _ := store.GetLatestSyncRun(r.Context(), "", "")
+	holds, _ := store.ListSyncHolds(r.Context(), "", "")
+	fingerprints, _ := store.ListAccountFingerprints(r.Context())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_ = page.Execute(w, pageData{Mappings: mappings, Token: s.token, Notice: notice})
+	_ = page.Execute(w, pageData{
+		Mappings:     mappings,
+		Token:        s.token,
+		Notice:       notice,
+		LatestRun:    latestRun,
+		Holds:        holds,
+		Fingerprints: fingerprints,
+	})
 }
 
 func writeJSONStatus(w http.ResponseWriter, r *http.Request, status int, value any) {

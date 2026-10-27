@@ -20,7 +20,33 @@ fieldset label { display: inline-flex; align-items: center; }
 <h1><img class="brand-mark" src="/favicon.svg" alt="">Drifter mapping interface</h1>
 <p class="note">Local mapping maintenance. Provider status is never written; pending requests are explicit.</p>
 <p id="mutation-status" class="notice" role="status" aria-live="polite" tabindex="-1">{{.Notice}}</p>
-<section><h2>Confirmed mappings</h2><p><a href="/api/mappings">View mappings as JSON</a></p>
+{{if .LatestRun}}
+<section><h2>Latest sync run</h2>
+<p>Run #{{.LatestRun.ID}}: <strong>{{.LatestRun.Status}}</strong> ({{.LatestRun.AppliedCount}} applied, {{.LatestRun.NoOpCount}} no-op, {{.LatestRun.ConflictCount}} conflicts, {{.LatestRun.HoldCount}} holds, {{.LatestRun.ErrorCount}} errors)</p>
+<p class="note">Started at {{.LatestRun.StartedAt.Format "2006-01-02 15:04:05 UTC"}}</p>
+</section>
+{{end}}
+{{if .Holds}}
+<section><h2>Active holds and conflicts</h2>
+<ul>
+{{range .Holds}}
+<li class="mapping">
+<p><strong>{{.Reason}}</strong> for book {{.BookID}} (work {{.WorkID}}): {{.Message}}</p>
+</li>
+{{end}}
+</ul>
+</section>
+{{end}}
+{{if .Fingerprints}}
+<section><h2>Bound account identities</h2>
+<ul>
+{{range .Fingerprints}}
+<li><code>{{.Provider}}:{{.Account}}</code> &rarr; <code>{{.Fingerprint}}</code></li>
+{{end}}
+</ul>
+</section>
+{{end}}
+<section><h2>Confirmed mappings</h2><p><a href="/api/mappings">View mappings as JSON</a> | <a href="/api/status">Status JSON</a> | <a href="/api/runs">Runs JSON</a> | <a href="/api/holds">Holds JSON</a> | <a href="/api/export">Export State JSON</a></p>
 {{if .Mappings}}<ul>{{range .Mappings}}<li class="mapping" aria-label="Mapping for book {{.BookID}}">
 <p><strong>{{.SourceTitle}}</strong> (source book {{.BookID}}) — {{.SourceAccount}} to {{.TargetAccount}}; work {{.WorkID}}{{if .EditionID}}, edition {{.EditionID}}{{else}}, work only{{end}}</p>
 <details><summary>Replace mapping for book {{.BookID}}</summary>
