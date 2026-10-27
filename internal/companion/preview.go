@@ -444,9 +444,10 @@ type PreviewTarget interface {
 
 // PreviewSyncOptions controls optional evaluation policies.
 type PreviewSyncOptions struct {
-	PolicyVersion    string
-	AllowPrivateSync bool
-	Now              time.Time
+	PolicyVersion     string
+	AllowPrivateSync  bool
+	DeclaredSourceVID string
+	Now               time.Time
 }
 
 // PreviewSync orchestrates read-only three-way status evaluation for a mapped book.
@@ -468,7 +469,7 @@ func PreviewSync(
 	}
 
 	// 1. Verify account fingerprints first to prevent cross-account pollution.
-	sourceFP, err := source.ResolveAccountFingerprint(ctx, "")
+	sourceFP, err := source.ResolveAccountFingerprint(ctx, opts.DeclaredSourceVID)
 	if err != nil {
 		return SyncProposal{}, fmt.Errorf("source account identity resolution failed: %w", err)
 	}

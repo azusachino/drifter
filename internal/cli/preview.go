@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/azusachino/drifter/internal/companion"
@@ -50,6 +51,7 @@ func (app *cliApp) previewCommand() *cobra.Command {
 		provider      string
 		dbPath        string
 		policyVersion string
+		sourceVID     string
 		allowPrivate  bool
 	)
 
@@ -65,6 +67,7 @@ func (app *cliApp) previewCommand() *cobra.Command {
 	flags.StringVar(&provider, "provider", "weread", "source provider name (default: weread)")
 	flags.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
 	flags.StringVar(&policyVersion, "policy-version", companion.DefaultPolicyVersion, "policy version for three-way evaluation")
+	flags.StringVar(&sourceVID, "source-vid", os.Getenv("WEREAD_VID"), "declared source user VID for account fingerprint binding")
 	flags.BoolVar(&allowPrivate, "allow-private", false, "allow previewing private book synchronization")
 
 	markRequiredFlags(command, "book-id", "account", "target-account")
@@ -106,9 +109,10 @@ func (app *cliApp) previewCommand() *cobra.Command {
 			bookID,
 			targetAccount,
 			companion.PreviewSyncOptions{
-				PolicyVersion:    policyVersion,
-				AllowPrivateSync: allowPrivate,
-				Now:              time.Now().UTC(),
+				PolicyVersion:     policyVersion,
+				AllowPrivateSync:  allowPrivate,
+				DeclaredSourceVID: sourceVID,
+				Now:               time.Now().UTC(),
 			},
 		)
 		if err != nil {

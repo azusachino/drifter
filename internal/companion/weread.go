@@ -185,23 +185,26 @@ func (w *WeRead) ResolveAccountFingerprint(ctx context.Context, declaredVID stri
 			} `json:"review"`
 		} `json:"reviews"`
 	}
-	if err := w.call(ctx, "/review/list/mine", map[string]any{}, &response); err != nil {
-		return "", err
-	}
-	for _, item := range response.Reviews {
-		raw := item.Review.UserVID
-		if raw == nil {
-			raw = item.Review.Author.UserVID
-		}
-		if raw != nil {
-			vidStr := parseVID(raw)
-			if ValidVID(vidStr) {
-				return fmt.Sprintf("weread:%s", vidStr), nil
+	err := w.call(ctx, "/review/list/mine", map[string]any{}, &response)
+	if err == nil {
+		for _, item := range response.Reviews {
+			raw := item.Review.UserVID
+			if raw == nil {
+				raw = item.Review.Author.UserVID
+			}
+			if raw != nil {
+				vidStr := parseVID(raw)
+				if ValidVID(vidStr) {
+					return fmt.Sprintf("weread:%s", vidStr), nil
+				}
 			}
 		}
 	}
 	if ValidVID(declaredVID) {
 		return fmt.Sprintf("weread:%s", strings.TrimSpace(declaredVID)), nil
 	}
-	return "", fmt.Errorf("WeRead account has zero reviews and no valid declared VID; write at least one review or configure source_vid to bind account identity")
+	if err != nil {
+		return "", fmt.Errorf("WeRead account identity resolution failed: %w (write a review or set WEREAD_VID / --source-vid to bind identity)", err)
+	}
+	return "", fmt.Errorf("WeRead account has zero reviews and no valid declared VID; write at least one review or set WEREAD_VID to bind account identity")
 }

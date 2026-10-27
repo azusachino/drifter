@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/azusachino/drifter/internal/companion"
@@ -15,6 +16,7 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 		provider      string
 		dbPath        string
 		policyVersion string
+		sourceVID     string
 		allowPrivate  bool
 		dryRun        bool
 	)
@@ -30,6 +32,7 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 	flags.StringVar(&provider, "provider", "weread", "source provider name (default: weread)")
 	flags.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
 	flags.StringVar(&policyVersion, "policy-version", companion.DefaultPolicyVersion, "policy version for three-way evaluation")
+	flags.StringVar(&sourceVID, "source-vid", os.Getenv("WEREAD_VID"), "declared source user VID for account fingerprint binding")
 	flags.BoolVar(&allowPrivate, "allow-private", false, "allow synchronizing private reading status")
 	flags.BoolVar(&dryRun, "dry-run", false, "preview reconciliation without mutating target")
 
@@ -68,13 +71,14 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 			source,
 			target,
 			companion.ReconcileOptions{
-				Provider:         provider,
-				SourceAccount:    account,
-				TargetAccount:    targetAccount,
-				PolicyVersion:    policyVersion,
-				AllowPrivateSync: allowPrivate,
-				DryRun:           dryRun,
-				Now:              time.Now().UTC(),
+				Provider:          provider,
+				SourceAccount:     account,
+				TargetAccount:     targetAccount,
+				PolicyVersion:     policyVersion,
+				AllowPrivateSync:  allowPrivate,
+				DeclaredSourceVID: sourceVID,
+				DryRun:            dryRun,
+				Now:               time.Now().UTC(),
 			},
 		)
 		if err != nil {
