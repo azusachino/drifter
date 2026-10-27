@@ -61,8 +61,8 @@ type UserBookStatus struct {
 	BookID           int64               `json:"book_id"`
 	EditionID        *int64              `json:"edition_id,omitempty"`
 	StatusID         int                 `json:"status_id"`
-	Rating           *int                `json:"rating,omitempty"`
-	Review           string              `json:"review,omitempty"`
+	Rating           *float64            `json:"rating,omitempty"`
+	Review           *string             `json:"review,omitempty"`
 	PrivacySettingID *int                `json:"privacy_setting_id,omitempty"`
 	UserBookReads    []UserBookReadEntry `json:"user_book_reads,omitempty"`
 }
@@ -148,7 +148,7 @@ func (h *Hardcover) mutate(ctx context.Context, mutation string, variables map[s
 		return fmt.Errorf("Hardcover mutation rejected or data missing")
 	}
 	if err := json.Unmarshal(response.Data, target); err != nil {
-		return fmt.Errorf("Hardcover mutation response has invalid fields")
+		return fmt.Errorf("Hardcover mutation response has invalid fields: %w", err)
 	}
 	return nil
 }

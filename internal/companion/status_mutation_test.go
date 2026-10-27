@@ -50,13 +50,14 @@ func TestHardcoverStatusMutationTransitions(t *testing.T) {
 			}
 			statusID := int(obj["status_id"].(float64))
 			bookID := int64(obj["book_id"].(float64))
-			ratingVal := 5
+			ratingVal := 5.0
+			reviewVal := "user notes must stay untouched"
 			state.userBook = &UserBookStatus{
 				ID:       101,
 				BookID:   bookID,
 				StatusID: statusID,
 				Rating:   &ratingVal,
-				Review:   "user notes must stay untouched",
+				Review:   &reviewVal,
 			}
 			io.WriteString(rw, `{"data":{"insert_user_book":{"id":101,"status_id":1,"error":null,"user_book":{"id":101,"status_id":1}}}}`)
 
@@ -152,8 +153,8 @@ func TestHardcoverStatusMutationTransitions(t *testing.T) {
 		t.Fatalf("unexpected res4: %+v", res4)
 	}
 	// Verify user book rating, review, and prior read logs are preserved
-	if *state.userBook.Rating != 5 || state.userBook.Review != "user notes must stay untouched" {
-		t.Fatalf("user metadata overwritten! rating=%v review=%q", state.userBook.Rating, state.userBook.Review)
+	if *state.userBook.Rating != 5.0 || state.userBook.Review == nil || *state.userBook.Review != "user notes must stay untouched" {
+		t.Fatalf("user metadata overwritten! rating=%v review=%v", state.userBook.Rating, state.userBook.Review)
 	}
 	if len(state.userBook.UserBookReads) != 1 || state.userBook.UserBookReads[0].ID != 501 {
 		t.Fatalf("user_book_reads corrupted: %+v", state.userBook.UserBookReads)

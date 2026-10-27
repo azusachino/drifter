@@ -32,7 +32,7 @@ func progressStatus(percent, started int, finishedAt int64) (Progress, error) {
 		return Progress{}, fmt.Errorf("invalid WeRead progress fields")
 	}
 	status := "unknown"
-	if percent == 100 && finishedAt > 0 {
+	if finishedAt > 0 {
 		status = "read"
 	} else if percent < 100 && (started == 1 || percent > 0) {
 		status = "reading"

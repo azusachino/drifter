@@ -63,8 +63,8 @@ func (app *cliApp) targetStatusCommand() *cobra.Command {
 		if status.Rating != nil {
 			res["rating"] = *status.Rating
 		}
-		if status.Review != "" {
-			res["review"] = status.Review
+		if status.Review != nil && *status.Review != "" {
+			res["review"] = *status.Review
 		}
 		return encodeJSON(c, res)
 	})

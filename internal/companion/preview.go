@@ -267,7 +267,7 @@ func EvaluateStatus(p StatusEvaluationParams) SyncProposal {
 			targetEv.StatusName = HardcoverStatusName(p.TargetStatus.StatusID)
 			targetEv.PrivacySettingID = p.TargetStatus.PrivacySettingID
 			targetEv.HasRating = p.TargetStatus.Rating != nil
-			targetEv.HasReview = p.TargetStatus.Review != ""
+			targetEv.HasReview = p.TargetStatus.Review != nil && *p.TargetStatus.Review != ""
 			targetEv.ReadCount = len(p.TargetStatus.UserBookReads)
 			targetEv.UserBookReads = p.TargetStatus.UserBookReads
 		}

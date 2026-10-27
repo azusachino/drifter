@@ -40,7 +40,7 @@ func (h *Hardcover) query(ctx context.Context, query string, variables any, targ
 		return fmt.Errorf("Hardcover query rejected or data missing")
 	}
 	if err := json.Unmarshal(response.Data, target); err != nil {
-		return fmt.Errorf("Hardcover query response has invalid fields")
+		return fmt.Errorf("Hardcover query response has invalid fields: %w", err)
 	}
 	return nil
 }
