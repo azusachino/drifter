@@ -109,7 +109,7 @@ func TestHardcoverStatusMutationTransitions(t *testing.T) {
 	started := "2026-01-01"
 	finished := "2026-02-01"
 	state.userBook.UserBookReads = []UserBookReadEntry{
-		{ID: 501, StartedDate: &started, FinishedDate: &finished},
+		{ID: 501, StartedAt: &started, FinishedAt: &finished, StartedDate: &started, FinishedDate: &finished},
 	}
 	res3, err := h.ApplyStatusMutation(ctx, StatusMutationRequest{WorkID: 42, StatusID: HardcoverStatusRead})
 	if err != nil {

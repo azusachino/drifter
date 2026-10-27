@@ -252,17 +252,36 @@ func (h *Hardcover) ValidateLink(ctx context.Context, workID, editionID int64) e
 // ResolveAccountFingerprint queries the authenticated Hardcover user and returns its stable identity fingerprint.
 func (h *Hardcover) ResolveAccountFingerprint(ctx context.Context) (string, error) {
 	var response struct {
-		Me *struct {
-			ID       int64  `json:"id"`
-			Username string `json:"username"`
-		} `json:"me"`
+		Me json.RawMessage `json:"me"`
 	}
 	q := `query Me { me { id username } }`
 	if err := h.query(ctx, q, nil, &response); err != nil {
 		return "", err
 	}
-	if response.Me == nil || response.Me.ID <= 0 {
+	if len(response.Me) == 0 || string(response.Me) == "null" {
 		return "", fmt.Errorf("Hardcover user identity missing or invalid in query response")
 	}
-	return fmt.Sprintf("hardcover:%d", response.Me.ID), nil
+
+	// Try unmarshaling as array (live GraphQL query)
+	var meList []struct {
+		ID       int64  `json:"id"`
+		Username string `json:"username"`
+	}
+	if err := json.Unmarshal(response.Me, &meList); err == nil && len(meList) > 0 {
+		if meList[0].ID <= 0 {
+			return "", fmt.Errorf("Hardcover user identity missing or invalid in query response")
+		}
+		return fmt.Sprintf("hardcover:%d", meList[0].ID), nil
+	}
+
+	// Try unmarshaling as single object
+	var meObj struct {
+		ID       int64  `json:"id"`
+		Username string `json:"username"`
+	}
+	if err := json.Unmarshal(response.Me, &meObj); err == nil && meObj.ID > 0 {
+		return fmt.Sprintf("hardcover:%d", meObj.ID), nil
+	}
+
+	return "", fmt.Errorf("Hardcover user identity missing or invalid in query response")
 }

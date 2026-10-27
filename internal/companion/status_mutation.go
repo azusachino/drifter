@@ -30,6 +30,8 @@ var (
 // UserBookReadEntry represents a historical reading attempt entry on Hardcover.
 type UserBookReadEntry struct {
 	ID           int64   `json:"id"`
+	StartedAt    *string `json:"started_at,omitempty"`
+	FinishedAt   *string `json:"finished_at,omitempty"`
 	StartedDate  *string `json:"started_date,omitempty"`
 	FinishedDate *string `json:"finished_date,omitempty"`
 }
@@ -125,7 +127,7 @@ func (h *Hardcover) mutate(ctx context.Context, mutation string, variables map[s
 	return nil
 }
 
-const userBookStatusFields = `id book_id edition_id status_id rating review privacy_setting_id user_book_reads(order_by: {id: asc}) { id started_date finished_date }`
+const userBookStatusFields = `id book_id edition_id status_id rating review privacy_setting_id user_book_reads(order_by: {id: asc}) { id started_at finished_at }`
 
 // GetUserBookStatus retrieves the current user_book record for a work on Hardcover.
 // Returns nil, nil if no user_book record exists for this work.

@@ -21,7 +21,7 @@ func NewWeRead(token string) (*WeRead, error) {
 func (w *WeRead) call(ctx context.Context, name string, args map[string]any, target any) error {
 	// Only explicit read operations exist; there is no generic exported gateway.
 	switch name {
-	case "/store/search", "/book/info", "/book/getprogress", "/shelf/sync", "/review/list/mine":
+	case "/store/search", "/book/info", "/book/getprogress", "/shelf/sync", "/review/list/mine", "/user/notebooks":
 	default:
 		return fmt.Errorf("unsupported WeRead operation")
 	}
@@ -172,9 +172,37 @@ func parseVID(raw any) string {
 }
 
 // ResolveAccountFingerprint queries WeRead for the caller's user VID.
-// If reviews exist on /review/list/mine, it extracts userVid.
+// If declaredVID is valid, it uses it directly.
+// Otherwise, it queries /review/list/mine or discovers a book via /user/notebooks to extract userVid.
 // If zero reviews exist, it falls back to declaredVID if valid, or returns an actionable error.
 func (w *WeRead) ResolveAccountFingerprint(ctx context.Context, declaredVID string) (string, error) {
+	if ValidVID(declaredVID) {
+		return fmt.Sprintf("weread:%s", strings.TrimSpace(declaredVID)), nil
+	}
+
+	extractVID := func(reviews []struct {
+		Review struct {
+			UserVID any `json:"userVid"`
+			Author  struct {
+				UserVID any `json:"userVid"`
+			} `json:"author"`
+		} `json:"review"`
+	}) string {
+		for _, item := range reviews {
+			raw := item.Review.UserVID
+			if raw == nil {
+				raw = item.Review.Author.UserVID
+			}
+			if raw != nil {
+				vidStr := parseVID(raw)
+				if ValidVID(vidStr) {
+					return vidStr
+				}
+			}
+		}
+		return ""
+	}
+
 	var response struct {
 		Reviews []struct {
 			Review struct {
@@ -187,22 +215,50 @@ func (w *WeRead) ResolveAccountFingerprint(ctx context.Context, declaredVID stri
 	}
 	err := w.call(ctx, "/review/list/mine", map[string]any{}, &response)
 	if err == nil {
-		for _, item := range response.Reviews {
-			raw := item.Review.UserVID
-			if raw == nil {
-				raw = item.Review.Author.UserVID
+		if vid := extractVID(response.Reviews); vid != "" {
+			return fmt.Sprintf("weread:%s", vid), nil
+		}
+	}
+
+	// If direct /review/list/mine was rejected (e.g. gateway requires bookid) or returned 0 reviews,
+	// try discovering a book with notes/reviews via /user/notebooks.
+	var nbResp struct {
+		Books []struct {
+			BookID      string `json:"bookId"`
+			ReviewCount int    `json:"reviewCount"`
+		} `json:"books"`
+	}
+	if nbErr := w.call(ctx, "/user/notebooks", map[string]any{"count": 20}, &nbResp); nbErr == nil && len(nbResp.Books) > 0 {
+		var targetBookID string
+		for _, b := range nbResp.Books {
+			if b.ReviewCount > 0 && ValidBookID(b.BookID) {
+				targetBookID = b.BookID
+				break
 			}
-			if raw != nil {
-				vidStr := parseVID(raw)
-				if ValidVID(vidStr) {
-					return fmt.Sprintf("weread:%s", vidStr), nil
+		}
+		if targetBookID == "" && ValidBookID(nbResp.Books[0].BookID) {
+			targetBookID = nbResp.Books[0].BookID
+		}
+
+		if targetBookID != "" {
+			var bookRevResp struct {
+				Reviews []struct {
+					Review struct {
+						UserVID any `json:"userVid"`
+						Author  struct {
+							UserVID any `json:"userVid"`
+						} `json:"author"`
+					} `json:"review"`
+				} `json:"reviews"`
+			}
+			if revErr := w.call(ctx, "/review/list/mine", map[string]any{"bookid": targetBookID}, &bookRevResp); revErr == nil {
+				if vid := extractVID(bookRevResp.Reviews); vid != "" {
+					return fmt.Sprintf("weread:%s", vid), nil
 				}
 			}
 		}
 	}
-	if ValidVID(declaredVID) {
-		return fmt.Sprintf("weread:%s", strings.TrimSpace(declaredVID)), nil
-	}
+
 	if err != nil {
 		return "", fmt.Errorf("WeRead account identity resolution failed: %w (write a review or set WEREAD_VID / --source-vid to bind identity)", err)
 	}
