@@ -110,6 +110,7 @@ come only from WEREAD_API_KEY and HARDCOVER_API_KEY in the process environment.`
 		app.mergeCommand(),
 		app.previewCommand(),
 		app.syncCommand(),
+		app.reconcileCommand(),
 		app.serveProbesCommand(),
 	)
 	return root

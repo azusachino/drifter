@@ -183,6 +183,34 @@ These cases exercise Milestone 4 contracts against in-process synthetic doubles:
 5. **Zero-mutation dry-run**: `drifter sync --dry-run` performs pure three-way
    evaluation identical to `preview` with zero provider writes.
 
+## Account-wide continuous reconciliation and monotonic runs
+
+```sh
+mise exec -- go test -race -count=1 ./internal/companion \
+  -run '^TestReconcileAccount' -v
+mise exec -- go test -race -count=1 ./internal/cli \
+  -run '^TestCLIReconcile' -v
+```
+
+These cases exercise Milestone 5 contracts against in-process synthetic doubles:
+
+1. **Schema v6 migration**: Upgrades v5 SQLite databases to v6, adding
+   `sync_runs` and `sync_holds` tables while preserving all existing mappings,
+   decisions, account fingerprints, baselines, authorities, intents, and
+   receipts.
+2. **Monotonic sequence and run tracking (US10)**: Assigns strictly increasing
+   run IDs, tracks execution timestamps, counts applied/no-op/conflict/hold
+   outcomes, and records overall status (`completed`, `partial`, `failed`).
+3. **Partial failure isolation (US10)**: A failure or provider timeout on one
+   work does not abort or roll back other works in the account worklist;
+   unaffected books proceed and complete safely.
+4. **Persistent holds (US5, US6, US8)**: Books encountering conflicts (such as
+   manual target edits or competing mappings) are persisted to `sync_holds`
+   with full serialized `ConflictEvidence` for operator inspection.
+5. **Dry-run evaluation**: `drifter reconcile --dry-run` previews outcomes
+   across all account mappings without mutating remote providers or creating
+   live runs.
+
 ## Full local gates
 
 ```sh

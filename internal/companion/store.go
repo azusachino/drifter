@@ -152,7 +152,7 @@ func openStore(path string, readOnly bool, owner *DatabaseOwnership) (*Store, er
 	return &Store{db: db, path: path, owner: owner, readOnly: readOnly}, nil
 }
 
-const storeVersion = 5
+const storeVersion = 6
 
 func validateStoreSchema(db *sql.DB) error {
 	var version int
@@ -206,6 +206,20 @@ func validateStoreSchema(db *sql.DB) error {
 		return err
 	}
 	rows, err = db.Query(`SELECT id,intent_id,provider,source_account,book_id,target_account,work_id,edition_id,target_status_id,applied_at FROM sync_receipts LIMIT 0`)
+	if err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	rows, err = db.Query(`SELECT id,source_account,target_account,policy_version,status,total_count,applied_count,noop_count,conflict_count,hold_count,error_count,started_at,finished_at FROM sync_runs LIMIT 0`)
+	if err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	rows, err = db.Query(`SELECT id,run_id,provider,source_account,book_id,target_account,work_id,reason,message,evidence,created_at FROM sync_holds LIMIT 0`)
 	if err != nil {
 		return err
 	}
@@ -331,6 +345,38 @@ func migrateStore(db *sql.DB) error {
 			return err
 		}
 		version = 5
+	}
+	if version == 5 {
+		if _, err := tx.Exec(`CREATE TABLE sync_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			source_account TEXT NOT NULL, target_account TEXT NOT NULL,
+			policy_version TEXT NOT NULL,
+			status TEXT NOT NULL CHECK(status IN ('in_progress', 'completed', 'partial', 'failed')),
+			total_count INTEGER NOT NULL DEFAULT 0,
+			applied_count INTEGER NOT NULL DEFAULT 0,
+			noop_count INTEGER NOT NULL DEFAULT 0,
+			conflict_count INTEGER NOT NULL DEFAULT 0,
+			hold_count INTEGER NOT NULL DEFAULT 0,
+			error_count INTEGER NOT NULL DEFAULT 0,
+			started_at TEXT NOT NULL, finished_at TEXT)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`CREATE TABLE sync_holds (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id INTEGER NOT NULL REFERENCES sync_runs(id),
+			provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+			target_account TEXT NOT NULL, work_id INTEGER NOT NULL,
+			reason TEXT NOT NULL, message TEXT NOT NULL, evidence TEXT NOT NULL,
+			created_at TEXT NOT NULL)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`CREATE INDEX idx_sync_holds_lookup ON sync_holds(provider, source_account, book_id, target_account)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 6"); err != nil {
+			return err
+		}
+		version = 6
 	}
 	return tx.Commit()
 }
@@ -523,6 +569,29 @@ func (s *Store) ListMappingsForTarget(ctx context.Context, targetAccount string,
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT provider,source_account,book_id,target_account,work_id,edition_id,source_title,source_isbn
 		FROM mappings WHERE target_account=? AND work_id=? ORDER BY provider,source_account,book_id`, targetAccount, workID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []Mapping{}
+	for rows.Next() {
+		var m Mapping
+		if err := rows.Scan(&m.Provider, &m.SourceAccount, &m.BookID, &m.TargetAccount, &m.WorkID, &m.EditionID, &m.SourceTitle, &m.SourceISBN); err != nil {
+			return nil, err
+		}
+		result = append(result, m)
+	}
+	return result, rows.Err()
+}
+
+// ListMappingsForAccount returns confirmed mappings for an account pair.
+func (s *Store) ListMappingsForAccount(ctx context.Context, provider, sourceAccount, targetAccount string) ([]Mapping, error) {
+	if !ValidLabel(provider) || !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) {
+		return nil, ErrInvalidMappingKey
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT provider,source_account,book_id,target_account,work_id,edition_id,source_title,source_isbn
+		FROM mappings WHERE provider=? AND source_account=? AND target_account=? ORDER BY book_id`,
+		provider, sourceAccount, targetAccount)
 	if err != nil {
 		return nil, err
 	}
@@ -830,4 +899,161 @@ func (s *Store) GetLatestReceipt(ctx context.Context, provider, sourceAccount, b
 	}
 	r.AppliedAt = at
 	return &r, nil
+}
+
+// SyncRun records a monotonic continuous or batch reconciliation run.
+type SyncRun struct {
+	ID            int64      `json:"id"`
+	SourceAccount string     `json:"source_account"`
+	TargetAccount string     `json:"target_account"`
+	PolicyVersion string     `json:"policy_version"`
+	Status        string     `json:"status"` // "in_progress", "completed", "partial", "failed"
+	TotalCount    int        `json:"total_count"`
+	AppliedCount  int        `json:"applied_count"`
+	NoOpCount     int        `json:"noop_count"`
+	ConflictCount int        `json:"conflict_count"`
+	HoldCount     int        `json:"hold_count"`
+	ErrorCount    int        `json:"error_count"`
+	StartedAt     time.Time  `json:"started_at"`
+	FinishedAt    *time.Time `json:"finished_at,omitempty"`
+}
+
+// SyncHold records a held or conflicting book during a reconciliation run.
+type SyncHold struct {
+	ID            int64     `json:"id"`
+	RunID         int64     `json:"run_id"`
+	Provider      string    `json:"provider"`
+	SourceAccount string    `json:"source_account"`
+	BookID        string    `json:"book_id"`
+	TargetAccount string    `json:"target_account"`
+	WorkID        int64     `json:"work_id"`
+	Reason        string    `json:"reason"`
+	Message       string    `json:"message"`
+	Evidence      string    `json:"evidence"` // JSON-encoded ConflictEvidence if present
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// CreateSyncRun records the start of a monotonic reconciliation run.
+func (s *Store) CreateSyncRun(ctx context.Context, sourceAccount, targetAccount, policyVersion string, startedAt time.Time) (int64, error) {
+	if !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) || policyVersion == "" {
+		return 0, ErrInvalidMappingKey
+	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	startedStr := startedAt.UTC().Format(time.RFC3339)
+	r, err := s.db.ExecContext(ctx, `INSERT INTO sync_runs (
+		source_account, target_account, policy_version, status, started_at)
+		VALUES (?, ?, ?, 'in_progress', ?)`,
+		sourceAccount, targetAccount, policyVersion, startedStr)
+	if err != nil {
+		return 0, err
+	}
+	return r.LastInsertId()
+}
+
+// UpdateSyncRun updates statistics and completion status of a reconciliation run.
+func (s *Store) UpdateSyncRun(ctx context.Context, runID int64, status string, total, applied, noop, conflict, hold, errCount int, finishedAt time.Time) error {
+	if runID <= 0 || (status != "in_progress" && status != "completed" && status != "partial" && status != "failed") {
+		return fmt.Errorf("invalid sync run status update")
+	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return err
+	}
+	defer release()
+	finStr := finishedAt.UTC().Format(time.RFC3339)
+	_, err = s.db.ExecContext(ctx, `UPDATE sync_runs SET
+		status=?, total_count=?, applied_count=?, noop_count=?, conflict_count=?, hold_count=?, error_count=?, finished_at=?
+		WHERE id=?`,
+		status, total, applied, noop, conflict, hold, errCount, finStr, runID)
+	return err
+}
+
+// GetLatestSyncRun returns the most recent sync run for an account pair, or nil if none.
+func (s *Store) GetLatestSyncRun(ctx context.Context, sourceAccount, targetAccount string) (*SyncRun, error) {
+	if !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) {
+		return nil, ErrInvalidMappingKey
+	}
+	var r SyncRun
+	var startStr string
+	var finStr sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id, source_account, target_account, policy_version, status,
+		total_count, applied_count, noop_count, conflict_count, hold_count, error_count, started_at, finished_at
+		FROM sync_runs WHERE source_account=? AND target_account=? ORDER BY id DESC LIMIT 1`,
+		sourceAccount, targetAccount).
+		Scan(&r.ID, &r.SourceAccount, &r.TargetAccount, &r.PolicyVersion, &r.Status,
+			&r.TotalCount, &r.AppliedCount, &r.NoOpCount, &r.ConflictCount, &r.HoldCount, &r.ErrorCount,
+			&startStr, &finStr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	st, err := time.Parse(time.RFC3339, startStr)
+	if err != nil {
+		return nil, fmt.Errorf("corrupt started_at in sync_runs: %w", err)
+	}
+	r.StartedAt = st
+	if finStr.Valid {
+		ft, err := time.Parse(time.RFC3339, finStr.String)
+		if err != nil {
+			return nil, fmt.Errorf("corrupt finished_at in sync_runs: %w", err)
+		}
+		r.FinishedAt = &ft
+	}
+	return &r, nil
+}
+
+// RecordSyncHold records an individual hold or conflict observed during a run.
+func (s *Store) RecordSyncHold(ctx context.Context, hold SyncHold) (int64, error) {
+	if hold.RunID <= 0 || !ValidLabel(hold.Provider) || !ValidLabel(hold.SourceAccount) || !ValidLabel(hold.TargetAccount) || !ValidBookID(hold.BookID) || hold.WorkID <= 0 {
+		return 0, fmt.Errorf("invalid sync hold record")
+	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	createdStr := hold.CreatedAt.UTC().Format(time.RFC3339)
+	r, err := s.db.ExecContext(ctx, `INSERT INTO sync_holds (
+		run_id, provider, source_account, book_id, target_account, work_id, reason, message, evidence, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		hold.RunID, hold.Provider, hold.SourceAccount, hold.BookID, hold.TargetAccount, hold.WorkID,
+		hold.Reason, hold.Message, hold.Evidence, createdStr)
+	if err != nil {
+		return 0, err
+	}
+	return r.LastInsertId()
+}
+
+// ListSyncHolds returns the latest active holds for an account pair.
+func (s *Store) ListSyncHolds(ctx context.Context, sourceAccount, targetAccount string) ([]SyncHold, error) {
+	if !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) {
+		return nil, ErrInvalidMappingKey
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, run_id, provider, source_account, book_id, target_account, work_id, reason, message, evidence, created_at
+		FROM sync_holds WHERE source_account=? AND target_account=? ORDER BY id DESC`, sourceAccount, targetAccount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var holds []SyncHold
+	for rows.Next() {
+		var h SyncHold
+		var createdStr string
+		if err := rows.Scan(&h.ID, &h.RunID, &h.Provider, &h.SourceAccount, &h.BookID, &h.TargetAccount, &h.WorkID, &h.Reason, &h.Message, &h.Evidence, &createdStr); err != nil {
+			return nil, err
+		}
+		t, err := time.Parse(time.RFC3339, createdStr)
+		if err != nil {
+			return nil, fmt.Errorf("corrupt created_at in sync_holds: %w", err)
+		}
+		h.CreatedAt = t
+		holds = append(holds, h)
+	}
+	return holds, rows.Err()
 }

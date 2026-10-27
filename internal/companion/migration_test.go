@@ -76,8 +76,8 @@ func TestStoreVersionsNewAndLegacyDatabases(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if schemaVersion(t, s.db) != 5 {
-					t.Fatal("database not upgraded to version 5")
+				if schemaVersion(t, s.db) != 6 {
+					t.Fatal("database not upgraded to version 6")
 				}
 				rows, err := s.List(context.Background())
 				if err != nil || !reflect.DeepEqual(rows, want) {
@@ -92,7 +92,7 @@ func TestStoreVersionsNewAndLegacyDatabases(t *testing.T) {
 }
 
 func TestStoreRefusesUnsupportedVersionsWithoutCreatingSchema(t *testing.T) {
-	for _, version := range []int{6, -1} {
+	for _, version := range []int{7, -1} {
 		path := filepath.Join(t.TempDir(), "mappings.sqlite")
 		db := fixtureDB(t, path)
 		if _, err := db.Exec("PRAGMA user_version = " + strconv.Itoa(version)); err != nil {
@@ -199,8 +199,8 @@ PRAGMA user_version = 3;
 	}
 	defer s.Close()
 
-	if schemaVersion(t, s.db) != 5 {
-		t.Fatalf("expected version 5, got %d", schemaVersion(t, s.db))
+	if schemaVersion(t, s.db) != 6 {
+		t.Fatalf("expected version 6, got %d", schemaVersion(t, s.db))
 	}
 
 	// Verify existing data preserved
@@ -320,8 +320,8 @@ PRAGMA user_version = 4;
 	}
 	defer s.Close()
 
-	if schemaVersion(t, s.db) != 5 {
-		t.Fatalf("expected version 5, got %d", schemaVersion(t, s.db))
+	if schemaVersion(t, s.db) != 6 {
+		t.Fatalf("expected version 6, got %d", schemaVersion(t, s.db))
 	}
 
 	// Verify v4 baseline is preserved
@@ -380,5 +380,131 @@ PRAGMA user_version = 4;
 	latestReceipt, err := s.GetLatestReceipt(ctx, mapping.Provider, mapping.SourceAccount, mapping.BookID, mapping.TargetAccount)
 	if err != nil || latestReceipt == nil || latestReceipt.ID != receiptID {
 		t.Fatalf("get latest receipt failed: got %+v, err %v", latestReceipt, err)
+	}
+}
+
+func TestSyncRunAndHoldMigrationFromVersionFivePreservesData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mappings.sqlite")
+	db := fixtureDB(t, path)
+
+	v5Schema := `
+CREATE TABLE mappings (
+	provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+	target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+	edition_id INTEGER NOT NULL CHECK(edition_id >= 0), source_title TEXT NOT NULL, source_isbn TEXT NOT NULL,
+	PRIMARY KEY(provider, source_account, book_id, target_account));
+CREATE TABLE decisions (
+	provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+	target_account TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('skip','exclude','not-in-catalog')),
+	PRIMARY KEY(provider, source_account, book_id, target_account));
+CREATE TABLE account_fingerprints (
+	provider TEXT NOT NULL, account TEXT NOT NULL,
+	fingerprint TEXT NOT NULL, created_at TEXT NOT NULL,
+	last_verified_at TEXT NOT NULL,
+	PRIMARY KEY(provider, account));
+CREATE TABLE status_baselines (
+	provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+	target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+	edition_id INTEGER NOT NULL CHECK(edition_id >= 0),
+	source_status_id INTEGER NOT NULL CHECK(source_status_id >= 1 AND source_status_id <= 5),
+	target_status_id INTEGER NOT NULL CHECK(target_status_id >= 1 AND target_status_id <= 5),
+	policy_version TEXT NOT NULL, source_fingerprint TEXT NOT NULL,
+	target_fingerprint TEXT NOT NULL, last_synced_at TEXT NOT NULL,
+	PRIMARY KEY(provider, source_account, book_id, target_account));
+CREATE TABLE target_authorities (
+	target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+	authorized_provider TEXT NOT NULL, authorized_account TEXT NOT NULL,
+	authorized_book_id TEXT NOT NULL, policy_version TEXT NOT NULL,
+	privacy_mode TEXT NOT NULL CHECK(privacy_mode IN ('default', 'private-target', 'exclude')),
+	created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+	PRIMARY KEY(target_account, work_id));
+CREATE TABLE sync_intents (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+	target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+	edition_id INTEGER NOT NULL CHECK(edition_id >= 0),
+	proposed_status_id INTEGER NOT NULL CHECK(proposed_status_id >= 1 AND proposed_status_id <= 5),
+	privacy_setting_id INTEGER,
+	policy_version TEXT NOT NULL, source_fingerprint TEXT NOT NULL,
+	target_fingerprint TEXT NOT NULL,
+	state TEXT NOT NULL CHECK(state IN ('pending', 'in_flight', 'applied', 'failed', 'uncertain')),
+	error_message TEXT,
+	created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX idx_sync_intents_lookup ON sync_intents(provider, source_account, book_id, target_account);
+CREATE TABLE sync_receipts (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	intent_id INTEGER NOT NULL REFERENCES sync_intents(id),
+	provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+	target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+	edition_id INTEGER NOT NULL CHECK(edition_id >= 0),
+	target_status_id INTEGER NOT NULL CHECK(target_status_id >= 1 AND target_status_id <= 5),
+	applied_at TEXT NOT NULL);
+PRAGMA user_version = 5;
+`
+	if _, err := db.Exec(v5Schema); err != nil {
+		t.Fatal(err)
+	}
+
+	mapping := testMapping()
+	if _, err := db.Exec(`INSERT INTO mappings VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		mapping.Provider, mapping.SourceAccount, mapping.BookID, mapping.TargetAccount,
+		mapping.WorkID, mapping.EditionID, mapping.SourceTitle, mapping.SourceISBN); err != nil {
+		t.Fatal(err)
+	}
+
+	nowStr := "2026-10-27T12:00:00Z"
+	if _, err := db.Exec(`INSERT INTO sync_intents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		1, mapping.Provider, mapping.SourceAccount, mapping.BookID, mapping.TargetAccount,
+		mapping.WorkID, mapping.EditionID, 2, nil, "v1", "weread:10001", "hardcover:20002", "applied", nil, nowStr, nowStr); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	ctx := context.Background()
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("failed to open store from v5: %v", err)
+	}
+	defer s.Close()
+
+	if schemaVersion(t, s.db) != 6 {
+		t.Fatalf("expected version 6, got %d", schemaVersion(t, s.db))
+	}
+
+	// Verify v6 sync_runs and sync_holds work
+	t0 := time.Date(2026, 10, 27, 14, 0, 0, 0, time.UTC)
+	runID, err := s.CreateSyncRun(ctx, mapping.SourceAccount, mapping.TargetAccount, "v1", t0)
+	if err != nil || runID <= 0 {
+		t.Fatalf("create sync run failed: id=%d, err=%v", runID, err)
+	}
+
+	holdID, err := s.RecordSyncHold(ctx, SyncHold{
+		RunID:         runID,
+		Provider:      mapping.Provider,
+		SourceAccount: mapping.SourceAccount,
+		BookID:        mapping.BookID,
+		TargetAccount: mapping.TargetAccount,
+		WorkID:        mapping.WorkID,
+		Reason:        "manual_target_edit",
+		Message:       "manual edit detected",
+		Evidence:      `{"reason":"manual_target_edit"}`,
+		CreatedAt:     t0,
+	})
+	if err != nil || holdID <= 0 {
+		t.Fatalf("record sync hold failed: id=%d, err=%v", holdID, err)
+	}
+
+	if err := s.UpdateSyncRun(ctx, runID, "completed", 1, 0, 0, 1, 0, 0, t0.Add(5*time.Second)); err != nil {
+		t.Fatalf("update sync run failed: %v", err)
+	}
+
+	latestRun, err := s.GetLatestSyncRun(ctx, mapping.SourceAccount, mapping.TargetAccount)
+	if err != nil || latestRun == nil || latestRun.ID != runID || latestRun.Status != "completed" {
+		t.Fatalf("get latest sync run failed: got %+v, err %v", latestRun, err)
+	}
+
+	holds, err := s.ListSyncHolds(ctx, mapping.SourceAccount, mapping.TargetAccount)
+	if err != nil || len(holds) != 1 || holds[0].ID != holdID {
+		t.Fatalf("list sync holds failed: got %+v, err %v", holds, err)
 	}
 }
