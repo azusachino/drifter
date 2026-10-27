@@ -9,13 +9,14 @@ import (
 
 // ReconcileOptions specifies parameters for multi-book reconciliation.
 type ReconcileOptions struct {
-	Provider         string
-	SourceAccount    string
-	TargetAccount    string
-	PolicyVersion    string
-	AllowPrivateSync bool
-	DryRun           bool
-	Now              time.Time
+	Provider          string
+	SourceAccount     string
+	TargetAccount     string
+	PolicyVersion     string
+	AllowPrivateSync  bool
+	DeclaredSourceVID string
+	DryRun            bool
+	Now               time.Time
 }
 
 // ReconcileSummary captures the full results and statistics of a reconciliation run.
@@ -73,7 +74,7 @@ func ReconcileAccount(
 	}
 
 	// 1. Upfront fingerprint verification
-	sourceFP, err := source.ResolveAccountFingerprint(ctx, "")
+	sourceFP, err := source.ResolveAccountFingerprint(ctx, opts.DeclaredSourceVID)
 	if err != nil {
 		return summary, fmt.Errorf("source account identity resolution failed: %w", err)
 	}
@@ -173,9 +174,10 @@ func ReconcileAccount(
 
 		// Live apply with write intent and receipt
 		res, err := ApplySync(ctx, store, source, target, m.Provider, m.SourceAccount, m.BookID, m.TargetAccount, ApplySyncOptions{
-			PolicyVersion:    opts.PolicyVersion,
-			AllowPrivateSync: opts.AllowPrivateSync,
-			Now:              startedAt,
+			PolicyVersion:     opts.PolicyVersion,
+			AllowPrivateSync:  opts.AllowPrivateSync,
+			DeclaredSourceVID: opts.DeclaredSourceVID,
+			Now:               startedAt,
 		})
 		if err != nil {
 			summary.ErrorCount++

@@ -17,9 +17,10 @@ var _ ApplyTarget = (*Hardcover)(nil)
 
 // ApplySyncOptions controls execution parameters for applying status sync.
 type ApplySyncOptions struct {
-	PolicyVersion    string
-	AllowPrivateSync bool
-	Now              time.Time
+	PolicyVersion     string
+	AllowPrivateSync  bool
+	DeclaredSourceVID string
+	Now               time.Time
 }
 
 // ApplyResult describes the outcome of applying status synchronization.
@@ -127,9 +128,10 @@ func ApplySync(
 
 	// 2. Perform three-way preview evaluation
 	proposal, err := PreviewSync(ctx, store, source, target, provider, sourceAccount, bookID, targetAccount, PreviewSyncOptions{
-		PolicyVersion:    opts.PolicyVersion,
-		AllowPrivateSync: opts.AllowPrivateSync,
-		Now:              now,
+		PolicyVersion:     opts.PolicyVersion,
+		AllowPrivateSync:  opts.AllowPrivateSync,
+		DeclaredSourceVID: opts.DeclaredSourceVID,
+		Now:               now,
 	})
 	if err != nil {
 		return ApplyResult{}, err
