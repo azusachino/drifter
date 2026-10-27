@@ -129,6 +129,29 @@ func TestWeReadResolveAccountFingerprint(t *testing.T) {
 		}
 	})
 
+	t.Run("resolves userVid via notebooks discovery when direct review list requires bookid", func(t *testing.T) {
+		w := &WeRead{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			switch body["api_name"] {
+			case "/review/list/mine":
+				if bookid, ok := body["bookid"].(string); ok && bookid == "3300108679" {
+					io.WriteString(rw, `{"errcode":0,"reviews":[{"review":{"userVid":904656}}]}`)
+				} else {
+					io.WriteString(rw, `{"errcode":-2003,"errmsg":"缺少必填参数: bookid"}`)
+				}
+			case "/user/notebooks":
+				io.WriteString(rw, `{"errcode":0,"books":[{"bookId":"3300108679","reviewCount":1}]}`)
+			default:
+				t.Errorf("unexpected api_name: %v", body["api_name"])
+			}
+		})}
+		fp, err := w.ResolveAccountFingerprint(context.Background(), "")
+		if err != nil || fp != "weread:904656" {
+			t.Fatalf("unexpected fingerprint: got %q, err: %v", fp, err)
+		}
+	})
+
 	t.Run("fails closed when zero reviews and no declared vid", func(t *testing.T) {
 		w := &WeRead{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
 			io.WriteString(rw, `{"errcode":0,"reviews":[]}`)
