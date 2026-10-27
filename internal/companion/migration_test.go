@@ -76,8 +76,8 @@ func TestStoreVersionsNewAndLegacyDatabases(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if schemaVersion(t, s.db) != 4 {
-					t.Fatal("database not upgraded to version 4")
+				if schemaVersion(t, s.db) != 5 {
+					t.Fatal("database not upgraded to version 5")
 				}
 				rows, err := s.List(context.Background())
 				if err != nil || !reflect.DeepEqual(rows, want) {
@@ -92,7 +92,7 @@ func TestStoreVersionsNewAndLegacyDatabases(t *testing.T) {
 }
 
 func TestStoreRefusesUnsupportedVersionsWithoutCreatingSchema(t *testing.T) {
-	for _, version := range []int{5, -1} {
+	for _, version := range []int{6, -1} {
 		path := filepath.Join(t.TempDir(), "mappings.sqlite")
 		db := fixtureDB(t, path)
 		if _, err := db.Exec("PRAGMA user_version = " + strconv.Itoa(version)); err != nil {
@@ -199,8 +199,8 @@ PRAGMA user_version = 3;
 	}
 	defer s.Close()
 
-	if schemaVersion(t, s.db) != 4 {
-		t.Fatalf("expected version 4, got %d", schemaVersion(t, s.db))
+	if schemaVersion(t, s.db) != 5 {
+		t.Fatalf("expected version 5, got %d", schemaVersion(t, s.db))
 	}
 
 	// Verify existing data preserved
@@ -254,5 +254,131 @@ PRAGMA user_version = 3;
 	aGot, err := s.GetTargetAuthority(ctx, mapping.TargetAccount, mapping.WorkID)
 	if err != nil || aGot == nil || !reflect.DeepEqual(*aGot, auth) {
 		t.Fatalf("get target authority failed: got %+v, want %+v, err %v", aGot, auth, err)
+	}
+}
+
+func TestSyncIntentAndReceiptMigrationFromVersionFourPreservesData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mappings.sqlite")
+	db := fixtureDB(t, path)
+
+	v4Schema := `
+CREATE TABLE mappings (
+	provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+	target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+	edition_id INTEGER NOT NULL CHECK(edition_id >= 0), source_title TEXT NOT NULL, source_isbn TEXT NOT NULL,
+	PRIMARY KEY(provider, source_account, book_id, target_account));
+CREATE TABLE decisions (
+	provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+	target_account TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('skip','exclude','not-in-catalog')),
+	PRIMARY KEY(provider, source_account, book_id, target_account));
+CREATE TABLE account_fingerprints (
+	provider TEXT NOT NULL, account TEXT NOT NULL,
+	fingerprint TEXT NOT NULL, created_at TEXT NOT NULL,
+	last_verified_at TEXT NOT NULL,
+	PRIMARY KEY(provider, account));
+CREATE TABLE status_baselines (
+	provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+	target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+	edition_id INTEGER NOT NULL CHECK(edition_id >= 0),
+	source_status_id INTEGER NOT NULL CHECK(source_status_id >= 1 AND source_status_id <= 5),
+	target_status_id INTEGER NOT NULL CHECK(target_status_id >= 1 AND target_status_id <= 5),
+	policy_version TEXT NOT NULL, source_fingerprint TEXT NOT NULL,
+	target_fingerprint TEXT NOT NULL, last_synced_at TEXT NOT NULL,
+	PRIMARY KEY(provider, source_account, book_id, target_account));
+CREATE TABLE target_authorities (
+	target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+	authorized_provider TEXT NOT NULL, authorized_account TEXT NOT NULL,
+	authorized_book_id TEXT NOT NULL, policy_version TEXT NOT NULL,
+	privacy_mode TEXT NOT NULL CHECK(privacy_mode IN ('default', 'private-target', 'exclude')),
+	created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+	PRIMARY KEY(target_account, work_id));
+PRAGMA user_version = 4;
+`
+	if _, err := db.Exec(v4Schema); err != nil {
+		t.Fatal(err)
+	}
+
+	mapping := testMapping()
+	if _, err := db.Exec(`INSERT INTO mappings VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		mapping.Provider, mapping.SourceAccount, mapping.BookID, mapping.TargetAccount,
+		mapping.WorkID, mapping.EditionID, mapping.SourceTitle, mapping.SourceISBN); err != nil {
+		t.Fatal(err)
+	}
+
+	nowStr := "2026-10-27T12:00:00Z"
+	if _, err := db.Exec(`INSERT INTO status_baselines VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		mapping.Provider, mapping.SourceAccount, mapping.BookID, mapping.TargetAccount,
+		mapping.WorkID, mapping.EditionID, 2, 2, "v1", "weread:10001", "hardcover:20002", nowStr); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	ctx := context.Background()
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("failed to open store from v4: %v", err)
+	}
+	defer s.Close()
+
+	if schemaVersion(t, s.db) != 5 {
+		t.Fatalf("expected version 5, got %d", schemaVersion(t, s.db))
+	}
+
+	// Verify v4 baseline is preserved
+	baseline, err := s.GetStatusBaseline(ctx, mapping.Provider, mapping.SourceAccount, mapping.BookID, mapping.TargetAccount)
+	if err != nil || baseline == nil || baseline.WorkID != mapping.WorkID {
+		t.Fatalf("baseline preservation failed: got %+v, err %v", baseline, err)
+	}
+
+	// Verify v5 sync intents and receipts work
+	t0 := time.Date(2026, 10, 27, 13, 0, 0, 0, time.UTC)
+	intent := SyncIntent{
+		Provider:          mapping.Provider,
+		SourceAccount:     mapping.SourceAccount,
+		BookID:            mapping.BookID,
+		TargetAccount:     mapping.TargetAccount,
+		WorkID:            mapping.WorkID,
+		EditionID:         mapping.EditionID,
+		ProposedStatusID:  HardcoverStatusRead,
+		PolicyVersion:     "v1",
+		SourceFingerprint: "weread:10001",
+		TargetFingerprint: "hardcover:20002",
+		State:             "pending",
+		CreatedAt:         t0,
+		UpdatedAt:         t0,
+	}
+	intentID, err := s.RecordIntent(ctx, intent)
+	if err != nil || intentID <= 0 {
+		t.Fatalf("record intent failed: id=%d, err=%v", intentID, err)
+	}
+
+	active, err := s.GetActiveIntent(ctx, mapping.Provider, mapping.SourceAccount, mapping.BookID, mapping.TargetAccount)
+	if err != nil || active == nil || active.ID != intentID || active.State != "pending" {
+		t.Fatalf("get active intent failed: got %+v, err %v", active, err)
+	}
+
+	if err := s.UpdateIntentState(ctx, intentID, "applied", "", t0); err != nil {
+		t.Fatalf("update intent state failed: %v", err)
+	}
+
+	receipt := SyncReceipt{
+		IntentID:       intentID,
+		Provider:       mapping.Provider,
+		SourceAccount:  mapping.SourceAccount,
+		BookID:         mapping.BookID,
+		TargetAccount:  mapping.TargetAccount,
+		WorkID:         mapping.WorkID,
+		EditionID:      mapping.EditionID,
+		TargetStatusID: HardcoverStatusRead,
+		AppliedAt:      t0,
+	}
+	receiptID, err := s.RecordReceipt(ctx, receipt)
+	if err != nil || receiptID <= 0 {
+		t.Fatalf("record receipt failed: id=%d, err=%v", receiptID, err)
+	}
+
+	latestReceipt, err := s.GetLatestReceipt(ctx, mapping.Provider, mapping.SourceAccount, mapping.BookID, mapping.TargetAccount)
+	if err != nil || latestReceipt == nil || latestReceipt.ID != receiptID {
+		t.Fatalf("get latest receipt failed: got %+v, err %v", latestReceipt, err)
 	}
 }
