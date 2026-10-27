@@ -92,3 +92,60 @@ func TestHTTPRejectsRedirectsErrorsAndOversizedBodies(t *testing.T) {
 		t.Fatal("cancellation ignored")
 	}
 }
+
+func TestWeReadResolveAccountFingerprint(t *testing.T) {
+	t.Run("resolves userVid from reviews", func(t *testing.T) {
+		w := &WeRead{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			if body["api_name"] != "/review/list/mine" {
+				t.Errorf("unexpected api_name: %v", body["api_name"])
+			}
+			io.WriteString(rw, `{"errcode":0,"reviews":[{"review":{"userVid":12345678,"content":"notes"}}]}`)
+		})}
+		fp, err := w.ResolveAccountFingerprint(context.Background(), "")
+		if err != nil || fp != "weread:12345678" {
+			t.Fatalf("unexpected fingerprint: got %q, err: %v", fp, err)
+		}
+	})
+
+	t.Run("resolves author userVid from reviews string", func(t *testing.T) {
+		w := &WeRead{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
+			io.WriteString(rw, `{"errcode":0,"reviews":[{"review":{"author":{"userVid":"87654321"}}}]}`)
+		})}
+		fp, err := w.ResolveAccountFingerprint(context.Background(), "")
+		if err != nil || fp != "weread:87654321" {
+			t.Fatalf("unexpected fingerprint: got %q, err: %v", fp, err)
+		}
+	})
+
+	t.Run("resolves valid declared vid when zero reviews exist", func(t *testing.T) {
+		w := &WeRead{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
+			io.WriteString(rw, `{"errcode":0,"reviews":[]}`)
+		})}
+		fp, err := w.ResolveAccountFingerprint(context.Background(), "99887766")
+		if err != nil || fp != "weread:99887766" {
+			t.Fatalf("unexpected fingerprint: got %q, err: %v", fp, err)
+		}
+	})
+
+	t.Run("fails closed when zero reviews and no declared vid", func(t *testing.T) {
+		w := &WeRead{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
+			io.WriteString(rw, `{"errcode":0,"reviews":[]}`)
+		})}
+		if _, err := w.ResolveAccountFingerprint(context.Background(), ""); err == nil {
+			t.Fatal("expected error on empty reviews without declared vid")
+		}
+	})
+
+	t.Run("fails closed when zero reviews and invalid declared vid", func(t *testing.T) {
+		w := &WeRead{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
+			io.WriteString(rw, `{"errcode":0,"reviews":[]}`)
+		})}
+		for _, bad := range []string{"abc", "12-34", " ", string(make([]byte, 33))} {
+			if _, err := w.ResolveAccountFingerprint(context.Background(), bad); err == nil {
+				t.Fatalf("expected error for invalid declared vid %q", bad)
+			}
+		}
+	})
+}

@@ -248,3 +248,21 @@ func (h *Hardcover) ValidateLink(ctx context.Context, workID, editionID int64) e
 	}
 	return nil
 }
+
+// ResolveAccountFingerprint queries the authenticated Hardcover user and returns its stable identity fingerprint.
+func (h *Hardcover) ResolveAccountFingerprint(ctx context.Context) (string, error) {
+	var response struct {
+		Me *struct {
+			ID       int64  `json:"id"`
+			Username string `json:"username"`
+		} `json:"me"`
+	}
+	q := `query Me { me { id username } }`
+	if err := h.query(ctx, q, nil, &response); err != nil {
+		return "", err
+	}
+	if response.Me == nil || response.Me.ID <= 0 {
+		return "", fmt.Errorf("Hardcover user identity missing or invalid in query response")
+	}
+	return fmt.Sprintf("hardcover:%d", response.Me.ID), nil
+}

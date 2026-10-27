@@ -115,3 +115,40 @@ type isbnHintSource struct{ Source }
 func (isbnHintSource) Book(context.Context, string) (Book, error) {
 	return Book{ID: "42", Title: "Native title", ISBN: "9780306406157"}, nil
 }
+
+func TestHardcoverResolveAccountFingerprint(t *testing.T) {
+	t.Run("resolves valid user ID", func(t *testing.T) {
+		h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Query string `json:"query"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			if !strings.Contains(body.Query, "query Me") {
+				t.Errorf("unexpected query: %s", body.Query)
+			}
+			io.WriteString(rw, `{"data":{"me":{"id":4242,"username":"reader"}}}`)
+		})}
+		fp, err := h.ResolveAccountFingerprint(context.Background())
+		if err != nil || fp != "hardcover:4242" {
+			t.Fatalf("fingerprint resolution: got %q, err: %v", fp, err)
+		}
+	})
+
+	t.Run("rejects missing user ID", func(t *testing.T) {
+		h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
+			io.WriteString(rw, `{"data":{"me":null}}`)
+		})}
+		if _, err := h.ResolveAccountFingerprint(context.Background()); err == nil {
+			t.Fatal("expected error on null me response")
+		}
+	})
+
+	t.Run("rejects zero or negative user ID", func(t *testing.T) {
+		h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
+			io.WriteString(rw, `{"data":{"me":{"id":0,"username":"reader"}}}`)
+		})}
+		if _, err := h.ResolveAccountFingerprint(context.Background()); err == nil {
+			t.Fatal("expected error on zero user ID")
+		}
+	})
+}
