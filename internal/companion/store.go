@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/azusachino/drifter/internal/catalog"
@@ -151,7 +152,7 @@ func openStore(path string, readOnly bool, owner *DatabaseOwnership) (*Store, er
 	return &Store{db: db, path: path, owner: owner, readOnly: readOnly}, nil
 }
 
-const storeVersion = 3
+const storeVersion = 4
 
 func validateStoreSchema(db *sql.DB) error {
 	var version int
@@ -177,6 +178,20 @@ func validateStoreSchema(db *sql.DB) error {
 		return err
 	}
 	rows, err = db.Query(`SELECT provider,account,fingerprint,created_at,last_verified_at FROM account_fingerprints LIMIT 0`)
+	if err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	rows, err = db.Query(`SELECT provider,source_account,book_id,target_account,work_id,edition_id,source_status_id,target_status_id,policy_version,source_fingerprint,target_fingerprint,last_synced_at FROM status_baselines LIMIT 0`)
+	if err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	rows, err = db.Query(`SELECT target_account,work_id,authorized_provider,authorized_account,authorized_book_id,policy_version,privacy_mode,created_at,updated_at FROM target_authorities LIMIT 0`)
 	if err != nil {
 		return err
 	}
@@ -243,6 +258,32 @@ func migrateStore(db *sql.DB) error {
 			return err
 		}
 		version = 3
+	}
+	if version == 3 {
+		if _, err := tx.Exec(`CREATE TABLE status_baselines (
+			provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+			target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+			edition_id INTEGER NOT NULL CHECK(edition_id >= 0),
+			source_status_id INTEGER NOT NULL CHECK(source_status_id >= 1 AND source_status_id <= 5),
+			target_status_id INTEGER NOT NULL CHECK(target_status_id >= 1 AND target_status_id <= 5),
+			policy_version TEXT NOT NULL, source_fingerprint TEXT NOT NULL,
+			target_fingerprint TEXT NOT NULL, last_synced_at TEXT NOT NULL,
+			PRIMARY KEY(provider, source_account, book_id, target_account))`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`CREATE TABLE target_authorities (
+			target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+			authorized_provider TEXT NOT NULL, authorized_account TEXT NOT NULL,
+			authorized_book_id TEXT NOT NULL, policy_version TEXT NOT NULL,
+			privacy_mode TEXT NOT NULL CHECK(privacy_mode IN ('default', 'private-target', 'exclude')),
+			created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+			PRIMARY KEY(target_account, work_id))`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 4"); err != nil {
+			return err
+		}
+		version = 4
 	}
 	return tx.Commit()
 }
@@ -406,5 +447,153 @@ func (s *Store) Unlink(ctx context.Context, provider, sourceAccount, bookID, tar
 	}
 	defer release()
 	_, err = s.db.ExecContext(ctx, `DELETE FROM mappings WHERE provider=? AND source_account=? AND book_id=? AND target_account=?`, provider, sourceAccount, bookID, targetAccount)
+	return err
+}
+
+// GetMapping retrieves a confirmed mapping by key, returning nil, nil if none exists.
+func (s *Store) GetMapping(ctx context.Context, provider, sourceAccount, bookID, targetAccount string) (*Mapping, error) {
+	if !ValidLabel(provider) || !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) || !ValidBookID(bookID) {
+		return nil, ErrInvalidMappingKey
+	}
+	var m Mapping
+	err := s.db.QueryRowContext(ctx, `SELECT provider,source_account,book_id,target_account,work_id,edition_id,source_title,source_isbn
+		FROM mappings WHERE provider=? AND source_account=? AND book_id=? AND target_account=?`,
+		provider, sourceAccount, bookID, targetAccount).
+		Scan(&m.Provider, &m.SourceAccount, &m.BookID, &m.TargetAccount, &m.WorkID, &m.EditionID, &m.SourceTitle, &m.SourceISBN)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// ListMappingsForTarget returns all mappings in targetAccount that point to workID.
+func (s *Store) ListMappingsForTarget(ctx context.Context, targetAccount string, workID int64) ([]Mapping, error) {
+	if !ValidLabel(targetAccount) || workID <= 0 {
+		return nil, ErrInvalidMappingKey
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT provider,source_account,book_id,target_account,work_id,edition_id,source_title,source_isbn
+		FROM mappings WHERE target_account=? AND work_id=? ORDER BY provider,source_account,book_id`, targetAccount, workID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []Mapping{}
+	for rows.Next() {
+		var m Mapping
+		if err := rows.Scan(&m.Provider, &m.SourceAccount, &m.BookID, &m.TargetAccount, &m.WorkID, &m.EditionID, &m.SourceTitle, &m.SourceISBN); err != nil {
+			return nil, err
+		}
+		result = append(result, m)
+	}
+	return result, rows.Err()
+}
+
+// GetStatusBaseline retrieves the accepted baseline for a book mapping, returning nil, nil if none exists.
+func (s *Store) GetStatusBaseline(ctx context.Context, provider, sourceAccount, bookID, targetAccount string) (*StatusBaseline, error) {
+	if !ValidLabel(provider) || !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) || !ValidBookID(bookID) {
+		return nil, ErrInvalidMappingKey
+	}
+	var b StatusBaseline
+	var syncedAtStr string
+	err := s.db.QueryRowContext(ctx, `SELECT provider,source_account,book_id,target_account,work_id,edition_id,
+		source_status_id,target_status_id,policy_version,source_fingerprint,target_fingerprint,last_synced_at
+		FROM status_baselines WHERE provider=? AND source_account=? AND book_id=? AND target_account=?`,
+		provider, sourceAccount, bookID, targetAccount).
+		Scan(&b.Provider, &b.SourceAccount, &b.BookID, &b.TargetAccount, &b.WorkID, &b.EditionID,
+			&b.SourceStatusID, &b.TargetStatusID, &b.PolicyVersion, &b.SourceFingerprint, &b.TargetFingerprint, &syncedAtStr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	t, err := time.Parse(time.RFC3339, syncedAtStr)
+	if err != nil {
+		return nil, fmt.Errorf("corrupt timestamp in status_baselines: %w", err)
+	}
+	b.LastSyncedAt = t
+	return &b, nil
+}
+
+// SaveStatusBaseline writes or updates the accepted baseline for a book mapping.
+func (s *Store) SaveStatusBaseline(ctx context.Context, b StatusBaseline) error {
+	if !b.valid() {
+		return fmt.Errorf("invalid status baseline")
+	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return err
+	}
+	defer release()
+	syncedAtStr := b.LastSyncedAt.UTC().Format(time.RFC3339)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO status_baselines (provider, source_account, book_id, target_account,
+		work_id, edition_id, source_status_id, target_status_id, policy_version, source_fingerprint, target_fingerprint, last_synced_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(provider, source_account, book_id, target_account) DO UPDATE SET
+		work_id=excluded.work_id, edition_id=excluded.edition_id,
+		source_status_id=excluded.source_status_id, target_status_id=excluded.target_status_id,
+		policy_version=excluded.policy_version, source_fingerprint=excluded.source_fingerprint,
+		target_fingerprint=excluded.target_fingerprint, last_synced_at=excluded.last_synced_at`,
+		b.Provider, b.SourceAccount, b.BookID, b.TargetAccount,
+		b.WorkID, b.EditionID, b.SourceStatusID, b.TargetStatusID,
+		b.PolicyVersion, b.SourceFingerprint, b.TargetFingerprint, syncedAtStr)
+	return err
+}
+
+// GetTargetAuthority returns the status write authority for a target work, returning nil, nil if none is set.
+func (s *Store) GetTargetAuthority(ctx context.Context, targetAccount string, workID int64) (*TargetAuthority, error) {
+	if !ValidLabel(targetAccount) || workID <= 0 {
+		return nil, ErrInvalidMappingKey
+	}
+	var a TargetAuthority
+	var createdStr, updatedStr string
+	err := s.db.QueryRowContext(ctx, `SELECT target_account,work_id,authorized_provider,authorized_account,authorized_book_id,
+		policy_version,privacy_mode,created_at,updated_at
+		FROM target_authorities WHERE target_account=? AND work_id=?`, targetAccount, workID).
+		Scan(&a.TargetAccount, &a.WorkID, &a.AuthorizedProvider, &a.AuthorizedAccount, &a.AuthorizedBookID,
+			&a.PolicyVersion, &a.PrivacyMode, &createdStr, &updatedStr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	ct, err := time.Parse(time.RFC3339, createdStr)
+	if err != nil {
+		return nil, fmt.Errorf("corrupt created_at in target_authorities: %w", err)
+	}
+	ut, err := time.Parse(time.RFC3339, updatedStr)
+	if err != nil {
+		return nil, fmt.Errorf("corrupt updated_at in target_authorities: %w", err)
+	}
+	a.CreatedAt = ct
+	a.UpdatedAt = ut
+	return &a, nil
+}
+
+// SetTargetAuthority sets or updates the status write authority for a target work.
+func (s *Store) SetTargetAuthority(ctx context.Context, a TargetAuthority) error {
+	if !a.valid() {
+		return fmt.Errorf("invalid target authority")
+	}
+	release, err := s.writeGuard()
+	if err != nil {
+		return err
+	}
+	defer release()
+	createdStr := a.CreatedAt.UTC().Format(time.RFC3339)
+	updatedStr := a.UpdatedAt.UTC().Format(time.RFC3339)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO target_authorities (target_account, work_id, authorized_provider, authorized_account,
+		authorized_book_id, policy_version, privacy_mode, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(target_account, work_id) DO UPDATE SET
+		authorized_provider=excluded.authorized_provider, authorized_account=excluded.authorized_account,
+		authorized_book_id=excluded.authorized_book_id, policy_version=excluded.policy_version,
+		privacy_mode=excluded.privacy_mode, updated_at=excluded.updated_at`,
+		a.TargetAccount, a.WorkID, a.AuthorizedProvider, a.AuthorizedAccount,
+		a.AuthorizedBookID, a.PolicyVersion, a.PrivacyMode, createdStr, updatedStr)
 	return err
 }

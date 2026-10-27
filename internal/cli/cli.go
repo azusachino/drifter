@@ -20,8 +20,10 @@ type source = companion.Source
 type target = companion.Target
 
 type clients struct {
-	source func() (source, error)
-	target func() (target, error)
+	source        func() (source, error)
+	target        func() (target, error)
+	previewSource func() (companion.PreviewSource, error)
+	previewTarget func() (companion.PreviewTarget, error)
 }
 
 type cliApp struct {
@@ -105,6 +107,7 @@ come only from WEREAD_API_KEY and HARDCOVER_API_KEY in the process environment.`
 		app.unlinkCommand(),
 		app.exportCommand(),
 		app.mergeCommand(),
+		app.previewCommand(),
 		app.serveProbesCommand(),
 	)
 	return root
