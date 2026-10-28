@@ -8,6 +8,7 @@ test('mapping interface confirms, replaces and unlinks explicit mappings', async
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Drifter mapping interface' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'View mappings as JSON' })).toBeVisible();
+  await page.getByText('Link New Book').click();
   await expect(page.getByRole('form', { name: 'Confirm a mapping' })).toBeVisible();
   expect(providerRequests).toEqual([]);
 
@@ -57,6 +58,7 @@ test('native mapping form submits with same-origin Origin and no page script', a
     if (requestEvent.resourceType() === 'script') scriptRequests.push(requestEvent.url());
   });
   await page.goto('/');
+  await page.getByText('Link New Book').click();
   const form = page.getByRole('form', { name: 'Confirm a mapping' });
   await form.getByLabel('Source account').fill('synthetic-source');
   await form.getByLabel('Source book ID').fill('124');
@@ -74,6 +76,7 @@ test('native mapping form submits with same-origin Origin and no page script', a
 
 test('stale browser tabs cannot replace or unlink a changed mapping', async ({ page, context, request }) => {
   await page.goto('/');
+  await page.getByText('Link New Book').click();
   const confirm = page.getByRole('form', { name: 'Confirm a mapping' });
   await confirm.getByLabel('Source account').fill('synthetic-source');
   await confirm.getByLabel('Source book ID').fill('125');
@@ -112,6 +115,7 @@ test('stale browser tabs cannot replace or unlink a changed mapping', async ({ p
 test('mapping interface remains usable at a narrow viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
+  await page.getByText('Link New Book').click();
   await expect(page.getByRole('button', { name: 'Confirm mapping' })).toBeVisible();
   const width = await page.locator('html').evaluate((element) => element.scrollWidth);
   expect(width).toBe(390);
