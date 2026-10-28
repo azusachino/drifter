@@ -368,6 +368,22 @@ func EvaluateStatus(p StatusEvaluationParams) SyncProposal {
 			return prop
 		}
 		if p.TargetStatus.StatusID == proposedStatusID {
+			if proposedStatusID == HardcoverStatusRead && lastReadDate != nil && *lastReadDate != "" {
+				targetDate := ""
+				if len(p.TargetStatus.UserBookReads) > 0 {
+					latest := p.TargetStatus.UserBookReads[len(p.TargetStatus.UserBookReads)-1]
+					if latest.FinishedAt != nil {
+						targetDate = *latest.FinishedAt
+					}
+				}
+				if targetDate != *lastReadDate && (targetDate == "" || p.AdoptSource) {
+					prop.Action = ActionUpdate
+					prop.Reason = ReasonSourceAdvanced
+					prop.Message = fmt.Sprintf("target status matches Read (%d) but reading date %q differs from source %q; updating target read date",
+						proposedStatusID, targetDate, *lastReadDate)
+					return prop
+				}
+			}
 			prop.Action = ActionNoOp
 			prop.Reason = ReasonAlreadyMatching
 			prop.Message = fmt.Sprintf("target record already has status %s (%d); zero mutations required", prop.CurrentStatus, proposedStatusID)
@@ -403,6 +419,21 @@ func EvaluateStatus(p StatusEvaluationParams) SyncProposal {
 
 	switch {
 	case !sourceChanged && !targetChanged:
+		if proposedStatusID == HardcoverStatusRead && lastReadDate != nil && *lastReadDate != "" && p.AdoptSource {
+			targetDate := ""
+			if len(p.TargetStatus.UserBookReads) > 0 {
+				latest := p.TargetStatus.UserBookReads[len(p.TargetStatus.UserBookReads)-1]
+				if latest.FinishedAt != nil {
+					targetDate = *latest.FinishedAt
+				}
+			}
+			if targetDate != *lastReadDate {
+				prop.Action = ActionUpdate
+				prop.Reason = ReasonSourceAdvanced
+				prop.Message = fmt.Sprintf("adopt-source approved: updating target read date from %q to source %q", targetDate, *lastReadDate)
+				return prop
+			}
+		}
 		prop.Action = ActionNoOp
 		prop.Reason = ReasonUnchangedSinceBaseline
 		prop.Message = fmt.Sprintf("both source and target are unchanged from accepted baseline status %s (%d)", prop.CurrentStatus, proposedStatusID)
