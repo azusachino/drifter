@@ -15,6 +15,7 @@ type ReconcileOptions struct {
 	PolicyVersion     string
 	AllowPrivateSync  bool
 	DeclaredSourceVID string
+	AdoptSource       bool
 	DryRun            bool
 	Now               time.Time
 }
@@ -113,6 +114,7 @@ func ReconcileAccount(
 			proposal, err := PreviewSync(ctx, store, source, target, m.Provider, m.SourceAccount, m.BookID, m.TargetAccount, PreviewSyncOptions{
 				PolicyVersion:    opts.PolicyVersion,
 				AllowPrivateSync: opts.AllowPrivateSync,
+				AdoptSource:      opts.AdoptSource,
 				Now:              startedAt,
 			})
 			if err != nil {
@@ -177,6 +179,7 @@ func ReconcileAccount(
 			PolicyVersion:     opts.PolicyVersion,
 			AllowPrivateSync:  opts.AllowPrivateSync,
 			DeclaredSourceVID: opts.DeclaredSourceVID,
+			AdoptSource:       opts.AdoptSource,
 			Now:               startedAt,
 		})
 		if err != nil {

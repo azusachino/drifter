@@ -18,6 +18,7 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 		policyVersion string
 		sourceVID     string
 		allowPrivate  bool
+		adoptSource   bool
 		dryRun        bool
 	)
 
@@ -36,6 +37,7 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 	flags.StringVar(&policyVersion, "policy-version", companion.DefaultPolicyVersion, "policy version for three-way evaluation")
 	flags.StringVar(&sourceVID, "source-vid", os.Getenv("WEREAD_VID"), "declared source user VID for account fingerprint binding")
 	flags.BoolVar(&allowPrivate, "allow-private", false, "allow synchronizing private reading status")
+	flags.BoolVar(&adoptSource, "adopt-source", false, "adopt source reading progress advance or read date updates on target")
 	flags.BoolVar(&dryRun, "dry-run", false, "preview reconciliation without mutating target")
 
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
@@ -85,6 +87,7 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 				PolicyVersion:     policyVersion,
 				AllowPrivateSync:  allowPrivate,
 				DeclaredSourceVID: sourceVID,
+				AdoptSource:       adoptSource,
 				DryRun:            dryRun,
 				Now:               time.Now().UTC(),
 			},
