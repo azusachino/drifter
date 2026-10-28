@@ -719,7 +719,7 @@ button.danger:hover {
     <a class="pill-link" href="/api/status">Status JSON</a>
     <a class="pill-link" href="/api/runs">Runs JSON</a>
     <a class="pill-link" href="/api/holds">Holds JSON</a>
-    <a class="pill-link" href="/api/export?account=default&target_account=default">Export State JSON</a>
+    <a class="pill-link" href="/api/export">Export State JSON</a>
   </nav>
 </header>
 
@@ -860,13 +860,12 @@ button.danger:hover {
       <div class="panel-body">
         <form class="styled-form" aria-label="Confirm a mapping" action="/mappings/confirm" method="post">
           <input type="hidden" name="csrf_token" value="{{.Token}}">
+          <input type="hidden" name="source_account" value="default">
+          <input type="hidden" name="target_account" value="default">
+
           <div class="form-grid">
-            <label>Source account <input name="source_account" value="default" required maxlength="64"></label>
-            <label>Source book ID <input name="book_id" required inputmode="numeric" placeholder="e.g. 123456"></label>
-          </div>
-          <div class="form-grid">
-            <label>Target account <input name="target_account" value="default" required maxlength="64"></label>
-            <label>Target work ID <input name="work_id" type="number" min="1" required placeholder="e.g. 77"></label>
+            <label>Source book ID (WeRead) <input name="book_id" required inputmode="numeric" placeholder="e.g. 23697420"></label>
+            <label>Target work ID (Hardcover) <input name="work_id" type="number" min="1" required placeholder="e.g. 202612"></label>
           </div>
           
           <fieldset>
@@ -878,7 +877,7 @@ button.danger:hover {
           <label>Edition ID (required for a specific edition) <input name="edition_id" type="number" min="1" placeholder="Optional unless specific edition"></label>
 
           <button type="submit" class="primary">Confirm mapping</button>
-          <p class="note">Pair a WeRead book with a Hardcover work/edition. Drifter verifies that both records exist before saving.</p>
+          <p class="note">Pair a WeRead book with a Hardcover work or edition. Drifter verifies that both records exist before saving.</p>
         </form>
       </div>
     </section>
@@ -894,10 +893,8 @@ button.danger:hover {
       </div>
       <div class="panel-body">
         <form class="styled-form" aria-label="Pending worklist" action="/api/pending" method="get">
-          <div class="form-grid">
-            <label>Source account <input name="account" value="default" required maxlength="64"></label>
-            <label>Target account <input name="target_account" value="default" required maxlength="64"></label>
-          </div>
+          <input type="hidden" name="account" value="default">
+          <input type="hidden" name="target_account" value="default">
           <label>Lookback window (Days) <input name="days" type="number" min="1" max="36500" value="90"></label>
           <button class="secondary" type="submit">Request pending books</button>
           <p class="note">Scans your WeRead shelf for recently opened books that have not been linked to Hardcover yet.</p>

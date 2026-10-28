@@ -13,9 +13,7 @@ test('mapping interface confirms, replaces and unlinks explicit mappings', async
   expect(providerRequests).toEqual([]);
 
   const confirm = page.getByRole('form', { name: 'Confirm a mapping' });
-  await confirm.getByLabel('Source account').fill('synthetic-source');
   await confirm.getByLabel('Source book ID').fill('123');
-  await confirm.getByLabel('Target account').fill('synthetic-target');
   await confirm.getByLabel('Target work ID').fill('77');
   await confirm.getByRole('radio', { name: 'Work only' }).check();
   await confirm.getByRole('button', { name: 'Confirm mapping' }).click();
@@ -60,9 +58,7 @@ test('native mapping form submits with same-origin Origin and no page script', a
   await page.goto('/');
   await page.getByText('Link New Book').click();
   const form = page.getByRole('form', { name: 'Confirm a mapping' });
-  await form.getByLabel('Source account').fill('synthetic-source');
   await form.getByLabel('Source book ID').fill('124');
-  await form.getByLabel('Target account').fill('synthetic-target');
   await form.getByLabel('Target work ID').fill('78');
   await form.getByRole('radio', { name: 'Work only' }).check();
   const [response] = await Promise.all([
@@ -78,9 +74,7 @@ test('stale browser tabs cannot replace or unlink a changed mapping', async ({ p
   await page.goto('/');
   await page.getByText('Link New Book').click();
   const confirm = page.getByRole('form', { name: 'Confirm a mapping' });
-  await confirm.getByLabel('Source account').fill('synthetic-source');
   await confirm.getByLabel('Source book ID').fill('125');
-  await confirm.getByLabel('Target account').fill('synthetic-target');
   await confirm.getByLabel('Target work ID').fill('77');
   await confirm.getByRole('radio', { name: 'Work only' }).check();
   await confirm.getByRole('button', { name: 'Confirm mapping' }).click();
