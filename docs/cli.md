@@ -82,6 +82,7 @@ addr = "127.0.0.1:8080"  # standalone read-only health endpoint
 
 [server]
 addr = "127.0.0.1:8081"  # local HTTP server; loopback by default
+allowed_hosts = ["localhost:8081"]  # optional additional host header allowlist
 
 [database]
 # path = "/var/lib/drifter/mappings.sqlite"  # optional absolute override
@@ -109,7 +110,7 @@ The separate `drifter-server` executable owns the foreground HTTP process;
 `drifter` does not contain a `serve` command. Synchronization is not implemented:
 
 ```sh
-bin/drifter-server --config config.toml [--db PATH]
+bin/drifter-server --config config.toml [--db PATH] [-allowed-hosts HOST1,HOST2]
 ```
 
 The server uses `server.addr` (default `127.0.0.1:8081`), provides the same
@@ -401,6 +402,8 @@ target account does not hide a book.
 
 The default window is 90 elapsed 24-hour days, with an inclusive cutoff and
 newest-first ordering (book ID breaks ties). Use `--days N` from 1 through 36500.
+Supply `--year YYYY` to bound the worklist to a single calendar year, and
+`--finished` to filter only completed books for historical backlog intake.
 Books with no opening activity are omitted; missing, negative or future activity
 is reported as an issue, not guessed. Private books are excluded **before**
 metadata lookup or output unless `--include-private` is supplied. Missing or
@@ -414,9 +417,11 @@ remain unsupported by `match` and `link`; this flag is inspection, not matching
 approval. JSON containing opted-in private metadata must be protected by you.
 
 Output has `books`, `complete` and privacy-safe `issues` (book IDs and fixed
-codes, never provider error bodies). Shelf count mismatch/missing count or a
-more-results flag prevents claiming completeness. Eligible metadata lookups are
-capped at 100 attempted books per invocation. When more eligible rows remain,
+codes, never provider error bodies). Shelf count mismatch or an explicit
+more-results flag prevents claiming completeness (omitted `bookCount` in live
+WeRead responses is accepted as complete when books are returned). Eligible
+metadata lookups are capped at 100 attempted books per invocation. When more
+eligible rows remain,
 JSON includes `next_cursor`; continue with `pending --after CURSOR` or HTTP
 `after=CURSOR`, keeping account labels, window and inclusion flags unchanged.
 Cursors bind those settings and the original scan time; treat them as private
@@ -461,6 +466,22 @@ Use separate labels for distinct accounts; never reuse a label after switching
 credentials. Before any future remote writing, stable account identity and
 explicit source authority must be verified. A confirmed identity mapping does
 not itself authorize status synchronization.
+
+## Continuous reconciliation
+
+Synchronize confirmed reading statuses across accounts with three-way evaluation:
+
+```sh
+bin/drifter reconcile --account my-weread --target-account my-hardcover \
+  [--adopt-source] [--dry-run]
+```
+
+`reconcile` inspects source reading progress, completion status, and read dates
+across all local mappings for the account pair. When target state is missing or
+source progress advances, Drifter applies updates and backdates completed read
+dates to Hardcover. Supply `--adopt-source` to automatically adopt advanced
+source progress or completed read dates without holding on differing target
+activity. Use `--dry-run` to preview proposed actions without remote writes.
 
 ## Local state and privacy
 

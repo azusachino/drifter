@@ -48,6 +48,35 @@ not evidence that macOS can reach the loopback listener. On Linux, test access
 from the Linux host. Compose sends SIGTERM and allows 30 seconds for graceful
 shutdown. Stop with Ctrl-C or `podman compose down` / `docker compose down`.
 
+## Host allowlisting and tailnet preview
+
+By default, the server enforces strict loopback Host header checks (`127.0.0.1`
+and `localhost`). When serving behind a private Tailscale node or local reverse
+proxy, pass explicit allowed hosts:
+
+```sh
+bin/drifter-server -allowed-hosts 'harus-macmini.talpidae-beta.ts.net:9441'
+```
+
+Or configure `allowed_hosts` in `config.toml`:
+
+```toml
+[server]
+addr = "127.0.0.1:8081"
+allowed_hosts = ["harus-macmini.talpidae-beta.ts.net:9441"]
+```
+
+## Mapping interface
+
+The web interface at `/` is a zero-script, server-rendered admin dashboard
+structured with CSS-only navigation tabs:
+
+- **Mappings**: view confirmed links with proportional layout and unlinking.
+- **Pending worklist**: review recently opened WeRead books and inspect candidates.
+- **Confirm a mapping**: manually link a WeRead book ID to a target work/edition.
+- **Export**: download the current mapping state as JSON (`/api/export`).
+- **Sync**: inspect recent reconciliation runs, baselines, and active holds.
+
 ## Rootless runtime verification
 
 Verified with Podman 5.8.7 on the macOS-hosted Linux/arm64 VM (`rootless=true`,
