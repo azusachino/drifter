@@ -203,9 +203,10 @@ h1 {
 }
 
 .nav-tab-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 0.45rem;
   padding: 0.75rem 0.25rem 0.85rem;
   font-size: 0.92rem;
   font-weight: 500;
@@ -215,6 +216,7 @@ h1 {
   cursor: pointer;
   user-select: none;
   transition: all 0.15s ease;
+  white-space: nowrap;
 }
 
 .nav-tab-item:hover {
@@ -225,11 +227,14 @@ h1 {
 .tab-badge {
   font-size: 0.72rem;
   font-weight: 600;
-  padding: 0.1rem 0.5rem;
+  padding: 0.1rem 0.45rem;
   border-radius: var(--radius-pill);
   background: var(--bg-surface-elevated);
   color: var(--text-muted);
   border: 1px solid var(--border);
+  line-height: 1.2;
+  display: inline-flex;
+  align-items: center;
 }
 
 /* Active tab highlight */
@@ -364,13 +369,22 @@ h1 {
 .target-badge {
   display: inline-flex;
   align-items: center;
+  gap: 0.35rem;
   font-size: 0.78rem;
-  font-weight: 600;
-  padding: 0.2rem 0.55rem;
+  padding: 0.25rem 0.6rem;
   border-radius: var(--radius-sm);
   background: var(--teal-surface);
   color: var(--teal-text);
   border: 1px solid var(--teal-border);
+}
+
+.target-work-id {
+  font-weight: 700;
+}
+
+.target-edition-desc {
+  font-weight: 500;
+  opacity: 0.9;
 }
 
 /* Compact Actions */
@@ -519,7 +533,7 @@ h1 {
   gap: 0.75rem;
 }
 
-label {
+.styled-form label {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -758,7 +772,11 @@ button.danger:hover {
               </div>
             </td>
             <td class="col-target">
-              <span class="target-badge">work {{.WorkID}}{{if .EditionID}}, edition {{.EditionID}}{{else}}, work only{{end}}</span>
+              <span class="target-badge">
+                <span class="target-work-id">Work #{{.WorkID}}</span>
+                <span class="target-edition-desc">{{if .EditionID}}&middot; Edition #{{.EditionID}}{{else}}&middot; All Editions{{end}}</span>
+                <span class="sr-suffix">work {{.WorkID}}{{if .EditionID}}, edition {{.EditionID}}{{else}}, work only{{end}}</span>
+              </span>
             </td>
             <td class="col-actions actions-cell">
               <div class="actions-wrap">
