@@ -43,6 +43,7 @@ func TestMatchExpectedAuthorStablePartition(t *testing.T) {
 	}{
 		{"explicit author", "\u2003émilie  du\tchâtelet\u00a0", []int64{2, 4, 1, 3, 5, 6, 7, 8}},
 		{"Unicode case folding", "ς", []int64{8, 1, 2, 3, 4, 5, 6, 7}},
+		{"nationality prefix stripped", "[美] émilie du châtelet", []int64{2, 4, 1, 3, 5, 6, 7, 8}},
 		{"absent author", "", []int64{1, 2, 3, 4, 5, 6, 7, 8}},
 		{"whitespace author", " \t\u2003", []int64{1, 2, 3, 4, 5, 6, 7, 8}},
 		{"wrong author", "Nobody", []int64{1, 2, 3, 4, 5, 6, 7, 8}},

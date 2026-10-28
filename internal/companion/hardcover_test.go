@@ -32,6 +32,24 @@ func TestHardcoverMatchRequiresConfirmation(t *testing.T) {
 	}
 }
 
+func TestCleanSearchTitle(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"克拉拉与太阳（彩虹版石黑一雄作品）", "克拉拉与太阳"},
+		{"长安的荔枝（同名影视原著）", "长安的荔枝"},
+		{"生命的礼物 (关于爱)", "生命的礼物"},
+		{"Normal Book Title", "Normal Book Title"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := cleanSearchTitle(tc.input); got != tc.want {
+			t.Errorf("cleanSearchTitle(%q) = %q; want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestDuplicateISBNIsAmbiguous(t *testing.T) {
 	h := testHardcover(t, func(rw http.ResponseWriter, _ *http.Request) {
 		io.WriteString(rw, `{"data":{"editions":[{"id":1,"book_id":2},{"id":3,"book_id":4}]}}`)

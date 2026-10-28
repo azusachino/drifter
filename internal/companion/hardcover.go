@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -138,6 +139,46 @@ type MatchReport struct {
 	CatalogIssues        []catalog.Issue    `json:"catalog_issues,omitempty"`
 }
 
+var titleParenthesesRegex = regexp.MustCompile(`\s*[(（][^()（）]+[)）]\s*$`)
+
+func cleanSearchTitle(title string) string {
+	cleaned := strings.TrimSpace(title)
+	for {
+		stripped := titleParenthesesRegex.ReplaceAllString(cleaned, "")
+		stripped = strings.TrimSpace(stripped)
+		if stripped == cleaned || stripped == "" {
+			break
+		}
+		cleaned = stripped
+	}
+	return cleaned
+}
+
+func (h *Hardcover) searchIDs(ctx context.Context, term string) ([]int64, error) {
+	var response struct {
+		Search *struct {
+			IDs   []int64 `json:"ids"`
+			Error *string `json:"error"`
+		} `json:"search"`
+	}
+	if err := h.query(ctx, `query Search($term: String!) { search(query: $term, query_type: "Book", per_page: 10, page: 1) {ids error} }`, map[string]any{"term": term}, &response); err != nil {
+		return nil, err
+	}
+	if response.Search == nil || (response.Search.Error != nil && *response.Search.Error != "") {
+		return nil, fmt.Errorf("Hardcover search failed")
+	}
+	ids := response.Search.IDs
+	if len(ids) > 10 {
+		return nil, fmt.Errorf("Hardcover search exceeded requested limit")
+	}
+	for _, id := range ids {
+		if id <= 0 {
+			return nil, fmt.Errorf("Hardcover returned invalid work identity")
+		}
+	}
+	return ids, nil
+}
+
 func (h *Hardcover) Match(ctx context.Context, book Book, search string) (MatchReport, error) {
 	report := MatchReport{Book: book, ISBNState: "missing", Resolution: "unresolved", ExactEditions: []Edition{}, Candidates: []Candidate{}, SearchLimit: 10, RequiresConfirmation: true}
 	if book.ISBN != "" {
@@ -178,25 +219,18 @@ func (h *Hardcover) Match(ctx context.Context, book Book, search string) (MatchR
 		return report, fmt.Errorf("search query required (maximum 1024 bytes)")
 	}
 	report.SearchQuery = search
-	var response struct {
-		Search *struct {
-			IDs   []int64 `json:"ids"`
-			Error *string `json:"error"`
-		} `json:"search"`
-	}
-	if err := h.query(ctx, `query Search($term: String!) { search(query: $term, query_type: "Book", per_page: 10, page: 1) {ids error} }`, map[string]any{"term": search}, &response); err != nil {
+
+	ids, err := h.searchIDs(ctx, search)
+	if err != nil {
 		return report, err
 	}
-	if response.Search == nil || (response.Search.Error != nil && *response.Search.Error != "") {
-		return report, fmt.Errorf("Hardcover search failed")
-	}
-	ids := response.Search.IDs
-	if len(ids) > 10 {
-		return report, fmt.Errorf("Hardcover search exceeded requested limit")
-	}
-	for _, id := range ids {
-		if id <= 0 {
-			return report, fmt.Errorf("Hardcover returned invalid work identity")
+	if len(ids) == 0 && search == book.Title {
+		if cleaned := cleanSearchTitle(search); cleaned != "" && cleaned != search {
+			cleanIDs, err := h.searchIDs(ctx, cleaned)
+			if err == nil && len(cleanIDs) > 0 {
+				ids = cleanIDs
+				report.SearchQuery = cleaned
+			}
 		}
 	}
 	if len(ids) == 0 {
