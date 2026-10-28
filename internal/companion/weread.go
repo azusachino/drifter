@@ -109,9 +109,9 @@ func (w *WeRead) Book(ctx context.Context, id string) (Book, error) {
 	if row.ID != id || row.Title == "" {
 		return Book{}, fmt.Errorf("WeRead book identity missing or differs from request")
 	}
-	book := Book{ID: row.ID, Title: row.Title, Author: row.Author, ISBN: row.ISBN, Publisher: row.Publisher, ReaderURL: row.URL}
+	book := Book{ID: row.ID, Title: row.Title, Author: row.Author, ISBN: row.ISBN, Publisher: row.Publisher, ReaderURL: row.URL, TranslatorKnown: true}
 	if row.Translator != nil {
-		book.Translator, book.TranslatorKnown = *row.Translator, true
+		book.Translator = *row.Translator
 	}
 	return book, nil
 }
