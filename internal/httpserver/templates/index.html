@@ -15,8 +15,9 @@
 
   --bg-page: #f6f8fa;
   --bg-surface: #ffffff;
-  --bg-surface-elevated: #f1f5f9;
-  --bg-surface-subtle: #f8fafc;
+  --bg-surface-elevated: #f8fafc;
+  --bg-surface-subtle: #f1f5f9;
+  --bg-hover: #eef2f6;
 
   --text-main: #0f172a;
   --text-muted: #52645e;
@@ -40,14 +41,15 @@
   --danger-text: #991b1b;
 
   --border: #e2e8f0;
+  --border-subtle: #cbd5e1;
   --line: #e2e8f0;
   --border-focus: #1f685f;
 
-  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.05);
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.07), 0 2px 4px -2px rgb(0 0 0 / 0.05);
 
-  --radius-lg: 14px;
-  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-md: 8px;
   --radius-sm: 6px;
   --radius-pill: 9999px;
 }
@@ -56,8 +58,9 @@
   :root {
     --bg-page: #0d1315;
     --bg-surface: #141c1f;
-    --bg-surface-elevated: #1c262a;
+    --bg-surface-elevated: #1a2529;
     --bg-surface-subtle: #11181a;
+    --bg-hover: #223035;
 
     --text-main: #f1f5f9;
     --text-muted: #94a3b8;
@@ -81,6 +84,7 @@
     --danger-text: #fca5a5;
 
     --border: #233137;
+    --border-subtle: #33434a;
     --line: #233137;
     --border-focus: #2dd4bf;
 
@@ -92,7 +96,7 @@
 body {
   margin: 0;
   font-family: var(--font);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.5;
   color: var(--text-main);
   background-color: var(--bg-page);
@@ -100,692 +104,920 @@ body {
 }
 
 main {
-  max-width: 64rem;
-  margin: 2rem auto;
-  padding: 0 1.25rem 4rem;
+  max-width: 68rem;
+  margin: 1.5rem auto;
+  padding: 0 1rem 4rem;
 }
 
-/* Header & Brand */
+/* App Header */
 header.app-header {
   display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-  padding: 1.5rem 1.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.25rem;
 }
 
-@media (min-width: 768px) {
-  header.app-header {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-  }
-}
-
-.brand-wrapper {
+.brand-group {
   display: flex;
   align-items: center;
-  gap: 0.85rem;
+  gap: 0.75rem;
 }
 
 .brand-mark {
-  width: 2.5rem;
-  height: 2.5rem;
+  width: 2rem;
+  height: 2rem;
   flex-shrink: 0;
-  border-radius: var(--radius-sm);
 }
 
 h1 {
-  font-size: 1.35rem;
-  font-weight: 700;
-  letter-spacing: -0.015em;
   margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--text-main);
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
 }
 
-.subtitle {
-  margin: 0.25rem 0 0;
+.header-meta {
   font-size: 0.85rem;
   color: var(--text-muted);
 }
 
-.nav-links {
+.quick-links {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
+  gap: 0.4rem;
 }
 
 .pill-link {
   display: inline-flex;
   align-items: center;
-  padding: 0.35rem 0.75rem;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   font-weight: 500;
-  color: var(--text-muted);
-  background: var(--bg-surface-elevated);
-  border: 1px solid var(--border);
+  padding: 0.25rem 0.6rem;
   border-radius: var(--radius-pill);
+  background: var(--bg-surface-subtle);
+  color: var(--text-muted);
   text-decoration: none;
+  border: 1px solid var(--border);
   transition: all 0.15s ease;
 }
 
 .pill-link:hover {
-  color: var(--teal-text);
   background: var(--teal-surface);
+  color: var(--teal-text);
   border-color: var(--teal-border);
 }
 
-/* Status Alert */
+/* Status Notice */
 .notice {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.85rem 1.25rem;
-  margin-bottom: 1.5rem;
-  background: var(--success-bg);
-  border: 1px solid var(--success-border);
-  color: var(--success-text);
+  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
   border-radius: var(--radius-md);
-  font-size: 0.95rem;
+  border: 1px solid var(--teal-border);
+  background: var(--teal-surface);
+  color: var(--teal-text);
   font-weight: 500;
   box-shadow: var(--shadow-sm);
 }
-
 .notice:empty {
   display: none;
 }
 
-/* Dashboard Metrics Grid */
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1rem;
-  margin-bottom: 1.5rem;
+/* Tab Radio Controls (Invisible) */
+.tab-radio {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
 }
 
-.stat-card {
+/* Sticky Admin Navigation Bar */
+.admin-navbar {
+  position: sticky;
+  top: 0.75rem;
+  z-index: 100;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.4rem;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 1rem 1.25rem;
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
+  margin-bottom: 1.25rem;
+  backdrop-filter: blur(8px);
 }
 
-.stat-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted);
-  margin-bottom: 0.35rem;
-}
-
-.stat-value {
-  font-size: 1.45rem;
-  font-weight: 700;
-  color: var(--text-main);
-  font-variant-numeric: tabular-nums;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.stat-sub {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  margin-top: 0.25rem;
-}
-
-.badge {
+.nav-tab-label {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.2rem 0.55rem;
-  border-radius: var(--radius-pill);
-  font-size: 0.75rem;
+  gap: 0.45rem;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.85rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s ease;
 }
 
-.badge-success { background: var(--success-bg); color: var(--success-text); border: 1px solid var(--success-border); }
-.badge-warning { background: var(--danger-bg); color: var(--danger-text); border: 1px solid var(--danger-border); }
-.badge-primary { background: var(--teal-surface); color: var(--teal-text); border: 1px solid var(--teal-border); }
+.nav-tab-label:hover {
+  background: var(--bg-hover);
+  color: var(--text-main);
+}
 
-/* Panels */
-section.panel {
+.nav-tab-badge {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+/* Active Tab Highlight via Sibling Selectors */
+#tab-all:checked ~ .admin-navbar label[for="tab-all"],
+#tab-mappings:checked ~ .admin-navbar label[for="tab-mappings"],
+#tab-link:checked ~ .admin-navbar label[for="tab-link"],
+#tab-pending:checked ~ .admin-navbar label[for="tab-pending"],
+#tab-sync:checked ~ .admin-navbar label[for="tab-sync"] {
+  background-color: var(--teal);
+  color: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  #tab-all:checked ~ .admin-navbar label[for="tab-all"],
+  #tab-mappings:checked ~ .admin-navbar label[for="tab-mappings"],
+  #tab-link:checked ~ .admin-navbar label[for="tab-link"],
+  #tab-pending:checked ~ .admin-navbar label[for="tab-pending"],
+  #tab-sync:checked ~ .admin-navbar label[for="tab-sync"] {
+    background-color: var(--teal);
+    color: #0d1315;
+  }
+}
+
+#tab-all:checked ~ .admin-navbar label[for="tab-all"] .nav-tab-badge,
+#tab-mappings:checked ~ .admin-navbar label[for="tab-mappings"] .nav-tab-badge,
+#tab-link:checked ~ .admin-navbar label[for="tab-link"] .nav-tab-badge,
+#tab-pending:checked ~ .admin-navbar label[for="tab-pending"] .nav-tab-badge,
+#tab-sync:checked ~ .admin-navbar label[for="tab-sync"] .nav-tab-badge {
+  background-color: rgba(255, 255, 255, 0.25);
+  color: inherit;
+  border-color: transparent;
+}
+
+/* Tab Content Visibility Switching */
+/* When Mappings is checked */
+#tab-mappings:checked ~ .view-overview,
+#tab-mappings:checked ~ .view-sync,
+#tab-mappings:checked ~ .view-actions {
+  display: none !important;
+}
+
+/* When Link Book is checked */
+#tab-link:checked ~ .view-overview,
+#tab-link:checked ~ .view-sync,
+#tab-link:checked ~ .view-mappings,
+#tab-link:checked ~ .view-actions .panel-pending {
+  display: none !important;
+}
+#tab-link:checked ~ .view-actions {
+  display: block !important;
+}
+#tab-link:checked ~ .view-actions .panel-confirm {
+  display: block !important;
+  max-width: 40rem;
+  margin: 0 auto;
+}
+
+/* When Pending Worklist is checked */
+#tab-pending:checked ~ .view-overview,
+#tab-pending:checked ~ .view-sync,
+#tab-pending:checked ~ .view-mappings,
+#tab-pending:checked ~ .view-actions .panel-confirm {
+  display: none !important;
+}
+#tab-pending:checked ~ .view-actions {
+  display: block !important;
+}
+#tab-pending:checked ~ .view-actions .panel-pending {
+  display: block !important;
+  max-width: 40rem;
+  margin: 0 auto;
+}
+
+/* When Sync & Health is checked */
+#tab-sync:checked ~ .view-overview,
+#tab-sync:checked ~ .view-mappings,
+#tab-sync:checked ~ .view-actions {
+  display: none !important;
+}
+#tab-sync:checked ~ .view-sync {
+  display: block !important;
+}
+
+/* Metric Tiles Grid */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1.25rem;
+}
+
+.metric-card {
+  padding: 1rem 1.15rem;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
-  margin-bottom: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.metric-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-subtle);
+  margin-bottom: 0.35rem;
+}
+
+.metric-value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.metric-value {
+  font-size: 1.6rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--text-main);
+  letter-spacing: -0.02em;
+}
+
+.metric-sub {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 0.35rem;
+}
+
+/* Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-pill);
+}
+
+.badge-primary {
+  background: var(--teal-surface);
+  color: var(--teal-text);
+  border: 1px solid var(--teal-border);
+}
+
+.badge-success {
+  background: var(--success-bg);
+  color: var(--success-text);
+  border: 1px solid var(--success-border);
+}
+
+.badge-code {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  background: var(--bg-surface-subtle);
+  color: var(--text-muted);
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+/* Panels */
+.panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 1.25rem;
   overflow: hidden;
 }
 
 .panel-header {
-  padding: 1.15rem 1.5rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-surface-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface-elevated);
 }
 
 .panel-header h2 {
-  font-size: 1.15rem;
-  font-weight: 600;
   margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-main);
 }
 
 .panel-body {
-  padding: 1.5rem;
+  padding: 1.25rem;
 }
 
-/* Two-column layout */
-.two-col {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1.5rem;
-  margin-bottom: 1.5rem;
+/* Confirmed Mappings Admin Table */
+.table-panel-body {
+  padding: 0;
 }
 
-@media (min-width: 900px) {
-  .two-col {
-    grid-template-columns: 1fr 1fr;
-  }
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
 }
 
-/* Forms */
-form.styled-form {
+.admin-table th {
+  padding: 0.65rem 1rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-subtle);
+  background: var(--bg-surface-subtle);
+  border-bottom: 1px solid var(--border);
+}
+
+.admin-table tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background-color 0.1s ease;
+}
+
+.admin-table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.admin-table tbody tr:hover {
+  background-color: var(--bg-hover);
+}
+
+.admin-table td {
+  padding: 0.75rem 1rem;
+  vertical-align: middle;
+}
+
+.col-title {
+  font-weight: 600;
+  color: var(--text-main);
+  max-width: 20rem;
+}
+
+.col-id {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.col-target {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.col-scope {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.col-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.actions-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
+/* Drawer Trigger Summaries */
+.drawer-toggle {
+  display: inline-block;
+}
+
+.drawer-toggle summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.55rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.drawer-toggle summary::-webkit-details-marker {
+  display: none;
+}
+
+.drawer-toggle summary:hover {
+  background: var(--bg-surface-subtle);
+  color: var(--text-main);
+  border-color: var(--border-subtle);
+}
+
+.drawer-toggle.danger-drawer summary {
+  color: var(--danger);
+  border-color: var(--danger-border);
+}
+
+.drawer-toggle.danger-drawer summary:hover {
+  background: var(--danger-bg);
+  color: var(--danger-hover);
+}
+
+/* Inline Expanded Form Area */
+.drawer-toggle[open] .drawer-inline-content {
+  display: block;
+  margin-top: 0.65rem;
+  padding: 0.85rem;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  text-align: left;
+}
+
+/* Forms & Inputs */
+.styled-form {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.85rem;
 }
 
 .form-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 1rem;
+  gap: 0.75rem;
 }
 
 label {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
-  font-size: 0.85rem;
+  gap: 0.25rem;
+  font-size: 0.82rem;
   font-weight: 500;
   color: var(--text-main);
 }
 
-input[type="text"],
-input[type="number"],
-input[inputmode="numeric"] {
+input, select {
   font-family: inherit;
-  font-size: 0.95rem;
-  padding: 0.55rem 0.85rem;
+  font-size: 0.85rem;
+  padding: 0.45rem 0.65rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-surface);
   color: var(--text-main);
-  transition: all 0.15s ease;
-  min-height: 40px;
+  transition: border-color 0.15s ease;
 }
 
-input:focus {
+input:focus, select:focus {
   outline: none;
   border-color: var(--border-focus);
-  box-shadow: 0 0 0 3px rgba(31, 104, 95, 0.15);
+  box-shadow: 0 0 0 2px rgba(31, 104, 95, 0.15);
 }
 
 fieldset {
   margin: 0;
-  padding: 0.75rem 1rem;
+  padding: 0.65rem 0.85rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  display: flex;
+  gap: 1.25rem;
   background: var(--bg-surface-elevated);
 }
 
-fieldset legend {
-  font-size: 0.8rem;
+legend {
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--text-muted);
   padding: 0 0.35rem;
 }
 
 fieldset label {
-  display: inline-flex;
   flex-direction: row;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.4rem;
   cursor: pointer;
-  margin-right: 1.25rem;
+  font-size: 0.82rem;
 }
 
 button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   font-family: inherit;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 600;
-  padding: 0.65rem 1.25rem;
+  padding: 0.45rem 0.85rem;
   border-radius: var(--radius-sm);
   border: none;
   cursor: pointer;
   transition: all 0.15s ease;
-  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
-button:active {
-  transform: scale(0.97);
-}
-
-button[type="submit"], button.primary {
+button.primary {
   background: var(--teal);
   color: white;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.1);
 }
-
-button[type="submit"]:hover, button.primary:hover {
+button.primary:hover {
   background: var(--teal-hover);
 }
 
 button.secondary {
-  background: var(--bg-surface-elevated);
-  border: 1px solid var(--border);
+  background: var(--bg-surface-subtle);
   color: var(--text-main);
+  border: 1px solid var(--border);
 }
-
 button.secondary:hover {
-  background: var(--border);
+  background: var(--bg-hover);
 }
 
 button.danger {
   background: var(--danger);
   color: white;
 }
-
 button.danger:hover {
   background: var(--danger-hover);
 }
 
-/* Mappings List */
-ul.mappings-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-li.mapping-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 1.15rem 1.35rem;
-  transition: all 0.15s ease;
-}
-
-li.mapping-card:hover {
-  border-color: var(--teal-border);
-  box-shadow: var(--shadow-sm);
-}
-
-.mapping-header-row {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-@media (min-width: 640px) {
-  .mapping-header-row {
-    flex-direction: row;
-    align-items: baseline;
-    justify-content: space-between;
-  }
-}
-
-.book-title {
-  font-size: 1.05rem;
-  font-weight: 600;
-  color: var(--text-main);
-}
-
-.meta-tags {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.45rem;
-  margin-top: 0.45rem;
-}
-
-.meta-tag {
-  display: inline-flex;
-  align-items: center;
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  padding: 0.2rem 0.55rem;
-  background: var(--bg-surface-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-}
-
-.mapping-actions-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.65rem;
-  margin-top: 0.85rem;
-  padding-top: 0.85rem;
-  border-top: 1px dashed var(--border);
-}
-
-details.action-drawer {
-  width: 100%;
-}
-
-details.action-drawer summary {
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.82rem;
-  font-weight: 500;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 0.35rem 0.75rem;
-  border-radius: var(--radius-sm);
-  background: var(--bg-surface-elevated);
-  border: 1px solid var(--border);
-  user-select: none;
-  transition: all 0.15s ease;
-}
-
-details.action-drawer summary:hover {
-  color: var(--text-main);
-  background: var(--border);
-}
-
-details.action-drawer.danger-drawer summary {
-  color: var(--danger-text);
-  background: var(--danger-bg);
-  border-color: var(--danger-border);
-}
-
-details.action-drawer.danger-drawer summary:hover {
-  background: var(--danger);
-  color: white;
-}
-
-.drawer-body {
-  margin-top: 0.85rem;
-  padding: 1.15rem;
-  background: var(--bg-surface-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-
 .note {
-  font-size: 0.82rem;
+  margin: 0;
+  font-size: 0.78rem;
   color: var(--text-muted);
-  margin: 0.5rem 0 0;
 }
 
 .empty-state {
   text-align: center;
   padding: 2.5rem 1rem;
   color: var(--text-muted);
-  font-size: 0.95rem;
+  font-size: 0.9rem;
+}
+
+/* Two-Column Responsive Layout */
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.25rem;
+}
+
+/* Mobile Responsiveness for Data Table */
+@media (max-width: 768px) {
+  .admin-table thead {
+    display: none;
+  }
+  .admin-table,
+  .admin-table tbody,
+  .admin-table tr,
+  .admin-table td {
+    display: block;
+    width: 100%;
+  }
+  .admin-table tbody tr {
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .admin-table td {
+    padding: 0.25rem 0;
+  }
+  .col-title {
+    max-width: none;
+    font-size: 0.95rem;
+    margin-bottom: 0.25rem;
+  }
+  .col-actions {
+    margin-top: 0.5rem;
+    text-align: left;
+  }
+  .actions-cluster {
+    justify-content: flex-start;
+  }
 }
 </style>
 </head>
 <body>
 <main>
+
+<!-- Status Notice Banner -->
+<div class="notice" role="status" aria-live="polite">{{.Notice}}</div>
+
+<!-- App Header -->
 <header class="app-header">
-  <div class="brand-wrapper">
+  <div class="brand-group">
     <img class="brand-mark" src="/favicon.svg" alt="">
     <div>
       <h1>Drifter mapping interface</h1>
-      <p class="subtitle note">Local mapping maintenance. Provider status is never written; pending requests are explicit.</p>
+      <div class="header-meta">Local reading-status companion &middot; WeRead &rarr; Hardcover</div>
     </div>
   </div>
-  <nav class="nav-links" aria-label="API and Export Links">
-    <a href="/api/mappings" class="pill-link">View mappings as JSON</a>
-    <a href="/api/status" class="pill-link">Status JSON</a>
-    <a href="/api/runs" class="pill-link">Runs JSON</a>
-    <a href="/api/holds" class="pill-link">Holds JSON</a>
-    <a href="/api/export" class="pill-link">Export State JSON</a>
+  <nav class="quick-links" aria-label="API endpoints">
+    <a class="pill-link" href="/api/mappings">View mappings as JSON</a>
+    <a class="pill-link" href="/api/status">Status JSON</a>
+    <a class="pill-link" href="/api/runs">Runs JSON</a>
+    <a class="pill-link" href="/api/holds">Holds JSON</a>
+    <a class="pill-link" href="/api/export?account=default&target_account=default">Export State JSON</a>
   </nav>
 </header>
 
-<p id="mutation-status" class="notice" role="status" aria-live="polite" tabindex="-1">{{.Notice}}</p>
+<!-- Radio-based Nav-Tab Controller (Pure CSS, Zero JS) -->
+<input type="radio" name="admin_tab" id="tab-all" class="tab-radio" checked>
+<input type="radio" name="admin_tab" id="tab-mappings" class="tab-radio">
+<input type="radio" name="admin_tab" id="tab-link" class="tab-radio">
+<input type="radio" name="admin_tab" id="tab-pending" class="tab-radio">
+<input type="radio" name="admin_tab" id="tab-sync" class="tab-radio">
 
-<!-- Dashboard Summary -->
-<div class="dashboard-grid">
-  <div class="stat-card">
-    <div class="stat-label">Confirmed Mappings</div>
-    <div class="stat-value">{{len .Mappings}}</div>
-    <div class="stat-sub">Books actively mapped</div>
-  </div>
+<!-- Sticky Admin Navigation Bar -->
+<nav class="admin-navbar" role="tablist" aria-label="Dashboard views">
+  <label for="tab-all" class="nav-tab-label" role="tab" aria-controls="view-all">
+    Dashboard
+  </label>
+  <label for="tab-mappings" class="nav-tab-label" role="tab" aria-controls="view-mappings">
+    Mappings <span class="nav-tab-badge">{{len .Mappings}}</span>
+  </label>
+  <label for="tab-link" class="nav-tab-label" role="tab" aria-controls="view-link">
+    Link Book
+  </label>
+  <label for="tab-pending" class="nav-tab-label" role="tab" aria-controls="view-pending">
+    Pending Worklist
+  </label>
+  <label for="tab-sync" class="nav-tab-label" role="tab" aria-controls="view-sync">
+    Sync &amp; Health
+  </label>
+</nav>
 
-  {{if .LatestRun}}
-  <div class="stat-card">
-    <div class="stat-label">Latest Reconciliation</div>
-    <div class="stat-value">
-      Run #{{.LatestRun.ID}}
-      {{if eq .LatestRun.Status "completed"}}
-      <span class="badge badge-success">Completed</span>
-      {{else}}
-      <span class="badge badge-warning">{{.LatestRun.Status}}</span>
-      {{end}}
+<!-- View 1: Metric Grid (Visible in Dashboard & Overview) -->
+<div class="view-overview">
+  <section class="metric-grid" aria-label="System status metrics">
+    <div class="metric-card">
+      <div class="metric-label">Confirmed Mappings</div>
+      <div class="metric-value-row">
+        <span class="metric-value">{{len .Mappings}}</span>
+      </div>
+      <div class="metric-sub">Books actively mapped</div>
     </div>
-    <div class="stat-sub">{{.LatestRun.NoOpCount}} in-sync, {{.LatestRun.AppliedCount}} applied, {{.LatestRun.ConflictCount}} conflicts</div>
-  </div>
-  {{end}}
 
-  <div class="stat-card">
-    <div class="stat-label">Active Holds & Conflicts</div>
-    <div class="stat-value">
-      {{len .Holds}}
-      {{if eq (len .Holds) 0}}
-      <span class="badge badge-success">Clean</span>
-      {{else}}
-      <span class="badge badge-warning">Action Needed</span>
-      {{end}}
+    <div class="metric-card">
+      <div class="metric-label">Latest Reconciliation</div>
+      <div class="metric-value-row">
+        {{if .LatestRun}}
+          <span class="metric-value">Run #{{.LatestRun.ID}}</span>
+          <span class="badge badge-success">{{.LatestRun.Status}}</span>
+        {{else}}
+          <span class="metric-value">&mdash;</span>
+          <span class="badge badge-primary">No runs</span>
+        {{end}}
+      </div>
+      <div class="metric-sub">
+        {{if .LatestRun}}
+          {{.LatestRun.NoOpCount}} in-sync, {{.LatestRun.AppliedCount}} applied, {{.LatestRun.ConflictCount}} conflicts
+        {{else}}
+          Awaiting first reconciliation
+        {{end}}
+      </div>
     </div>
-    <div class="stat-sub">Pending manual resolution</div>
-  </div>
 
-  {{if .Fingerprints}}
-  <div class="stat-card">
-    <div class="stat-label">Bound Accounts</div>
-    <div class="stat-value">{{len .Fingerprints}}</div>
-    <div class="stat-sub">Fingerprints verified</div>
-  </div>
-  {{end}}
+    <div class="metric-card">
+      <div class="metric-label">Active Holds &amp; Conflicts</div>
+      <div class="metric-value-row">
+        <span class="metric-value">{{len .Holds}}</span>
+        {{if eq (len .Holds) 0}}
+          <span class="badge badge-success">CLEAN</span>
+        {{else}}
+          <span class="badge badge-primary">{{len .Holds}} PENDING</span>
+        {{end}}
+      </div>
+      <div class="metric-sub">Pending manual resolution</div>
+    </div>
+
+    <div class="metric-card">
+      <div class="metric-label">Bound Accounts</div>
+      <div class="metric-value-row">
+        <span class="metric-value">{{len .Fingerprints}}</span>
+      </div>
+      <div class="metric-sub">Fingerprints verified</div>
+    </div>
+  </section>
 </div>
 
-{{if .LatestRun}}
-<section class="panel">
-  <div class="panel-header">
-    <h2>Latest sync run</h2>
-  </div>
-  <div class="panel-body">
-    <p>Run #{{.LatestRun.ID}}: <strong>{{.LatestRun.Status}}</strong> ({{.LatestRun.AppliedCount}} applied, {{.LatestRun.NoOpCount}} no-op, {{.LatestRun.ConflictCount}} conflicts, {{.LatestRun.HoldCount}} holds, {{.LatestRun.ErrorCount}} errors)</p>
-    <p class="note">Started at {{.LatestRun.StartedAt.Format "2006-01-02 15:04:05 UTC"}}</p>
-  </div>
-</section>
-{{end}}
-
-{{if .Holds}}
-<section class="panel">
-  <div class="panel-header">
-    <h2>Active holds and conflicts</h2>
-  </div>
-  <div class="panel-body">
-    <ul class="mappings-list">
-    {{range .Holds}}
-      <li class="mapping-card mapping">
-        <p><strong>{{.Reason}}</strong> for book {{.BookID}} (work {{.WorkID}}): {{.Message}}</p>
-      </li>
+<!-- View 2: Sync Runs, Holds & Bound Accounts (Visible in Dashboard & Sync & Health tab) -->
+<div class="view-sync">
+  <div class="two-col">
+    {{if .LatestRun}}
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Latest sync run</h2>
+      </div>
+      <div class="panel-body">
+        <p style="margin:0 0 0.5rem; font-size:0.85rem;">
+          Run #{{.LatestRun.ID}}: <strong>{{.LatestRun.Status}}</strong>
+          ({{.LatestRun.AppliedCount}} applied, {{.LatestRun.NoOpCount}} no-op, {{.LatestRun.ConflictCount}} conflicts, {{.LatestRun.HoldCount}} holds, {{.LatestRun.ErrorCount}} errors)
+        </p>
+        <p class="note">Started at {{.LatestRun.StartedAt.Format "2006-01-02 15:04:05 UTC"}}</p>
+      </div>
+    </section>
     {{end}}
-    </ul>
-  </div>
-</section>
-{{end}}
 
-{{if .Fingerprints}}
-<section class="panel">
-  <div class="panel-header">
-    <h2>Bound account identities</h2>
-  </div>
-  <div class="panel-body">
-    <ul style="margin:0; padding-left:1.25rem;">
-    {{range .Fingerprints}}
-      <li><code>{{.Provider}}:{{.Account}}</code> &rarr; <code>{{.Fingerprint}}</code></li>
+    {{if .Holds}}
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Active holds and conflicts</h2>
+      </div>
+      <div class="panel-body">
+        <ul style="margin:0; padding-left:1.25rem;">
+        {{range .Holds}}
+          <li style="margin-bottom:0.4rem;">
+            <strong>{{.Reason}}</strong> for book {{.BookID}} (work {{.WorkID}}): {{.Message}}
+          </li>
+        {{end}}
+        </ul>
+      </div>
+    </section>
     {{end}}
-    </ul>
-  </div>
-</section>
-{{end}}
 
-<!-- Confirmed Mappings -->
-<section class="panel">
-  <div class="panel-header">
-    <h2>Confirmed mappings</h2>
-    <span class="badge badge-primary">{{len .Mappings}} books</span>
+    {{if .Fingerprints}}
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Bound account identities</h2>
+      </div>
+      <div class="panel-body">
+        <ul style="margin:0; padding-left:1.25rem; font-family:var(--font-mono); font-size:0.8rem; color:var(--text-muted);">
+        {{range .Fingerprints}}
+          <li><code>{{.Provider}}:{{.Account}}</code> &rarr; <code>{{.Fingerprint}}</code></li>
+        {{end}}
+        </ul>
+      </div>
+    </section>
+    {{end}}
   </div>
-  <div class="panel-body">
-  {{if .Mappings}}
-    <ul class="mappings-list">
-    {{range .Mappings}}
-      <li class="mapping-card mapping" aria-label="Mapping for book {{.BookID}}">
-        <div class="mapping-header-row">
-          <div class="book-title">{{if .SourceTitle}}{{.SourceTitle}}{{else}}Book {{.BookID}}{{end}}</div>
-          <div class="meta-tags">
-            <span class="meta-tag">WeRead: {{.BookID}}</span>
-            <span class="meta-tag">{{.SourceAccount}} &rarr; {{.TargetAccount}}</span>
-            <span class="meta-tag">work {{.WorkID}}{{if .EditionID}}, edition {{.EditionID}}{{else}}, work only{{end}}</span>
+</div>
+
+<!-- View 3: Confirmed Mappings Admin Table (Visible in Dashboard & Mappings tab) -->
+<div class="view-mappings">
+  <section class="panel">
+    <div class="panel-header">
+      <h2>Confirmed mappings</h2>
+      <span class="badge badge-primary">{{len .Mappings}} books</span>
+    </div>
+    <div class="panel-body table-panel-body">
+    {{if .Mappings}}
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Book Title</th>
+            <th>WeRead ID</th>
+            <th>Target Work / Edition</th>
+            <th>Scope</th>
+            <th style="text-align:right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+        {{range .Mappings}}
+          <tr role="listitem" aria-label="Mapping for book {{.BookID}}">
+            <td class="col-title">
+              {{if .SourceTitle}}{{.SourceTitle}}{{else}}Book {{.BookID}}{{end}}
+            </td>
+            <td class="col-id">
+              <span class="badge-code">{{.BookID}}</span>
+            </td>
+            <td class="col-target">
+              <span class="badge badge-primary">work {{.WorkID}}{{if .EditionID}}, edition {{.EditionID}}{{else}}, work only{{end}}</span>
+            </td>
+            <td class="col-scope">
+              {{.SourceAccount}} &rarr; {{.TargetAccount}}
+            </td>
+            <td class="col-actions">
+              <div class="actions-cluster">
+                <details class="drawer-toggle action-drawer">
+                  <summary>Replace mapping for book {{.BookID}}</summary>
+                  <div class="drawer-inline-content">
+                    <form class="styled-form" aria-label="Replace mapping for book {{.BookID}}" action="/mappings/replace" method="post">
+                      <input type="hidden" name="csrf_token" value="{{$.Token}}">
+                      <input type="hidden" name="source_account" value="{{.SourceAccount}}">
+                      <input type="hidden" name="book_id" value="{{.BookID}}">
+                      <input type="hidden" name="target_account" value="{{.TargetAccount}}">
+                      <input type="hidden" name="expected_work_id" value="{{.WorkID}}">
+                      <input type="hidden" name="expected_edition_id" value="{{.EditionID}}">
+                      
+                      <div class="form-grid">
+                        <label>New target work ID <input name="work_id" type="number" min="1" required></label>
+                        <label>Edition ID (required for a specific edition) <input name="edition_id" type="number" min="1"></label>
+                      </div>
+
+                      <fieldset>
+                        <legend>Target identity</legend>
+                        <label><input name="edition_mode" type="radio" value="work_only" required> Work only</label>
+                        <label><input name="edition_mode" type="radio" value="edition" required> Specific edition</label>
+                      </fieldset>
+
+                      <div style="display:flex; justify-content:flex-end;">
+                        <button type="submit" class="primary">Replace mapping</button>
+                      </div>
+                    </form>
+                  </div>
+                </details>
+
+                <details class="drawer-toggle danger-drawer">
+                  <summary>Unlink mapping for book {{.BookID}}</summary>
+                  <div class="drawer-inline-content">
+                    <form class="styled-form" aria-label="Unlink mapping for book {{.BookID}}" action="/mappings/unlink" method="post">
+                      <input type="hidden" name="csrf_token" value="{{$.Token}}">
+                      <input type="hidden" name="source_account" value="{{.SourceAccount}}">
+                      <input type="hidden" name="book_id" value="{{.BookID}}">
+                      <input type="hidden" name="target_account" value="{{.TargetAccount}}">
+                      <input type="hidden" name="expected_work_id" value="{{.WorkID}}">
+                      <input type="hidden" name="expected_edition_id" value="{{.EditionID}}">
+                      <p class="note" style="margin-top:0;">This removes the local link. Target reading status in Hardcover is never deleted.</p>
+                      <div style="display:flex; justify-content:flex-end;">
+                        <button class="danger" type="submit">Unlink this mapping</button>
+                      </div>
+                    </form>
+                  </div>
+                </details>
+              </div>
+            </td>
+          </tr>
+        {{end}}
+        </tbody>
+      </table>
+    {{else}}
+      <p class="empty-state">No mappings are saved.</p>
+    {{end}}
+    </div>
+  </section>
+</div>
+
+<!-- View 4: Maintenance Operations (Confirm & Pending Forms) -->
+<div class="view-actions">
+  <div class="two-col">
+    <!-- Confirm a Mapping Form -->
+    <section class="panel panel-confirm">
+      <div class="panel-header">
+        <h2>Confirm a mapping</h2>
+      </div>
+      <div class="panel-body">
+        <form class="styled-form" aria-label="Confirm a mapping" action="/mappings/confirm" method="post">
+          <input type="hidden" name="csrf_token" value="{{.Token}}">
+          <div class="form-grid">
+            <label>Source account <input name="source_account" value="default" required maxlength="64"></label>
+            <label>Source book ID <input name="book_id" required inputmode="numeric" placeholder="e.g. 123456"></label>
           </div>
-        </div>
+          <div class="form-grid">
+            <label>Target account <input name="target_account" value="default" required maxlength="64"></label>
+            <label>Target work ID <input name="work_id" type="number" min="1" required placeholder="e.g. 77"></label>
+          </div>
+          
+          <fieldset>
+            <legend>Target identity</legend>
+            <label><input name="edition_mode" type="radio" value="work_only" required checked> Work only</label>
+            <label><input name="edition_mode" type="radio" value="edition" required> Specific edition</label>
+          </fieldset>
 
-        <div class="mapping-actions-row">
-          <details class="action-drawer">
-            <summary>Replace mapping for book {{.BookID}}</summary>
-            <div class="drawer-body">
-              <form class="styled-form" aria-label="Replace mapping for book {{.BookID}}" action="/mappings/replace" method="post">
-                <input type="hidden" name="csrf_token" value="{{$.Token}}">
-                <input type="hidden" name="source_account" value="{{.SourceAccount}}">
-                <input type="hidden" name="book_id" value="{{.BookID}}">
-                <input type="hidden" name="target_account" value="{{.TargetAccount}}">
-                <input type="hidden" name="expected_work_id" value="{{.WorkID}}">
-                <input type="hidden" name="expected_edition_id" value="{{.EditionID}}">
-                
-                <div class="form-grid">
-                  <label>New target work ID <input name="work_id" type="number" min="1" required></label>
-                  <label>Edition ID (required for a specific edition) <input name="edition_id" type="number" min="1"></label>
-                </div>
+          <label>Edition ID (required for a specific edition) <input name="edition_id" type="number" min="1" placeholder="Optional unless specific edition"></label>
 
-                <fieldset>
-                  <legend>Target identity</legend>
-                  <label><input name="edition_mode" type="radio" value="work_only" required> Work only</label>
-                  <label><input name="edition_mode" type="radio" value="edition" required> Specific edition</label>
-                </fieldset>
+          <button type="submit" class="primary">Confirm mapping</button>
+          <p class="note">IDs are manually selected. Confirming fetches source metadata and validates target work/edition membership; no candidate is accepted automatically.</p>
+        </form>
+      </div>
+    </section>
 
-                <div style="display:flex; justify-content:flex-end;">
-                  <button type="submit" class="primary">Replace mapping</button>
-                </div>
-              </form>
-            </div>
-          </details>
-
-          <details class="action-drawer danger-drawer">
-            <summary>Unlink mapping for book {{.BookID}}</summary>
-            <div class="drawer-body">
-              <form class="styled-form" aria-label="Unlink mapping for book {{.BookID}}" action="/mappings/unlink" method="post">
-                <input type="hidden" name="csrf_token" value="{{$.Token}}">
-                <input type="hidden" name="source_account" value="{{.SourceAccount}}">
-                <input type="hidden" name="book_id" value="{{.BookID}}">
-                <input type="hidden" name="target_account" value="{{.TargetAccount}}">
-                <input type="hidden" name="expected_work_id" value="{{.WorkID}}">
-                <input type="hidden" name="expected_edition_id" value="{{.EditionID}}">
-                <p class="note" style="margin-top:0;">This will remove the local identity mapping. Target reading status is never deleted.</p>
-                <div style="display:flex; justify-content:flex-end;">
-                  <button class="danger" type="submit">Unlink this mapping</button>
-                </div>
-              </form>
-            </div>
-          </details>
-        </div>
-      </li>
-    {{end}}
-    </ul>
-  {{else}}
-    <p class="empty-state">No mappings are saved.</p>
-  {{end}}
+    <!-- Pending Worklist Query -->
+    <section class="panel panel-pending">
+      <div class="panel-header">
+        <h2>Pending worklist</h2>
+      </div>
+      <div class="panel-body">
+        <form class="styled-form" aria-label="Pending worklist" action="/api/pending" method="get">
+          <div class="form-grid">
+            <label>Source account <input name="account" value="default" required maxlength="64"></label>
+            <label>Target account <input name="target_account" value="default" required maxlength="64"></label>
+          </div>
+          <label>Days <input name="days" type="number" min="1" max="36500" value="90"></label>
+          <button class="secondary" type="submit">Request pending books</button>
+          <p class="note">Submitting explicitly requests WeRead shelf and book metadata. This page makes no provider calls.</p>
+        </form>
+      </div>
+    </section>
   </div>
-</section>
-
-<!-- Maintenance Operations in Two Columns -->
-<div class="two-col">
-  <!-- Confirm a Mapping Form -->
-  <section class="panel">
-    <div class="panel-header">
-      <h2>Confirm a mapping</h2>
-    </div>
-    <div class="panel-body">
-      <form class="styled-form" aria-label="Confirm a mapping" action="/mappings/confirm" method="post">
-        <input type="hidden" name="csrf_token" value="{{.Token}}">
-        <div class="form-grid">
-          <label>Source account <input name="source_account" value="default" required maxlength="64"></label>
-          <label>Source book ID <input name="book_id" required inputmode="numeric" placeholder="e.g. 123456"></label>
-        </div>
-        <div class="form-grid">
-          <label>Target account <input name="target_account" value="default" required maxlength="64"></label>
-          <label>Target work ID <input name="work_id" type="number" min="1" required placeholder="e.g. 77"></label>
-        </div>
-        
-        <fieldset>
-          <legend>Target identity</legend>
-          <label><input name="edition_mode" type="radio" value="work_only" required checked> Work only</label>
-          <label><input name="edition_mode" type="radio" value="edition" required> Specific edition</label>
-        </fieldset>
-
-        <label>Edition ID (required for a specific edition) <input name="edition_id" type="number" min="1" placeholder="Optional unless specific edition"></label>
-
-        <button type="submit" class="primary">Confirm mapping</button>
-        <p class="note">IDs are manually selected. Confirming fetches source metadata and validates target work/edition membership; no candidate is accepted automatically.</p>
-      </form>
-    </div>
-  </section>
-
-  <!-- Pending Worklist Query -->
-  <section class="panel">
-    <div class="panel-header">
-      <h2>Pending worklist</h2>
-    </div>
-    <div class="panel-body">
-      <form class="styled-form" aria-label="Pending worklist" action="/api/pending" method="get">
-        <div class="form-grid">
-          <label>Source account <input name="account" value="default" required maxlength="64"></label>
-          <label>Target account <input name="target_account" value="default" required maxlength="64"></label>
-        </div>
-        <label>Days <input name="days" type="number" min="1" max="36500" value="90"></label>
-        <button class="secondary" type="submit">Request pending books</button>
-        <p class="note">Submitting explicitly requests WeRead shelf and book metadata. This page makes no provider calls.</p>
-      </form>
-    </div>
-  </section>
 </div>
 
 </main>
