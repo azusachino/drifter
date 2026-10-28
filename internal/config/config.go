@@ -40,7 +40,8 @@ type Config struct {
 		Addr    string `toml:"addr"`
 	} `toml:"probes"`
 	Server struct {
-		Addr string `toml:"addr"`
+		Addr         string   `toml:"addr"`
+		AllowedHosts []string `toml:"allowed_hosts"`
 	} `toml:"server"`
 	Database struct {
 		// Path overrides the CLI default mapping database location.
@@ -144,6 +145,11 @@ func (c Config) validate() error {
 	serverIP := net.ParseIP(serverHost)
 	if serverHost == "" || serverHost == "*" || (serverIP != nil && serverIP.IsUnspecified()) {
 		return fmt.Errorf("server.addr must name a concrete listener host for Host validation")
+	}
+	for _, h := range c.Server.AllowedHosts {
+		if strings.TrimSpace(h) == "" || strings.ContainsAny(h, "/\\@?#") {
+			return fmt.Errorf("server.allowed_hosts entries must be valid host[:port] strings")
+		}
 	}
 	if strings.TrimSpace(c.Database.Path) != "" && !filepath.IsAbs(c.Database.Path) {
 		return fmt.Errorf("database.path must be absolute")

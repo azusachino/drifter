@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/azusachino/drifter/internal/companion"
 	"github.com/azusachino/drifter/internal/config"
@@ -31,6 +32,7 @@ func Run(ctx context.Context, args []string, out, _ io.Writer, providers Provide
 	flags.SetOutput(io.Discard)
 	configPath := flags.String("config", "config.toml", "settings-only TOML path (missing file uses defaults; never credentials)")
 	dbPath := flags.String("db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
+	allowedHostsFlag := flags.String("allowed-hosts", "", "comma-separated additional allowed Host headers for reverse proxy/tailnet preview")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			flags.SetOutput(out)
@@ -66,7 +68,15 @@ func Run(ctx context.Context, args []string, out, _ io.Writer, providers Provide
 	if err := companion.CheckDatabaseWriteAvailable(*dbPath); err != nil {
 		return err
 	}
-	server, err := httpserver.New(httpserver.Options{Address: cfg.Server.Addr, Database: *dbPath,
+	allowedHosts := cfg.Server.AllowedHosts
+	if *allowedHostsFlag != "" {
+		for _, h := range strings.Split(*allowedHostsFlag, ",") {
+			if trimmed := strings.TrimSpace(h); trimmed != "" {
+				allowedHosts = append(allowedHosts, trimmed)
+			}
+		}
+	}
+	server, err := httpserver.New(httpserver.Options{Address: cfg.Server.Addr, AllowedHosts: allowedHosts, Database: *dbPath,
 		SourceFactory: providers.Source, TargetFactory: providers.Target, Logger: logger})
 	if err != nil {
 		return err

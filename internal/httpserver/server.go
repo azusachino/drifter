@@ -56,6 +56,7 @@ var page = template.Must(template.ParseFS(htmlTemplates, "templates/index.html")
 type Server struct {
 	http             *http.Server
 	address          string
+	allowedHosts     []string
 	database         string
 	ownership        *companion.DatabaseOwnership
 	token            string
@@ -75,6 +76,7 @@ type Server struct {
 
 type Options struct {
 	Address          string
+	AllowedHosts     []string
 	Database         string
 	Source           companion.Source
 	SourceFactory    func() (companion.Source, error)
@@ -105,7 +107,7 @@ func New(options Options) (*Server, error) {
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return nil, fmt.Errorf("cannot initialize request protection")
 	}
-	s := &Server{address: options.Address, database: options.Database, token: base64.RawURLEncoding.EncodeToString(tokenBytes),
+	s := &Server{address: options.Address, allowedHosts: options.AllowedHosts, database: options.Database, token: base64.RawURLEncoding.EncodeToString(tokenBytes),
 		logger: options.Logger, now: options.Now, source: options.Source, sourceFactory: options.SourceFactory,
 		target: options.Target, targetFactory: options.TargetFactory,
 		operationSlot: make(chan struct{}, 1), operationTimeout: options.operationTimeout}
@@ -925,7 +927,7 @@ func mutationOriginAllowed(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func validOrigin(origin, host string) bool {
-	return origin == "http://"+host
+	return origin == "http://"+host || origin == "https://"+host
 }
 
 func validHeaderToken(r *http.Request, expected string) bool {
@@ -1173,10 +1175,21 @@ func probesHandler(path string, readiness []probes.Readiness, logger *slog.Logge
 	})
 }
 
-func hostAndBrowserBoundary(want string, next http.Handler) http.Handler {
+func hostAndBrowserBoundary(want string, allowedHosts []string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setSecurityHeaders(w)
-		if r.Host != want {
+		matchedHost := ""
+		if r.Host == want {
+			matchedHost = want
+		} else {
+			for _, h := range allowedHosts {
+				if matchHost(r.Host, h) {
+					matchedHost = r.Host
+					break
+				}
+			}
+		}
+		if matchedHost == "" {
 			http.Error(w, "request rejected", http.StatusMisdirectedRequest)
 			return
 		}
@@ -1185,12 +1198,25 @@ func hostAndBrowserBoundary(want string, next http.Handler) http.Handler {
 			return
 		}
 		origins := r.Header.Values("Origin")
-		if len(origins) > 1 || (len(origins) == 1 && !validOrigin(origins[0], want)) {
+		if len(origins) > 1 || (len(origins) == 1 && !validOrigin(origins[0], matchedHost)) {
 			http.Error(w, "request rejected", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func matchHost(rHost, pattern string) bool {
+	if strings.EqualFold(rHost, pattern) {
+		return true
+	}
+	if !strings.Contains(pattern, ":") {
+		h, _, err := net.SplitHostPort(rHost)
+		if err == nil && strings.EqualFold(h, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func readRequestAllowed(w http.ResponseWriter, r *http.Request) bool {
@@ -1287,7 +1313,7 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		_, actualPort, _ := net.SplitHostPort(listener.Addr().String())
 		port = actualPort
 	}
-	s.http.Handler = requestLoggingMiddleware(s.logger)(hostAndBrowserBoundary(net.JoinHostPort(host, port), s.http.Handler))
+	s.http.Handler = requestLoggingMiddleware(s.logger)(hostAndBrowserBoundary(net.JoinHostPort(host, port), s.allowedHosts, s.http.Handler))
 	s.http.BaseContext = func(net.Listener) context.Context { return ctx }
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.http.Serve(listener) }()
