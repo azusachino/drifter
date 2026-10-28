@@ -20,6 +20,7 @@ type ApplySyncOptions struct {
 	PolicyVersion     string
 	AllowPrivateSync  bool
 	DeclaredSourceVID string
+	AdoptSource       bool
 	Now               time.Time
 }
 
@@ -131,6 +132,7 @@ func ApplySync(
 		PolicyVersion:     opts.PolicyVersion,
 		AllowPrivateSync:  opts.AllowPrivateSync,
 		DeclaredSourceVID: opts.DeclaredSourceVID,
+		AdoptSource:       opts.AdoptSource,
 		Now:               now,
 	})
 	if err != nil {
@@ -221,9 +223,10 @@ func ApplySync(
 
 	// 5. Apply only approved status fields (US1)
 	mutationReq := StatusMutationRequest{
-		WorkID:    proposal.WorkID,
-		EditionID: proposal.EditionID,
-		StatusID:  proposal.ProposedStatusID,
+		WorkID:       proposal.WorkID,
+		EditionID:    proposal.EditionID,
+		StatusID:     proposal.ProposedStatusID,
+		LastReadDate: proposal.LastReadDate,
 	}
 	_, err = target.ApplyStatusMutation(ctx, mutationReq)
 	if err != nil {

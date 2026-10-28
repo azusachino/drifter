@@ -103,13 +103,14 @@ Start the separate foreground server binary with the optional settings-only
 TOML file:
 
 ```sh
-bin/drifter-server --config config.toml
+bin/drifter-server --config config.toml [-allowed-hosts HOST1,HOST2]
 ```
 
 The default listener is `127.0.0.1:8081`. Open <http://127.0.0.1:8081/> for the
-mapping interface. The page is server-rendered, embedded HTML and uses native
-forms; it makes no provider calls just by loading or listing mappings. Pending
-work is fetched only when explicitly requested. The server also provides
+mapping interface. The page is a zero-script, server-rendered admin dashboard with
+navigation tabs (Mappings, Pending worklist, Confirm a mapping, Export, Sync);
+it uses native forms and makes no provider calls just by loading or listing mappings.
+Pending work is fetched only when explicitly requested. The server also provides
 `/healthz`, `/readyz`, a read-only JSON mappings route, and protected JSON
 mutation endpoints. See the [HTTP server and CLI reference](docs/cli.md) for
 routes, payloads, configuration and database ownership behavior, or the

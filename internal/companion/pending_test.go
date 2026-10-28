@@ -97,8 +97,9 @@ func TestShelfCompletenessAndInvalidFields(t *testing.T) {
 		fail, complete bool
 	}{
 		{`{"books":[],"bookCount":0}`, false, true},
-		{`{"books":[]}`, false, false},
+		{`{"books":[]}`, false, true},
 		{`{"books":[],"bookCount":1}`, false, false},
+		{`{"books":[],"hasMore":1}`, false, false},
 		{`{"books":[],"bookCount":0,"hasMore":1}`, false, false},
 		{`{"books":[],"bookCount":-1}`, true, false},
 		{`{"books":[],"hasMore":2}`, true, false},
@@ -270,5 +271,40 @@ func TestPendingSeekCancellationDoesNotSkipUnattemptedRows(t *testing.T) {
 	continued, err := Pending(ctx2, r, nil, options)
 	if err != nil || len(continued.Books) != 51 || continued.Books[0].ID != "051" {
 		t.Fatalf("continuation skipped work: %+v %v", continued, err)
+	}
+}
+
+func TestPendingYearAndFinishedOnlyFiltering(t *testing.T) {
+	t2025 := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC).Unix()
+	t2024 := time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC).Unix()
+	books := []ShelfBook{
+		{ID: "101", Title: "Book 2025 Finished", LastOpened: value(t2025), FinishReading: value(1), Secret: value(0)},
+		{ID: "102", Title: "Book 2025 Incomplete", LastOpened: value(t2025), FinishReading: value(0), Secret: value(0)},
+		{ID: "103", Title: "Book 2024 Finished", LastOpened: value(t2024), FinishReading: value(1), Secret: value(0)},
+	}
+	w := &WeRead{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+		var args map[string]any
+		json.NewDecoder(r.Body).Decode(&args)
+		if args["api_name"] == "/shelf/sync" {
+			json.NewEncoder(rw).Encode(map[string]any{"books": books, "bookCount": len(books)})
+			return
+		}
+		json.NewEncoder(rw).Encode(map[string]any{"bookId": args["bookId"], "title": "Title", "author": "Author", "translator": ""})
+	})}
+
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Filter by year 2025 and finished only
+	report, err := Pending(context.Background(), w, nil, PendingOptions{
+		SourceAccount: "src", TargetAccount: "dst", Days: 365, Year: 2025, FinishedOnly: true, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Books) != 1 || report.Books[0].ID != "101" {
+		t.Fatalf("expected only book 101, got: %+v", report.Books)
+	}
+	if !report.Books[0].Finished {
+		t.Fatalf("expected Finished=true for book 101")
 	}
 }

@@ -13,11 +13,12 @@ import (
 // ShelfBook holds only facts needed to select an ebook worklist. Albums and
 // article collections are outside this command's explicitly ebook-only scope.
 type ShelfBook struct {
-	ID         string `json:"bookId"`
-	Title      string `json:"title"`
-	Author     string `json:"author"`
-	LastOpened *int64 `json:"readUpdateTime"`
-	Secret     *int   `json:"secret"`
+	ID            string `json:"bookId"`
+	Title         string `json:"title"`
+	Author        string `json:"author"`
+	LastOpened    *int64 `json:"readUpdateTime"`
+	FinishReading *int   `json:"finishReading"`
+	Secret        *int   `json:"secret"`
 }
 
 type ShelfResult struct {
@@ -61,7 +62,7 @@ func (w *WeRead) Shelf(ctx context.Context) (ShelfResult, error) {
 		}
 		seen[book.ID] = true
 	}
-	complete := response.Count != nil && *response.Count == len(response.Books) &&
+	complete := (response.Count == nil || *response.Count == len(response.Books)) &&
 		(response.HasMore == nil || *response.HasMore == 0)
 	return ShelfResult{Books: response.Books, Complete: complete}, nil
 }
@@ -70,6 +71,8 @@ type PendingOptions struct {
 	SourceAccount   string
 	TargetAccount   string
 	Days            int
+	Year            int  // optional calendar year filter, e.g. 2025
+	FinishedOnly    bool // filter to completed/finished books only
 	IncludePrivate  bool
 	IncludeImported bool
 	Now             time.Time
@@ -80,6 +83,7 @@ type PendingBook struct {
 	Book
 	Classification string `json:"classification"`
 	LastOpened     int64  `json:"last_opened"`
+	Finished       bool   `json:"finished,omitempty"`
 	Private        bool   `json:"private"`
 }
 
@@ -99,6 +103,8 @@ type pendingCursor struct {
 	Version         int    `json:"v"`
 	AsOf            int64  `json:"as_of"`
 	Days            int    `json:"days"`
+	Year            int    `json:"year,omitempty"`
+	FinishedOnly    bool   `json:"finished_only,omitempty"`
 	SourceAccount   string `json:"source_account"`
 	TargetAccount   string `json:"target_account"`
 	IncludePrivate  bool   `json:"include_private"`
@@ -129,7 +135,7 @@ func decodePendingCursor(raw string, options PendingOptions) (pendingCursor, err
 	if err != nil || json.Unmarshal(data, &c) != nil {
 		return c, fmt.Errorf("invalid pending cursor")
 	}
-	if c.Version != 1 || c.Days != options.Days || c.SourceAccount != options.SourceAccount || c.TargetAccount != options.TargetAccount || c.IncludePrivate != options.IncludePrivate || c.IncludeImported != options.IncludeImported || c.AsOf <= 0 || c.AsOf > options.Now.Unix() || c.LastOpened <= 0 || c.LastOpened > c.AsOf || !validShelfID(c.BookID) {
+	if c.Version != 1 || c.Days != options.Days || c.Year != options.Year || c.FinishedOnly != options.FinishedOnly || c.SourceAccount != options.SourceAccount || c.TargetAccount != options.TargetAccount || c.IncludePrivate != options.IncludePrivate || c.IncludeImported != options.IncludeImported || c.AsOf <= 0 || c.AsOf > options.Now.Unix() || c.LastOpened <= 0 || c.LastOpened > c.AsOf || !validShelfID(c.BookID) {
 		return c, fmt.Errorf("invalid pending cursor")
 	}
 	return c, nil
@@ -186,7 +192,18 @@ func PendingWithDecisions(ctx context.Context, reader worklistSource, mappings [
 	}
 	// Filter privacy before inspecting activity, titles or metadata.
 	eligible := []ShelfBook{}
-	cutoff, now := asOf.Add(-time.Duration(options.Days)*24*time.Hour).Unix(), asOf.Unix()
+	var cutoff, upperLimit int64
+	if options.Year > 0 {
+		cutoff = time.Date(options.Year, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
+		upperLimit = time.Date(options.Year, 12, 31, 23, 59, 59, 999999999, time.UTC).Unix()
+		if upperLimit > asOf.Unix() {
+			upperLimit = asOf.Unix()
+		}
+	} else {
+		cutoff = asOf.Add(-time.Duration(options.Days) * 24 * time.Hour).Unix()
+		upperLimit = asOf.Unix()
+	}
+	now := asOf.Unix()
 	for _, row := range shelf.Books {
 		if row.Secret == nil || (*row.Secret != 0 && *row.Secret != 1) || (*row.Secret == 1 && !options.IncludePrivate) {
 			continue
@@ -194,12 +211,15 @@ func PendingWithDecisions(ctx context.Context, reader worklistSource, mappings [
 		if mapped[row.ID] || (strings.HasPrefix(row.ID, "CB_") && !options.IncludeImported) {
 			continue
 		}
+		if options.FinishedOnly && (row.FinishReading == nil || *row.FinishReading != 1) {
+			continue
+		}
 		if row.LastOpened == nil || *row.LastOpened < 0 || *row.LastOpened > now {
 			report.Complete = false
 			report.Issues = append(report.Issues, PendingIssue{row.ID, "invalid_activity"})
 			continue
 		}
-		if *row.LastOpened == 0 || *row.LastOpened < cutoff {
+		if *row.LastOpened == 0 || *row.LastOpened < cutoff || *row.LastOpened > upperLimit {
 			continue
 		}
 		if options.After != "" && (*row.LastOpened > cursor.LastOpened || (*row.LastOpened == cursor.LastOpened && row.ID <= cursor.BookID)) {
@@ -229,7 +249,19 @@ func PendingWithDecisions(ctx context.Context, reader worklistSource, mappings [
 			}
 			return report, err
 		}
-		cursor = pendingCursor{Version: 1, AsOf: asOf.Unix(), Days: options.Days, SourceAccount: options.SourceAccount, TargetAccount: options.TargetAccount, IncludePrivate: options.IncludePrivate, IncludeImported: options.IncludeImported, LastOpened: *row.LastOpened, BookID: row.ID}
+		cursor = pendingCursor{
+			Version:         1,
+			AsOf:            asOf.Unix(),
+			Days:            options.Days,
+			Year:            options.Year,
+			FinishedOnly:    options.FinishedOnly,
+			SourceAccount:   options.SourceAccount,
+			TargetAccount:   options.TargetAccount,
+			IncludePrivate:  options.IncludePrivate,
+			IncludeImported: options.IncludeImported,
+			LastOpened:      *row.LastOpened,
+			BookID:          row.ID,
+		}
 		report.NextCursor = encodePendingCursor(cursor)
 		book := Book{ID: row.ID, Title: row.Title, Author: row.Author}
 		classification := "imported"
@@ -262,7 +294,14 @@ func PendingWithDecisions(ctx context.Context, reader worklistSource, mappings [
 			report.Issues = append(report.Issues, PendingIssue{row.ID, "metadata_missing"})
 			continue
 		}
-		report.Books = append(report.Books, PendingBook{book, classification, *row.LastOpened, *row.Secret == 1})
+		isFinished := row.FinishReading != nil && *row.FinishReading == 1
+		report.Books = append(report.Books, PendingBook{
+			Book:           book,
+			Classification: classification,
+			LastOpened:     *row.LastOpened,
+			Finished:       isFinished,
+			Private:        *row.Secret == 1,
+		})
 	}
 	if !more {
 		report.NextCursor = ""

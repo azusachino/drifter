@@ -225,6 +225,49 @@ func TestManualTargetEditProtection_US5(t *testing.T) {
 		}
 	})
 
+	t.Run("source finished populates last_read_date", func(t *testing.T) {
+		p := baseParams
+		p.SourceProgress = Progress{Status: "read", Percent: 100, Started: true, FinishedAt: 1752627658}
+		p.TargetStatus = nil
+
+		prop := EvaluateStatus(p)
+		if prop.ProposedStatusID != HardcoverStatusRead {
+			t.Fatalf("expected proposed status %d, got %d", HardcoverStatusRead, prop.ProposedStatusID)
+		}
+		if prop.LastReadDate == nil || *prop.LastReadDate != "2025-07-16" {
+			t.Fatalf("expected last_read_date 2025-07-16, got %v", prop.LastReadDate)
+		}
+	})
+
+	t.Run("bootstrap read status updates read date when target read date differs with adoptSource", func(t *testing.T) {
+		p := baseParams
+		p.Baseline = nil
+		p.SourceProgress = Progress{Status: "read", Percent: 100, Started: true, FinishedAt: 1752627658} // 2025-07-16
+		oldDate := "2026-01-01"
+		p.TargetStatus = &UserBookStatus{
+			ID:       777,
+			BookID:   501,
+			StatusID: HardcoverStatusRead,
+			UserBookReads: []UserBookReadEntry{
+				{ID: 101, FinishedAt: &oldDate},
+			},
+		}
+
+		propNoAdopt := EvaluateStatus(p)
+		if propNoAdopt.Action != ActionNoOp {
+			t.Fatalf("expected action no-op without adoptSource, got %q", propNoAdopt.Action)
+		}
+
+		p.AdoptSource = true
+		propAdopt := EvaluateStatus(p)
+		if propAdopt.Action != ActionUpdate {
+			t.Fatalf("expected action update with adoptSource, got %q", propAdopt.Action)
+		}
+		if propAdopt.LastReadDate == nil || *propAdopt.LastReadDate != "2025-07-16" {
+			t.Fatalf("expected last read date 2025-07-16, got %v", propAdopt.LastReadDate)
+		}
+	})
+
 	t.Run("convergent agreement when both changed to same status", func(t *testing.T) {
 		p := baseParams
 		p.SourceProgress = Progress{Status: "read", Percent: 100, Started: true}

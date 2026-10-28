@@ -156,3 +156,87 @@ func TestCLIReconcileDryRunAndLiveRun(t *testing.T) {
 		t.Fatalf("expected 1 mutation, got %d", len(tgt.mutations))
 	}
 }
+
+func TestCLIReconcileAdoptSource(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "reconcile_adopt.sqlite")
+	store, err := companion.OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("open store failed: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.Confirm(ctx, companion.Mapping{
+		Provider:      "weread",
+		SourceAccount: "default",
+		BookID:        "999",
+		TargetAccount: "default",
+		WorkID:        101,
+	}, false); err != nil {
+		t.Fatalf("confirm mapping failed: %v", err)
+	}
+
+	src := &cliMultiMockSource{
+		fingerprint: "weread:default",
+		books: map[string]companion.Book{
+			"999": {ID: "999", Title: "Book 1", TranslatorKnown: true},
+		},
+		progresses: map[string]companion.Progress{
+			"999": {Status: "read", FinishedAt: 1740000000}, // 2025-02-19
+		},
+	}
+	wrongDate := "2026-01-01"
+	tgt := &cliMultiMockTarget{
+		fingerprint: "hardcover:default",
+		statuses: map[int64]*companion.UserBookStatus{
+			101: {ID: 1010, BookID: 101, StatusID: 3, UserBookReads: []companion.UserBookReadEntry{{FinishedAt: &wrongDate}}},
+		},
+	}
+
+	// 1. Without --adopt-source: evaluated as no-op because StatusID == 3 matches
+	var outNoAdopt, stderrNoAdopt bytes.Buffer
+	err = run(ctx, []string{
+		"reconcile",
+		"--account", "default",
+		"--target-account", "default",
+		"--db", dbPath,
+	}, &outNoAdopt, &stderrNoAdopt, clients{
+		previewSource: func() (companion.PreviewSource, error) { return src, nil },
+		previewTarget: func() (companion.PreviewTarget, error) { return tgt, nil },
+		applyTarget:   func() (companion.ApplyTarget, error) { return tgt, nil },
+	})
+	if err != nil {
+		t.Fatalf("reconcile without adopt-source failed: %v", err)
+	}
+	var sumNoAdopt companion.ReconcileSummary
+	if err := json.Unmarshal(outNoAdopt.Bytes(), &sumNoAdopt); err != nil {
+		t.Fatalf("decode summary failed: %v", err)
+	}
+	if sumNoAdopt.NoOpCount != 1 || sumNoAdopt.AppliedCount != 0 {
+		t.Fatalf("expected no-op, got %+v", sumNoAdopt)
+	}
+
+	// 2. With --adopt-source: date difference triggers update
+	var outAdopt, stderrAdopt bytes.Buffer
+	err = run(ctx, []string{
+		"reconcile",
+		"--account", "default",
+		"--target-account", "default",
+		"--adopt-source",
+		"--db", dbPath,
+	}, &outAdopt, &stderrAdopt, clients{
+		previewSource: func() (companion.PreviewSource, error) { return src, nil },
+		previewTarget: func() (companion.PreviewTarget, error) { return tgt, nil },
+		applyTarget:   func() (companion.ApplyTarget, error) { return tgt, nil },
+	})
+	if err != nil {
+		t.Fatalf("reconcile with adopt-source failed: %v", err)
+	}
+	var sumAdopt companion.ReconcileSummary
+	if err := json.Unmarshal(outAdopt.Bytes(), &sumAdopt); err != nil {
+		t.Fatalf("decode summary failed: %v", err)
+	}
+	if sumAdopt.AppliedCount != 1 || sumAdopt.NoOpCount != 0 {
+		t.Fatalf("expected applied update with adopt-source, got %+v", sumAdopt)
+	}
+}

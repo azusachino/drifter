@@ -317,7 +317,7 @@ func TestHostBoundaryWithHTTPTestServer(t *testing.T) {
 	}
 	defer owner.Close()
 	server.ownership = owner
-	httpServer := httptest.NewServer(hostAndBrowserBoundary("drifter.test:8081", server.http.Handler))
+	httpServer := httptest.NewServer(hostAndBrowserBoundary("drifter.test:8081", []string{"preview.test:9441", "wildcard-port.test"}, server.http.Handler))
 	defer httpServer.Close()
 	request := func(host string) *http.Response {
 		req, err := http.NewRequest(http.MethodGet, httpServer.URL+"/", nil)
@@ -337,6 +337,16 @@ func TestHostBoundaryWithHTTPTestServer(t *testing.T) {
 		response.Body.Close()
 	}
 	if response := request("drifter.test:8081"); response.StatusCode != http.StatusOK {
+		t.Fatal(response.StatusCode)
+	} else {
+		response.Body.Close()
+	}
+	if response := request("preview.test:9441"); response.StatusCode != http.StatusOK {
+		t.Fatal(response.StatusCode)
+	} else {
+		response.Body.Close()
+	}
+	if response := request("wildcard-port.test:9999"); response.StatusCode != http.StatusOK {
 		t.Fatal(response.StatusCode)
 	} else {
 		response.Body.Close()

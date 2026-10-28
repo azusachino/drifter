@@ -63,8 +63,8 @@ func (app *cliApp) targetStatusCommand() *cobra.Command {
 		if status.Rating != nil {
 			res["rating"] = *status.Rating
 		}
-		if status.Review != "" {
-			res["review"] = status.Review
+		if status.Review != nil && *status.Review != "" {
+			res["review"] = *status.Review
 		}
 		return encodeJSON(c, res)
 	})
@@ -75,6 +75,7 @@ func (app *cliApp) targetSetStatusCommand() *cobra.Command {
 		workID        int64
 		editionID     int64
 		statusRaw     string
+		readDate      string
 		dbPath        string
 		sourceAccount string
 		targetAccount string
@@ -88,6 +89,7 @@ func (app *cliApp) targetSetStatusCommand() *cobra.Command {
 	flags.Int64Var(&workID, "work-id", 0, "target work ID (required)")
 	flags.Int64Var(&editionID, "edition-id", 0, "target edition ID (optional; 0 means work-only)")
 	flags.StringVar(&statusRaw, "status", "", "reading status (required: reading, read, want-to-read, paused, dnf, or 1-5)")
+	flags.StringVar(&readDate, "read-date", "", "optional completion date in YYYY-MM-DD format (used when status is read)")
 	flags.StringVar(&sourceAccount, "source-account", "", "source account namespace (default: default or inferred)")
 	flags.StringVar(&sourceAccount, "account", "", "alias for --source-account")
 	flags.StringVar(&targetAccount, "target-account", "", "target account namespace (default: default or inferred)")
@@ -107,10 +109,15 @@ func (app *cliApp) targetSetStatusCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		var lastReadDate *string
+		if readDate != "" {
+			lastReadDate = &readDate
+		}
 		outcome, err := target.ApplyStatusMutation(c.Context(), companion.StatusMutationRequest{
-			WorkID:    workID,
-			EditionID: editionID,
-			StatusID:  statusID,
+			WorkID:       workID,
+			EditionID:    editionID,
+			StatusID:     statusID,
+			LastReadDate: lastReadDate,
 		})
 		if err != nil {
 			return err

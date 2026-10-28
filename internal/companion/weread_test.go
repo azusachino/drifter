@@ -21,6 +21,11 @@ func testAPI(t *testing.T, handler http.HandlerFunc) *api {
 	return a
 }
 
+func testHardcover(t *testing.T, handler http.HandlerFunc) *Hardcover {
+	t.Helper()
+	return &Hardcover{api: testAPI(t, handler), userID: 183276}
+}
+
 func TestWeReadSearchAndWhitelist(t *testing.T) {
 	w := &WeRead{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer private-test-token" {
@@ -169,6 +174,40 @@ func TestWeReadResolveAccountFingerprint(t *testing.T) {
 			if _, err := w.ResolveAccountFingerprint(context.Background(), bad); err == nil {
 				t.Fatalf("expected error for invalid declared vid %q", bad)
 			}
+		}
+	})
+}
+
+func TestWeReadBookTranslatorHandling(t *testing.T) {
+	t.Run("omitted translator marks translator as known empty", func(t *testing.T) {
+		w := &WeRead{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
+			io.WriteString(rw, `{"bookId":"123","title":"原生中文书","author":"中国作者"}`)
+		})}
+		book, err := w.Book(context.Background(), "123")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !book.TranslatorKnown {
+			t.Fatal("expected TranslatorKnown to be true for book with omitted translator field")
+		}
+		if book.Translator != "" {
+			t.Fatalf("expected empty translator, got %q", book.Translator)
+		}
+	})
+
+	t.Run("provided translator marks translator as known with value", func(t *testing.T) {
+		w := &WeRead{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
+			io.WriteString(rw, `{"bookId":"456","title":"翻译书","author":"外国作者","translator":"译者名"}`)
+		})}
+		book, err := w.Book(context.Background(), "456")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !book.TranslatorKnown {
+			t.Fatal("expected TranslatorKnown to be true for book with translator field")
+		}
+		if book.Translator != "译者名" {
+			t.Fatalf("expected translator '译者名', got %q", book.Translator)
 		}
 	})
 }

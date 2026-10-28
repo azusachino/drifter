@@ -121,6 +121,25 @@ func TestCLITargetSetStatus(t *testing.T) {
 		t.Fatalf("expected status currently reading, got %+v", res)
 	}
 
+	// Verify target set-status with --read-date
+	out.Reset()
+	err = run(ctx, []string{
+		"target", "set-status",
+		"--work-id", "42",
+		"--status", "read",
+		"--read-date", "2025-10-15",
+		"--db", dbPath,
+	}, &out, &stderr, clients{
+		applyTarget: func() (companion.ApplyTarget, error) { return tgt, nil },
+	})
+	if err != nil {
+		t.Fatalf("target set-status with read-date failed: %v", err)
+	}
+	lastMut := tgt.mutations[len(tgt.mutations)-1]
+	if lastMut.LastReadDate == nil || *lastMut.LastReadDate != "2025-10-15" {
+		t.Fatalf("expected last_read_date 2025-10-15, got %v", lastMut.LastReadDate)
+	}
+
 	// Verify local baseline was updated
 	storeRead, err := companion.OpenStoreForRead(dbPath)
 	if err != nil {
@@ -131,9 +150,9 @@ func TestCLITargetSetStatus(t *testing.T) {
 	if err != nil || len(baselines) != 1 {
 		t.Fatalf("failed to list baselines: %v, len=%d", err, len(baselines))
 	}
-	if baselines[0].TargetStatusID != companion.HardcoverStatusCurrentlyReading {
+	if baselines[0].TargetStatusID != companion.HardcoverStatusRead {
 		t.Fatalf("expected updated baseline target_status_id=%d, got %d",
-			companion.HardcoverStatusCurrentlyReading, baselines[0].TargetStatusID)
+			companion.HardcoverStatusRead, baselines[0].TargetStatusID)
 	}
 }
 

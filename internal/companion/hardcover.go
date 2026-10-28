@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/azusachino/drifter/internal/catalog"
@@ -13,11 +15,15 @@ import (
 
 const hardcoverURL = "https://api.hardcover.app/v1/graphql"
 
-type Hardcover struct{ api *api }
+type Hardcover struct {
+	api    *api
+	userMu sync.Mutex
+	userID int64
+}
 
 func NewHardcover(token string) (*Hardcover, error) {
 	a, err := newAPI("Hardcover", hardcoverURL, token, 1100*time.Millisecond)
-	return &Hardcover{a}, err
+	return &Hardcover{api: a}, err
 }
 
 func (h *Hardcover) query(ctx context.Context, query string, variables any, target any) error {
@@ -35,7 +41,7 @@ func (h *Hardcover) query(ctx context.Context, query string, variables any, targ
 		return fmt.Errorf("Hardcover query rejected or data missing")
 	}
 	if err := json.Unmarshal(response.Data, target); err != nil {
-		return fmt.Errorf("Hardcover query response has invalid fields")
+		return fmt.Errorf("Hardcover query response has invalid fields: %w", err)
 	}
 	return nil
 }
@@ -133,6 +139,46 @@ type MatchReport struct {
 	CatalogIssues        []catalog.Issue    `json:"catalog_issues,omitempty"`
 }
 
+var titleParenthesesRegex = regexp.MustCompile(`\s*[(（][^()（）]+[)）]\s*$`)
+
+func cleanSearchTitle(title string) string {
+	cleaned := strings.TrimSpace(title)
+	for {
+		stripped := titleParenthesesRegex.ReplaceAllString(cleaned, "")
+		stripped = strings.TrimSpace(stripped)
+		if stripped == cleaned || stripped == "" {
+			break
+		}
+		cleaned = stripped
+	}
+	return cleaned
+}
+
+func (h *Hardcover) searchIDs(ctx context.Context, term string) ([]int64, error) {
+	var response struct {
+		Search *struct {
+			IDs   []int64 `json:"ids"`
+			Error *string `json:"error"`
+		} `json:"search"`
+	}
+	if err := h.query(ctx, `query Search($term: String!) { search(query: $term, query_type: "Book", per_page: 10, page: 1) {ids error} }`, map[string]any{"term": term}, &response); err != nil {
+		return nil, err
+	}
+	if response.Search == nil || (response.Search.Error != nil && *response.Search.Error != "") {
+		return nil, fmt.Errorf("Hardcover search failed")
+	}
+	ids := response.Search.IDs
+	if len(ids) > 10 {
+		return nil, fmt.Errorf("Hardcover search exceeded requested limit")
+	}
+	for _, id := range ids {
+		if id <= 0 {
+			return nil, fmt.Errorf("Hardcover returned invalid work identity")
+		}
+	}
+	return ids, nil
+}
+
 func (h *Hardcover) Match(ctx context.Context, book Book, search string) (MatchReport, error) {
 	report := MatchReport{Book: book, ISBNState: "missing", Resolution: "unresolved", ExactEditions: []Edition{}, Candidates: []Candidate{}, SearchLimit: 10, RequiresConfirmation: true}
 	if book.ISBN != "" {
@@ -173,25 +219,18 @@ func (h *Hardcover) Match(ctx context.Context, book Book, search string) (MatchR
 		return report, fmt.Errorf("search query required (maximum 1024 bytes)")
 	}
 	report.SearchQuery = search
-	var response struct {
-		Search *struct {
-			IDs   []int64 `json:"ids"`
-			Error *string `json:"error"`
-		} `json:"search"`
-	}
-	if err := h.query(ctx, `query Search($term: String!) { search(query: $term, query_type: "Book", per_page: 10, page: 1) {ids error} }`, map[string]any{"term": search}, &response); err != nil {
+
+	ids, err := h.searchIDs(ctx, search)
+	if err != nil {
 		return report, err
 	}
-	if response.Search == nil || (response.Search.Error != nil && *response.Search.Error != "") {
-		return report, fmt.Errorf("Hardcover search failed")
-	}
-	ids := response.Search.IDs
-	if len(ids) > 10 {
-		return report, fmt.Errorf("Hardcover search exceeded requested limit")
-	}
-	for _, id := range ids {
-		if id <= 0 {
-			return report, fmt.Errorf("Hardcover returned invalid work identity")
+	if len(ids) == 0 && search == book.Title {
+		if cleaned := cleanSearchTitle(search); cleaned != "" && cleaned != search {
+			cleanIDs, err := h.searchIDs(ctx, cleaned)
+			if err == nil && len(cleanIDs) > 0 {
+				ids = cleanIDs
+				report.SearchQuery = cleaned
+			}
 		}
 	}
 	if len(ids) == 0 {
@@ -249,17 +288,23 @@ func (h *Hardcover) ValidateLink(ctx context.Context, workID, editionID int64) e
 	return nil
 }
 
-// ResolveAccountFingerprint queries the authenticated Hardcover user and returns its stable identity fingerprint.
-func (h *Hardcover) ResolveAccountFingerprint(ctx context.Context) (string, error) {
+// GetUserID queries and caches the authenticated user ID on Hardcover.
+func (h *Hardcover) GetUserID(ctx context.Context) (int64, error) {
+	h.userMu.Lock()
+	defer h.userMu.Unlock()
+	if h.userID > 0 {
+		return h.userID, nil
+	}
+
 	var response struct {
 		Me json.RawMessage `json:"me"`
 	}
 	q := `query Me { me { id username } }`
 	if err := h.query(ctx, q, nil, &response); err != nil {
-		return "", err
+		return 0, err
 	}
 	if len(response.Me) == 0 || string(response.Me) == "null" {
-		return "", fmt.Errorf("Hardcover user identity missing or invalid in query response")
+		return 0, fmt.Errorf("Hardcover user identity missing or invalid in query response")
 	}
 
 	// Try unmarshaling as array (live GraphQL query)
@@ -269,9 +314,10 @@ func (h *Hardcover) ResolveAccountFingerprint(ctx context.Context) (string, erro
 	}
 	if err := json.Unmarshal(response.Me, &meList); err == nil && len(meList) > 0 {
 		if meList[0].ID <= 0 {
-			return "", fmt.Errorf("Hardcover user identity missing or invalid in query response")
+			return 0, fmt.Errorf("Hardcover user identity missing or invalid in query response")
 		}
-		return fmt.Sprintf("hardcover:%d", meList[0].ID), nil
+		h.userID = meList[0].ID
+		return h.userID, nil
 	}
 
 	// Try unmarshaling as single object
@@ -280,8 +326,18 @@ func (h *Hardcover) ResolveAccountFingerprint(ctx context.Context) (string, erro
 		Username string `json:"username"`
 	}
 	if err := json.Unmarshal(response.Me, &meObj); err == nil && meObj.ID > 0 {
-		return fmt.Sprintf("hardcover:%d", meObj.ID), nil
+		h.userID = meObj.ID
+		return h.userID, nil
 	}
 
-	return "", fmt.Errorf("Hardcover user identity missing or invalid in query response")
+	return 0, fmt.Errorf("Hardcover user identity missing or invalid in query response")
+}
+
+// ResolveAccountFingerprint queries the authenticated Hardcover user and returns its stable identity fingerprint.
+func (h *Hardcover) ResolveAccountFingerprint(ctx context.Context) (string, error) {
+	id, err := h.GetUserID(ctx)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("hardcover:%d", id), nil
 }

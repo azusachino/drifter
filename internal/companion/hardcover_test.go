@@ -10,7 +10,7 @@ import (
 )
 
 func TestHardcoverMatchRequiresConfirmation(t *testing.T) {
-	h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+	h := testHardcover(t, func(rw http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Query string `json:"query"`
 		}
@@ -25,17 +25,35 @@ func TestHardcoverMatchRequiresConfirmation(t *testing.T) {
 		default:
 			t.Errorf("unexpected query %s", body.Query)
 		}
-	})}
+	})
 	r, err := h.Match(context.Background(), Book{Title: "中文", ISBN: "9787512523821"}, "English candidate")
 	if err != nil || r.Resolution != "work_candidates" || !r.RequiresConfirmation || len(r.Candidates) != 2 || r.Candidates[0].ID != 2 {
 		t.Fatalf("%+v %v", r, err)
 	}
 }
 
+func TestCleanSearchTitle(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"克拉拉与太阳（彩虹版石黑一雄作品）", "克拉拉与太阳"},
+		{"长安的荔枝（同名影视原著）", "长安的荔枝"},
+		{"生命的礼物 (关于爱)", "生命的礼物"},
+		{"Normal Book Title", "Normal Book Title"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := cleanSearchTitle(tc.input); got != tc.want {
+			t.Errorf("cleanSearchTitle(%q) = %q; want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestDuplicateISBNIsAmbiguous(t *testing.T) {
-	h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
+	h := testHardcover(t, func(rw http.ResponseWriter, _ *http.Request) {
 		io.WriteString(rw, `{"data":{"editions":[{"id":1,"book_id":2},{"id":3,"book_id":4}]}}`)
-	})}
+	})
 	r, err := h.Match(context.Background(), Book{ISBN: "0593716965"}, "")
 	if err != nil || r.Resolution != "ambiguous_identifier" || !r.RequiresConfirmation {
 		t.Fatalf("%+v %v", r, err)
@@ -44,13 +62,13 @@ func TestDuplicateISBNIsAmbiguous(t *testing.T) {
 
 func TestMissingAndInvalidISBNDoNotInventMatch(t *testing.T) {
 	for _, isbn := range []string{"", "B0768ZM5QH", "9787512523822"} {
-		h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+		h := testHardcover(t, func(rw http.ResponseWriter, r *http.Request) {
 			body, _ := io.ReadAll(r.Body)
 			if strings.Contains(string(body), "query Exact") {
 				t.Error("invalid exact lookup")
 			}
 			io.WriteString(rw, `{"data":{"search":{"ids":[],"error":null}}}`)
-		})}
+		})
 		r, err := h.Match(context.Background(), Book{Title: "book", ISBN: isbn}, "")
 		if err != nil || r.Resolution != "unresolved" || len(r.Candidates) != 0 {
 			t.Fatalf("%+v %v", r, err)
@@ -60,7 +78,7 @@ func TestMissingAndInvalidISBNDoNotInventMatch(t *testing.T) {
 
 func TestHardcoverRejectsGraphQLAndActionErrors(t *testing.T) {
 	for _, body := range []string{`{"errors":[{"message":"private-test-token"}]}`, `{"data":null}`, `{"data":{"search":{"error":"private-test-token"}}}`} {
-		h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) { io.WriteString(rw, body) })}
+		h := testHardcover(t, func(rw http.ResponseWriter, _ *http.Request) { io.WriteString(rw, body) })
 		_, err := h.Match(context.Background(), Book{Title: "book"}, "")
 		if err == nil || strings.Contains(err.Error(), "private-test-token") {
 			t.Fatalf("unsafe error %v", err)
@@ -69,14 +87,14 @@ func TestHardcoverRejectsGraphQLAndActionErrors(t *testing.T) {
 }
 
 func TestValidateEditionMembership(t *testing.T) {
-	h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+	h := testHardcover(t, func(rw http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if strings.Contains(string(body), "query Edition") {
 			io.WriteString(rw, `{"data":{"editions":[]}}`)
 		} else {
 			io.WriteString(rw, `{"data":{"books":[{"id":2}]}}`)
 		}
-	})}
+	})
 	if err := h.ValidateLink(context.Background(), 2, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +109,7 @@ func TestValidateEditionMembership(t *testing.T) {
 // A review-selected query is an override for title search, not native ISBN evidence.
 func TestMatchSelectedQueryPreservesExactISBNShortCircuit(t *testing.T) {
 	calls := 0
-	target := &Hardcover{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+	target := testHardcover(t, func(rw http.ResponseWriter, r *http.Request) {
 		calls++
 		var body struct {
 			Query string `json:"query"`
@@ -103,7 +121,7 @@ func TestMatchSelectedQueryPreservesExactISBNShortCircuit(t *testing.T) {
 			t.Errorf("selected query bypassed ISBN: %s", body.Query)
 		}
 		io.WriteString(rw, `{"data":{"editions":[{"id":88,"book_id":77}]}}`)
-	})}
+	})
 	report, err := MatchWithOptions(context.Background(), isbnHintSource{}, target, "42", "Selected original title", MatchOptions{ExpectedAuthor: "Selected author"})
 	if err != nil || calls != 1 || len(report.ExactEditions) != 1 || report.ExactEditions[0].ID != 88 || len(report.Candidates) != 0 || report.SearchQuery != "" || !report.RequiresConfirmation {
 		t.Fatalf("calls=%d report=%+v err=%v", calls, report, err)
@@ -118,7 +136,7 @@ func (isbnHintSource) Book(context.Context, string) (Book, error) {
 
 func TestHardcoverResolveAccountFingerprint(t *testing.T) {
 	t.Run("resolves valid user ID", func(t *testing.T) {
-		h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+		h := &Hardcover{api: testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
 			var body struct {
 				Query string `json:"query"`
 			}
@@ -135,7 +153,7 @@ func TestHardcoverResolveAccountFingerprint(t *testing.T) {
 	})
 
 	t.Run("rejects missing user ID", func(t *testing.T) {
-		h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
+		h := &Hardcover{api: testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
 			io.WriteString(rw, `{"data":{"me":null}}`)
 		})}
 		if _, err := h.ResolveAccountFingerprint(context.Background()); err == nil {
@@ -144,7 +162,7 @@ func TestHardcoverResolveAccountFingerprint(t *testing.T) {
 	})
 
 	t.Run("rejects zero or negative user ID", func(t *testing.T) {
-		h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
+		h := &Hardcover{api: testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
 			io.WriteString(rw, `{"data":{"me":{"id":0,"username":"reader"}}}`)
 		})}
 		if _, err := h.ResolveAccountFingerprint(context.Background()); err == nil {

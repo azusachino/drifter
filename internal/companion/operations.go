@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/azusachino/drifter/internal/catalog"
@@ -161,10 +162,17 @@ func MatchWithOptions(ctx context.Context, source Source, target Target, id, que
 	return report, nil
 }
 
+var authorNationalityPrefixRegex = regexp.MustCompile(`^\[[^\]]+\]\s*`)
+
+func cleanAuthorPrefix(author string) string {
+	return strings.TrimSpace(authorNationalityPrefixRegex.ReplaceAllString(author, ""))
+}
+
 func candidateHasAuthor(candidate Candidate, expected string) bool {
+	cleanExp := cleanAuthorPrefix(expected)
 	for _, contribution := range candidate.Contributions {
 		name := strings.Join(strings.Fields(contribution.Author.Name), " ")
-		if name != "" && strings.EqualFold(name, expected) {
+		if name != "" && (strings.EqualFold(name, expected) || (cleanExp != "" && strings.EqualFold(name, cleanExp))) {
 			return true
 		}
 	}

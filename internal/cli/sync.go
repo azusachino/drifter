@@ -37,6 +37,7 @@ func (app *cliApp) syncCommand() *cobra.Command {
 		sourceVID     string
 		allowPrivate  bool
 		dryRun        bool
+		adoptSource   bool
 	)
 
 	command := &cobra.Command{
@@ -56,6 +57,7 @@ func (app *cliApp) syncCommand() *cobra.Command {
 	flags.StringVar(&sourceVID, "source-vid", os.Getenv("WEREAD_VID"), "declared source user VID for account fingerprint binding")
 	flags.BoolVar(&allowPrivate, "allow-private", false, "allow synchronizing private reading status")
 	flags.BoolVar(&dryRun, "dry-run", false, "evaluate and preview status sync proposal without mutating target")
+	flags.BoolVar(&adoptSource, "adopt-source", false, "resolve first-sync bootstrap conflict by updating target to match source progress")
 
 	markRequiredFlags(command, "book-id")
 
@@ -113,6 +115,7 @@ func (app *cliApp) syncCommand() *cobra.Command {
 					PolicyVersion:     policyVersion,
 					AllowPrivateSync:  allowPrivate,
 					DeclaredSourceVID: sourceVID,
+					AdoptSource:       adoptSource,
 					Now:               now,
 				},
 			)
@@ -140,6 +143,7 @@ func (app *cliApp) syncCommand() *cobra.Command {
 				PolicyVersion:     policyVersion,
 				AllowPrivateSync:  allowPrivate,
 				DeclaredSourceVID: sourceVID,
+				AdoptSource:       adoptSource,
 				Now:               now,
 			},
 		)

@@ -19,7 +19,7 @@ func TestHardcoverStatusMutationTransitions(t *testing.T) {
 		userBook *UserBookStatus
 	}{}
 
-	h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+	h := testHardcover(t, func(rw http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Query     string         `json:"query"`
 			Variables map[string]any `json:"variables"`
@@ -50,13 +50,14 @@ func TestHardcoverStatusMutationTransitions(t *testing.T) {
 			}
 			statusID := int(obj["status_id"].(float64))
 			bookID := int64(obj["book_id"].(float64))
-			ratingVal := 5
+			ratingVal := 5.0
+			reviewVal := "user notes must stay untouched"
 			state.userBook = &UserBookStatus{
 				ID:       101,
 				BookID:   bookID,
 				StatusID: statusID,
 				Rating:   &ratingVal,
-				Review:   "user notes must stay untouched",
+				Review:   &reviewVal,
 			}
 			io.WriteString(rw, `{"data":{"insert_user_book":{"id":101,"status_id":1,"error":null,"user_book":{"id":101,"status_id":1}}}}`)
 
@@ -88,7 +89,7 @@ func TestHardcoverStatusMutationTransitions(t *testing.T) {
 		default:
 			t.Errorf("unexpected query/mutation: %s", body.Query)
 		}
-	})}
+	})
 
 	ctx := context.Background()
 
@@ -152,8 +153,8 @@ func TestHardcoverStatusMutationTransitions(t *testing.T) {
 		t.Fatalf("unexpected res4: %+v", res4)
 	}
 	// Verify user book rating, review, and prior read logs are preserved
-	if *state.userBook.Rating != 5 || state.userBook.Review != "user notes must stay untouched" {
-		t.Fatalf("user metadata overwritten! rating=%v review=%q", state.userBook.Rating, state.userBook.Review)
+	if *state.userBook.Rating != 5.0 || state.userBook.Review == nil || *state.userBook.Review != "user notes must stay untouched" {
+		t.Fatalf("user metadata overwritten! rating=%v review=%v", state.userBook.Rating, state.userBook.Review)
 	}
 	if len(state.userBook.UserBookReads) != 1 || state.userBook.UserBookReads[0].ID != 501 {
 		t.Fatalf("user_book_reads corrupted: %+v", state.userBook.UserBookReads)
@@ -162,7 +163,7 @@ func TestHardcoverStatusMutationTransitions(t *testing.T) {
 
 func TestHardcoverStatusMutationIdempotentNoOp(t *testing.T) {
 	mutationCalls := 0
-	h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+	h := testHardcover(t, func(rw http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Query string `json:"query"`
 		}
@@ -180,7 +181,7 @@ func TestHardcoverStatusMutationIdempotentNoOp(t *testing.T) {
 			return
 		}
 		t.Errorf("unexpected query: %s", body.Query)
-	})}
+	})
 
 	res, err := h.ApplyStatusMutation(context.Background(), StatusMutationRequest{WorkID: 99, StatusID: HardcoverStatusRead})
 	if err != nil {
@@ -198,9 +199,9 @@ func TestHardcoverStatusMutationIdempotentNoOp(t *testing.T) {
 }
 
 func TestHardcoverStatusMutationRejectsUnapprovedFields(t *testing.T) {
-	h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
+	h := testHardcover(t, func(rw http.ResponseWriter, _ *http.Request) {
 		t.Fatal("no network call should be sent when variables contain unapproved fields")
-	})}
+	})
 
 	unapprovedVars := []map[string]any{
 		{"rating": 5, "id": 1, "status_id": 2},
@@ -219,7 +220,7 @@ func TestHardcoverStatusMutationRejectsUnapprovedFields(t *testing.T) {
 }
 
 func TestHardcoverStatusMutationUncertainTimeoutHold(t *testing.T) {
-	h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
+	h := testHardcover(t, func(rw http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Query string `json:"query"`
 		}
@@ -231,7 +232,7 @@ func TestHardcoverStatusMutationUncertainTimeoutHold(t *testing.T) {
 		// Return 504 Gateway Timeout during mutation
 		rw.WriteHeader(http.StatusGatewayTimeout)
 		io.WriteString(rw, `Gateway Timeout`)
-	})}
+	})
 
 	_, err := h.ApplyStatusMutation(context.Background(), StatusMutationRequest{WorkID: 88, StatusID: HardcoverStatusCurrentlyReading})
 	if err == nil || !errors.Is(err, ErrUncertainStatusMutation) {
@@ -240,9 +241,9 @@ func TestHardcoverStatusMutationUncertainTimeoutHold(t *testing.T) {
 }
 
 func TestHardcoverStatusMutationValidation(t *testing.T) {
-	h := &Hardcover{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) {
+	h := testHardcover(t, func(rw http.ResponseWriter, _ *http.Request) {
 		t.Fatal("no network call should be made on validation failure")
-	})}
+	})
 
 	ctx := context.Background()
 
@@ -306,5 +307,90 @@ func TestParseHardcoverStatus(t *testing.T) {
 		if _, err := ParseHardcoverStatus(bad); err == nil || !errors.Is(err, ErrInvalidStatus) {
 			t.Errorf("ParseHardcoverStatus(%q) expected ErrInvalidStatus, got err=%v", bad, err)
 		}
+	}
+}
+
+func TestHardcoverStatusMutationWithLastReadDate(t *testing.T) {
+	var observedDate string
+	var readMutationCalled bool
+	h := testHardcover(t, func(rw http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		trimmed := strings.TrimSpace(body.Query)
+		switch {
+		case strings.HasPrefix(trimmed, "query UserBook"):
+			io.WriteString(rw, `{"data":{"user_books":[]}}`)
+		case strings.HasPrefix(trimmed, "mutation InsertUserBook"):
+			if obj, ok := body.Variables["object"].(map[string]any); ok {
+				if lrd, ok := obj["last_read_date"].(string); ok {
+					observedDate = lrd
+				}
+			}
+			// Hardcover creates a user_book_read with today's date automatically
+			io.WriteString(rw, `{"data":{"insert_user_book":{"id":200,"status_id":3,"user_book":{"id":200,"status_id":3,"user_book_reads":[{"id":301,"finished_at":"2026-10-28"}]}}}}`)
+		case strings.HasPrefix(trimmed, "mutation UpdateRead"):
+			readMutationCalled = true
+			if obj, ok := body.Variables["object"].(map[string]any); ok {
+				if fin, ok := obj["finished_at"].(string); ok {
+					observedDate = fin
+				}
+			}
+			io.WriteString(rw, `{"data":{"update_user_book_read":{"id":301,"error":null,"user_book_read":{"id":301,"finished_at":"`+observedDate+`"}}}}`)
+		default:
+			t.Errorf("unexpected query: %s", body.Query)
+		}
+	})
+
+	date := "2025-07-16"
+	res, err := h.ApplyStatusMutation(context.Background(), StatusMutationRequest{
+		WorkID:       42,
+		StatusID:     HardcoverStatusRead,
+		LastReadDate: &date,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.CurrentStatus != HardcoverStatusRead || res.UserBookID != 200 {
+		t.Fatalf("unexpected outcome: %+v", res)
+	}
+	if observedDate != "2025-07-16" {
+		t.Fatalf("expected last_read_date 2025-07-16, got %q", observedDate)
+	}
+	if !readMutationCalled {
+		t.Fatal("expected update_user_book_read mutation to be called to correct read date")
+	}
+}
+
+func TestGetUserBookStatusFiltersByAuthenticatedUserID(t *testing.T) {
+	var observedVars map[string]any
+	h := testHardcover(t, func(rw http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if strings.HasPrefix(strings.TrimSpace(body.Query), "query UserBook") {
+			observedVars = body.Variables
+			io.WriteString(rw, `{"data":{"user_books":[{"id":555,"book_id":42,"status_id":3}]}}`)
+			return
+		}
+		t.Errorf("unexpected query: %s", body.Query)
+	})
+
+	status, err := h.GetUserBookStatus(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status == nil || status.ID != 555 {
+		t.Fatalf("unexpected status result: %+v", status)
+	}
+	if observedVars["work"] != float64(42) {
+		t.Fatalf("expected work variable 42, got %v", observedVars["work"])
+	}
+	if observedVars["user_id"] != float64(183276) {
+		t.Fatalf("expected user_id variable 183276, got %v", observedVars["user_id"])
 	}
 }
