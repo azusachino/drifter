@@ -97,8 +97,9 @@ func TestShelfCompletenessAndInvalidFields(t *testing.T) {
 		fail, complete bool
 	}{
 		{`{"books":[],"bookCount":0}`, false, true},
-		{`{"books":[]}`, false, false},
+		{`{"books":[]}`, false, true},
 		{`{"books":[],"bookCount":1}`, false, false},
+		{`{"books":[],"hasMore":1}`, false, false},
 		{`{"books":[],"bookCount":0,"hasMore":1}`, false, false},
 		{`{"books":[],"bookCount":-1}`, true, false},
 		{`{"books":[],"hasMore":2}`, true, false},

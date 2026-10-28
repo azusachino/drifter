@@ -62,7 +62,7 @@ func (w *WeRead) Shelf(ctx context.Context) (ShelfResult, error) {
 		}
 		seen[book.ID] = true
 	}
-	complete := response.Count != nil && *response.Count == len(response.Books) &&
+	complete := (response.Count == nil || *response.Count == len(response.Books)) &&
 		(response.HasMore == nil || *response.HasMore == 0)
 	return ShelfResult{Books: response.Books, Complete: complete}, nil
 }
