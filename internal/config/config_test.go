@@ -150,3 +150,69 @@ func TestEmptyPathRejected(t *testing.T) {
 		t.Fatal("empty path accepted")
 	}
 }
+
+func TestLoadISBNConfiguration(t *testing.T) {
+	t.Run("default-values", func(t *testing.T) {
+		cfg := Defaults()
+		if cfg.Matching.ISBN.Enabled || cfg.Matching.ISBN.Provider != "default" {
+			t.Fatalf("unexpected default ISBN config: %+v", cfg.Matching.ISBN)
+		}
+	})
+
+	t.Run("custom-valid", func(t *testing.T) {
+		content := `[matching.isbn]
+enabled = true
+provider = "custom"
+url = "https://isbn.example.com/books/{isbn}"
+`
+		cfg, err := Load(write(t, content))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !cfg.Matching.ISBN.Enabled || cfg.Matching.ISBN.Provider != "custom" || cfg.Matching.ISBN.URL != "https://isbn.example.com/books/{isbn}" {
+			t.Fatalf("unexpected ISBN config: %+v", cfg.Matching.ISBN)
+		}
+	})
+
+	t.Run("douban-and-disabled", func(t *testing.T) {
+		content := `[matching.isbn]
+enabled = false
+provider = "douban"
+`
+		cfg, err := Load(write(t, content))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.Matching.ISBN.Enabled || cfg.Matching.ISBN.Provider != "douban" {
+			t.Fatalf("unexpected ISBN config: %+v", cfg.Matching.ISBN)
+		}
+	})
+}
+
+func TestLoadRejectsInvalidISBNConfiguration(t *testing.T) {
+	cases := map[string]string{
+		"unknown-provider": `[matching.isbn]
+provider = "invalid-provider"
+`,
+		"custom-missing-url": `[matching.isbn]
+provider = "custom"
+url = ""
+`,
+		"custom-url-no-placeholder": `[matching.isbn]
+provider = "custom"
+url = "https://isbn.example.com/lookup"
+`,
+		"custom-url-invalid-scheme": `[matching.isbn]
+provider = "custom"
+url = "ftp://isbn.example.com/{isbn}"
+`,
+	}
+
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(write(t, content)); err == nil {
+				t.Fatalf("invalid ISBN config accepted: %s", name)
+			}
+		})
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/azusachino/drifter/internal/catalog"
+	"github.com/azusachino/drifter/internal/isbn"
 )
 
 const hardcoverURL = "https://api.hardcover.app/v1/graphql"
@@ -137,6 +138,7 @@ type MatchReport struct {
 	CatalogHints         []CatalogHint      `json:"catalog_hints,omitempty"`
 	CatalogConflicts     []CatalogConflict  `json:"catalog_conflicts,omitempty"`
 	CatalogIssues        []catalog.Issue    `json:"catalog_issues,omitempty"`
+	ISBNMetadata         *isbn.Metadata     `json:"isbn_metadata,omitempty"`
 }
 
 var titleParenthesesRegex = regexp.MustCompile(`\s*[(（][^()（）]+[)）]\s*$`)

@@ -15,6 +15,7 @@ import (
 	"github.com/azusachino/drifter/internal/catalog"
 	"github.com/azusachino/drifter/internal/companion"
 	"github.com/azusachino/drifter/internal/config"
+	"github.com/azusachino/drifter/internal/isbn"
 	"github.com/spf13/cobra"
 )
 
@@ -51,6 +52,7 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		isbnProvider := isbn.NewProviderFromConfig(cfg.Matching.ISBN)
 		if strings.TrimSpace(cfg.Database.Path) != "" {
 			dbPath = cfg.Database.Path
 		}
@@ -203,7 +205,11 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 							targetClient, sourceErr := loadTarget()
 							var report companion.MatchReport
 							if sourceErr == nil {
-								report, sourceErr = companion.MatchWithOptions(lookupCtx, source, targetClient, book.ID, query, companion.MatchOptions{CatalogLoader: loader, ExpectedAuthor: expectedAuthor})
+								report, sourceErr = companion.MatchWithOptions(lookupCtx, source, targetClient, book.ID, query, companion.MatchOptions{
+									CatalogLoader:  loader,
+									ISBNProvider:   isbnProvider,
+									ExpectedAuthor: expectedAuthor,
+								})
 							}
 							cancel()
 							if sourceErr != nil {
@@ -216,6 +222,19 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 							}
 							if report.CatalogsComplete != nil && !*report.CatalogsComplete {
 								catalogsIncomplete = true
+							}
+							if report.ISBNMetadata != nil && (report.ISBNMetadata.OriginalTitle != "" || report.ISBNMetadata.Author != "") {
+								var details []string
+								if report.ISBNMetadata.OriginalTitle != "" {
+									details = append(details, fmt.Sprintf("original title: %s", terminalText(report.ISBNMetadata.OriginalTitle)))
+								}
+								if report.ISBNMetadata.OriginalAuthor != "" {
+									details = append(details, fmt.Sprintf("author: %s", terminalText(report.ISBNMetadata.OriginalAuthor)))
+								}
+								if report.ISBNMetadata.Publisher != "" {
+									details = append(details, fmt.Sprintf("publisher: %s", terminalText(report.ISBNMetadata.Publisher)))
+								}
+								fmt.Fprintf(c.OutOrStdout(), "ISBN %s (%s): %s\n", report.ISBNMetadata.ISBN, report.ISBNMetadata.Source, strings.Join(details, ", "))
 							}
 							showReviewCatalogs(c.OutOrStdout(), report)
 							candidates := report.Candidates

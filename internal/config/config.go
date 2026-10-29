@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,13 @@ const (
 	LevelWarn  Level = "warn"
 	LevelError Level = "error"
 )
+
+// ISBNConfig configures authoritative ISBN metadata provider lookups.
+type ISBNConfig struct {
+	Enabled  bool   `toml:"enabled"`
+	Provider string `toml:"provider"`
+	URL      string `toml:"url"`
+}
 
 // Config is the complete validated settings file. Zero values become
 // documented defaults in Load.
@@ -49,6 +57,7 @@ type Config struct {
 	} `toml:"database"`
 	Matching struct {
 		Catalogs []catalog.Subscription `toml:"catalogs"`
+		ISBN     ISBNConfig             `toml:"isbn"`
 	} `toml:"matching"`
 }
 
@@ -59,6 +68,8 @@ func Defaults() Config {
 	c.Probes.Enabled = false
 	c.Probes.Addr = "127.0.0.1:8080"
 	c.Server.Addr = "127.0.0.1:8081"
+	c.Matching.ISBN.Enabled = false
+	c.Matching.ISBN.Provider = "default"
 	return c
 }
 
@@ -156,6 +167,20 @@ func (c Config) validate() error {
 	}
 	if err := catalog.ValidateSubscriptions(c.Matching.Catalogs); err != nil {
 		return err
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Matching.ISBN.Provider)) {
+	case "", "default", "douban", "openlibrary", "custom":
+	default:
+		return fmt.Errorf("matching.isbn.provider must be one of default, douban, openlibrary, custom")
+	}
+	if strings.ToLower(strings.TrimSpace(c.Matching.ISBN.Provider)) == "custom" {
+		if strings.TrimSpace(c.Matching.ISBN.URL) == "" || !strings.Contains(c.Matching.ISBN.URL, "{isbn}") {
+			return fmt.Errorf("matching.isbn.url must contain {isbn} when provider is custom")
+		}
+		u, err := url.Parse(c.Matching.ISBN.URL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("matching.isbn.url must be a valid http or https URL")
+		}
 	}
 	return nil
 }
