@@ -91,6 +91,12 @@ allowed_hosts = ["localhost:8081"]  # optional additional host header allowlist
 [[matching.catalogs]]
 id = "local-crosswalk"
 file = "/tmp/drifter-matching-catalog.json"
+
+# Authoritative ISBN metadata resolution (Douban, OpenLibrary, custom).
+[matching.isbn]
+enabled = true
+provider = "default"  # default (Douban + OpenLibrary), douban, openlibrary, custom
+# url = "https://example.com/books/{isbn}"  # required when provider = "custom"
 ```
 
 Credential-like keys (`api_key`, `token`, `secret`, `password`, `credential`)
@@ -269,8 +275,10 @@ bin/drifter search --title 'Book title'
 bin/drifter inspect --book-id 123
 bin/drifter inspect --book-id 123 --progress
 bin/drifter match --book-id 123
+bin/drifter match --book-id 123 --isbn-lookup
 bin/drifter match --book-id 123 --query 'Original-language title'
 bin/drifter match --book-id 123 --config config.toml
+bin/drifter isbn 9787521768527
 bin/drifter pending --account my-weread --target-account my-hardcover
 ```
 
@@ -285,6 +293,26 @@ Matching validates ISBN checksums and checks ISBN-10/13 equivalents first. A
 unique exact edition is still only a proposal; duplicate identifier results are
 ambiguous. Without an exact edition, supply an original-language query when
 appropriate. Title similarity or search ranking never creates a mapping.
+
+### Authoritative ISBN metadata resolution
+
+`drifter isbn <isbn>` queries authoritative external registries for an ISBN:
+
+```sh
+bin/drifter isbn 9787521768527
+bin/drifter isbn 9780134494166 --provider openlibrary
+bin/drifter isbn 9787521768527 --provider custom --url 'https://example.com/books/{isbn}'
+```
+
+Output is JSON reporting `isbn`, `title`, `original_title` (e.g. Douban
+`原作名`), `author`, `original_author`, `translator`, `publisher`, `year`, and
+`source`.
+
+When matching (`match --isbn-lookup` or `[matching.isbn] enabled = true` in
+`config.toml`), if Hardcover returns zero exact editions for a book's ISBN,
+Drifter automatically queries the configured provider. If an authoritative
+original title is resolved, Drifter uses it as the default search query to
+Hardcover, bridging the translation gap for localized editions.
 
 ### Community matching catalogs
 

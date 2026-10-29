@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/azusachino/drifter/internal/catalog"
+	"github.com/azusachino/drifter/internal/isbn"
 )
 
 const (
@@ -72,6 +73,7 @@ func Inspect(ctx context.Context, source Source, id string, progress bool) (Insp
 
 type MatchOptions struct {
 	CatalogLoader *catalog.Loader
+	ISBNProvider  isbn.Provider
 	// ExpectedAuthor optionally moves equal contributor names first without
 	// changing candidate membership or confirming identity. Empty preserves order.
 	ExpectedAuthor string
@@ -86,11 +88,28 @@ func MatchWithOptions(ctx context.Context, source Source, target Target, id, que
 	if err != nil {
 		return MatchReport{}, err
 	}
-	report, err := target.Match(ctx, book, query)
+	var isbnMeta *isbn.Metadata
+	if options.ISBNProvider != nil && book.ISBN != "" {
+		if norm, err := NormalizeISBN(book.ISBN); err == nil {
+			if meta, err := options.ISBNProvider.LookupISBN(ctx, norm); err == nil && meta != nil {
+				isbnMeta = meta
+			}
+		}
+	}
+	effectiveQuery := query
+	if effectiveQuery == "" && isbnMeta != nil && isbnMeta.OriginalTitle != "" {
+		effectiveQuery = isbnMeta.OriginalTitle
+	}
+	expectedAuthor := options.ExpectedAuthor
+	if expectedAuthor == "" && isbnMeta != nil && isbnMeta.OriginalAuthor != "" {
+		expectedAuthor = isbnMeta.OriginalAuthor
+	}
+	report, err := target.Match(ctx, book, effectiveQuery)
 	if err != nil {
 		return MatchReport{}, err
 	}
-	if author := strings.Join(strings.Fields(options.ExpectedAuthor), " "); author != "" && len(report.Candidates) > 1 {
+	report.ISBNMetadata = isbnMeta
+	if author := strings.Join(strings.Fields(expectedAuthor), " "); author != "" && len(report.Candidates) > 1 {
 		matched := make([]Candidate, 0, len(report.Candidates))
 		var unmatched []Candidate
 		for _, candidate := range report.Candidates {

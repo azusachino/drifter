@@ -12,6 +12,7 @@ import (
 	"github.com/azusachino/drifter/internal/catalog"
 	"github.com/azusachino/drifter/internal/companion"
 	"github.com/azusachino/drifter/internal/config"
+	"github.com/azusachino/drifter/internal/isbn"
 	"github.com/spf13/cobra"
 )
 
@@ -116,13 +117,16 @@ come only from WEREAD_API_KEY and HARDCOVER_API_KEY in the process environment.`
 		app.resetBaselineCommand(),
 		app.holdsCommand(),
 		app.clearHoldCommand(),
+		app.isbnCommand(),
 		app.serveProbesCommand(),
 	)
 	return root
 }
 
 func (app *cliApp) command(command *cobra.Command, runE func(*cobra.Command, []string) error) *cobra.Command {
-	command.Args = cobra.NoArgs
+	if command.Args == nil {
+		command.Args = cobra.NoArgs
+	}
 	command.RunE = func(cmd *cobra.Command, args []string) error {
 		err := runE(cmd, args)
 		if err != nil {
@@ -233,10 +237,12 @@ func (app *cliApp) inspectCommand() *cobra.Command {
 
 func (app *cliApp) matchCommand() *cobra.Command {
 	var bookID, query, configPath string
+	var isbnLookup bool
 	command := &cobra.Command{Use: "match", Short: "Suggest Hardcover matches for a WeRead book"}
 	command.Flags().StringVar(&bookID, "book-id", "", "WeRead book ID (required)")
 	command.Flags().StringVar(&query, "query", "", "original-language or alternate title search")
 	command.Flags().StringVar(&configPath, "config", "config.toml", "settings-only TOML path (missing file uses defaults; never credentials)")
+	command.Flags().BoolVar(&isbnLookup, "isbn-lookup", false, "lookup authoritative metadata for the book's ISBN")
 	markRequiredFlags(command, "book-id")
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
 		if !companion.ValidBookID(bookID) {
@@ -258,7 +264,18 @@ func (app *cliApp) matchCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		report, err := companion.MatchWithOptions(cmd.Context(), reader, hardcover, bookID, query, companion.MatchOptions{CatalogLoader: loader})
+		isbnCfg := cfg.Matching.ISBN
+		if isbnLookup {
+			isbnCfg.Enabled = true
+			if isbnCfg.Provider == "" {
+				isbnCfg.Provider = "default"
+			}
+		}
+		isbnProvider := isbn.NewProviderFromConfig(isbnCfg)
+		report, err := companion.MatchWithOptions(cmd.Context(), reader, hardcover, bookID, query, companion.MatchOptions{
+			CatalogLoader: loader,
+			ISBNProvider:  isbnProvider,
+		})
 		if err != nil {
 			return err
 		}

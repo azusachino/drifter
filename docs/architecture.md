@@ -20,6 +20,7 @@ implemented.
 | Mapping store and ownership | `internal/companion/store.go`, `ownership*.go` | Versioned SQLite, private-file validation, schema initialization, confirmed mappings and scoped decisions, sidecar process lock and owned-operation lifetime. |
 | Local HTTP server | `internal/httpserver` | Foreground listener, server-rendered mapping interface, request boundary, read routes and explicit mapping mutations through shared core. |
 | Configuration | `internal/config` | Settings-only TOML with full validation, unknown-key rejection and refusal of credential-like settings. |
+| ISBN metadata resolution | `internal/isbn`, called by `internal/companion` and CLI | Authoritative ISBN lookup (Douban, OpenLibrary, custom URL template) resolving original titles/authors to bridge translation gaps. |
 | Matching catalogs | `internal/catalog`, called by `internal/companion` | Bounded, request-triggered local/HTTPS loading, v1 schema validation, untrusted match evidence, offline local merge and validated output encoding. |
 | Catalog export | `internal/companion/catalog_export.go`, `internal/cli/catalog.go` | Read-only account-filtered projection of confirmed mappings to public v1 assertions; no database creation/migration or provider calls. |
 | Logging and probes | `internal/logging`, `internal/probes` | JSON `slog` output and local `/healthz`/`/readyz` checks. |

@@ -20,6 +20,8 @@ implemented.
   save skip/exclude/not-in-catalog decisions, restart and reset scoped choices.
 - Compare a source book with bounded Hardcover candidates. Candidates are
   suggestions, never automatic matches.
+- Authoritative ISBN metadata resolution (Douban Books, OpenLibrary, custom URL
+  template) to bridge the translation gap for localized editions.
 - Optionally surface user-selected community catalog assertions and title/ISBN
   hints with provenance; they never select or confirm a mapping.
 - Confirm, explicitly replace, list, and unlink local mappings through the CLI
