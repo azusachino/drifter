@@ -45,11 +45,6 @@ type TargetProvider interface {
 	ResolveAccountFingerprint(ctx context.Context) (string, error)
 }
 
-var (
-	_ SourceProvider = (*WeRead)(nil)
-	_ TargetProvider = (*Hardcover)(nil)
-)
-
 type Inspection struct {
 	Book     Book      `json:"book"`
 	Progress *Progress `json:"progress,omitempty"`

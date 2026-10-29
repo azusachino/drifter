@@ -13,8 +13,6 @@ type ApplyTarget interface {
 	ApplyStatusMutation(ctx context.Context, req StatusMutationRequest) (StatusMutationOutcome, error)
 }
 
-var _ ApplyTarget = (*Hardcover)(nil)
-
 // ApplySyncOptions controls execution parameters for applying status sync.
 type ApplySyncOptions struct {
 	PolicyVersion     string

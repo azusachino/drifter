@@ -8,6 +8,8 @@ import (
 	"syscall"
 
 	"github.com/azusachino/drifter/internal/companion"
+	"github.com/azusachino/drifter/internal/provider/hardcover"
+	"github.com/azusachino/drifter/internal/provider/weread"
 	"github.com/azusachino/drifter/internal/server"
 )
 
@@ -15,8 +17,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	providers := server.ProviderFactories{
-		Source: func() (companion.Source, error) { return companion.NewWeRead(os.Getenv("WEREAD_API_KEY")) },
-		Target: func() (companion.Target, error) { return companion.NewHardcover(os.Getenv("HARDCOVER_API_KEY")) },
+		Source: func() (companion.Source, error) { return weread.New(os.Getenv("WEREAD_API_KEY")) },
+		Target: func() (companion.Target, error) { return hardcover.New(os.Getenv("HARDCOVER_API_KEY")) },
 	}
 	if err := server.Run(ctx, os.Args[1:], os.Stdout, os.Stderr, providers); err != nil {
 		fmt.Fprintln(os.Stderr, "drifter-server:", err)

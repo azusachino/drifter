@@ -26,8 +26,9 @@ type ShelfResult struct {
 	Complete bool
 }
 
+// ValidShelfID checks if an ID is valid for shelf storage.
 // Imported IDs are valid shelf identities, not supported link identities.
-func validShelfID(id string) bool {
+func ValidShelfID(id string) bool {
 	if ValidBookID(id) {
 		return true
 	}
@@ -40,31 +41,6 @@ func validShelfID(id string) bool {
 		}
 	}
 	return true
-}
-
-func (w *WeRead) Shelf(ctx context.Context) (ShelfResult, error) {
-	var response struct {
-		Books   []ShelfBook `json:"books"`
-		Count   *int        `json:"bookCount"`
-		HasMore *int        `json:"hasMore"`
-	}
-	if err := w.call(ctx, "/shelf/sync", map[string]any{}, &response); err != nil {
-		return ShelfResult{}, err
-	}
-	if response.Books == nil || (response.Count != nil && *response.Count < 0) ||
-		(response.HasMore != nil && *response.HasMore != 0 && *response.HasMore != 1) {
-		return ShelfResult{}, fmt.Errorf("WeRead shelf fields missing or invalid")
-	}
-	seen := make(map[string]bool, len(response.Books))
-	for _, book := range response.Books {
-		if !validShelfID(book.ID) || seen[book.ID] {
-			return ShelfResult{}, fmt.Errorf("WeRead shelf identity invalid or duplicated")
-		}
-		seen[book.ID] = true
-	}
-	complete := (response.Count == nil || *response.Count == len(response.Books)) &&
-		(response.HasMore == nil || *response.HasMore == 0)
-	return ShelfResult{Books: response.Books, Complete: complete}, nil
 }
 
 type PendingOptions struct {
@@ -135,7 +111,7 @@ func decodePendingCursor(raw string, options PendingOptions) (pendingCursor, err
 	if err != nil || json.Unmarshal(data, &c) != nil {
 		return c, fmt.Errorf("invalid pending cursor")
 	}
-	if c.Version != 1 || c.Days != options.Days || c.Year != options.Year || c.FinishedOnly != options.FinishedOnly || c.SourceAccount != options.SourceAccount || c.TargetAccount != options.TargetAccount || c.IncludePrivate != options.IncludePrivate || c.IncludeImported != options.IncludeImported || c.AsOf <= 0 || c.AsOf > options.Now.Unix() || c.LastOpened <= 0 || c.LastOpened > c.AsOf || !validShelfID(c.BookID) {
+	if c.Version != 1 || c.Days != options.Days || c.Year != options.Year || c.FinishedOnly != options.FinishedOnly || c.SourceAccount != options.SourceAccount || c.TargetAccount != options.TargetAccount || c.IncludePrivate != options.IncludePrivate || c.IncludeImported != options.IncludeImported || c.AsOf <= 0 || c.AsOf > options.Now.Unix() || c.LastOpened <= 0 || c.LastOpened > c.AsOf || !ValidShelfID(c.BookID) {
 		return c, fmt.Errorf("invalid pending cursor")
 	}
 	return c, nil

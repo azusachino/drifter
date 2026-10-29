@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
@@ -14,6 +12,27 @@ import (
 )
 
 func value[T any](v T) *T { return &v }
+
+type pendingReader struct {
+	shelf     ShelfResult
+	shelfHook func()
+	calls     []string
+	lookup    func(string) (Book, error)
+}
+
+func (r *pendingReader) Shelf(context.Context) (ShelfResult, error) {
+	if r.shelfHook != nil {
+		r.shelfHook()
+	}
+	return r.shelf, nil
+}
+func (r *pendingReader) Book(_ context.Context, id string) (Book, error) {
+	r.calls = append(r.calls, id)
+	if r.lookup != nil {
+		return r.lookup(id)
+	}
+	return Book{ID: id, Title: "Synthetic", TranslatorKnown: true}, nil
+}
 
 func TestPendingShelfFiltersBeforeMetadataAndClassifies(t *testing.T) {
 	now := time.Unix(2000000000, 0)
@@ -29,25 +48,18 @@ func TestPendingShelfFiltersBeforeMetadataAndClassifies(t *testing.T) {
 		{ID: "CB_synthetic", Title: "Imported title", LastOpened: value(now.Unix()), Secret: value(0)},
 	}
 	calls := make(chan string, 20)
-	w := &WeRead{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
-		var args map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
-			t.Error(err)
-		}
-		calls <- fmt.Sprint(args["api_name"], ":", args["bookId"])
-		if args["api_name"] == "/shelf/sync" {
-			json.NewEncoder(rw).Encode(map[string]any{"books": books, "bookCount": len(books), "albums": []any{map[string]any{"private": "discard"}}, "mp": map[string]any{"discard": true}})
-			return
-		}
-		if args["api_name"] != "/book/info" {
-			t.Error("unexpected provider operation", args)
-		}
-		translator := ""
-		if args["bookId"] == "123" {
-			translator = "Synthetic translator"
-		}
-		json.NewEncoder(rw).Encode(map[string]any{"bookId": args["bookId"], "title": "Synthetic title", "author": "Synthetic author", "translator": translator, "intro": "raw-intro-do-not-retain"})
-	})}
+	w := &pendingReader{
+		shelf:     ShelfResult{Books: books, Complete: true},
+		shelfHook: func() { calls <- "/shelf/sync:<nil>" },
+		lookup: func(id string) (Book, error) {
+			calls <- fmt.Sprint("/book/info:", id)
+			translator := ""
+			if id == "123" {
+				translator = "Synthetic translator"
+			}
+			return Book{ID: id, Title: "Synthetic title", Author: "Synthetic author", Translator: translator, TranslatorKnown: true}, nil
+		},
+	}
 	mapping := testMapping()
 	mapping.BookID = "128"
 	other := mapping
@@ -89,52 +101,6 @@ func TestPendingShelfFiltersBeforeMetadataAndClassifies(t *testing.T) {
 	if !imported || !private || ValidBookID("CB_synthetic") {
 		t.Fatal("imported/private handling broadened link identity or lost classification")
 	}
-}
-
-func TestShelfCompletenessAndInvalidFields(t *testing.T) {
-	for _, tc := range []struct {
-		body           string
-		fail, complete bool
-	}{
-		{`{"books":[],"bookCount":0}`, false, true},
-		{`{"books":[]}`, false, true},
-		{`{"books":[],"bookCount":1}`, false, false},
-		{`{"books":[],"hasMore":1}`, false, false},
-		{`{"books":[],"bookCount":0,"hasMore":1}`, false, false},
-		{`{"books":[],"bookCount":-1}`, true, false},
-		{`{"books":[],"hasMore":2}`, true, false},
-		{`{"books":null}`, true, false},
-		{`{"books":[{"bookId":"123"},{"bookId":"123"}]}`, true, false},
-		{`{"books":[{"bookId":"CB_"}]}`, true, false},
-		{`{"books":[{"bookId":"CB_unsafe/title"}]}`, true, false},
-		{`{"books":[{"bookId":"123","secret":"private-test-token"}]}`, true, false},
-		{`{"errcode":2,"errmsg":"private-test-token"}`, true, false},
-		{`{"upgrade_info":{"message":"new"},"books":[]}`, true, false},
-	} {
-		w := &WeRead{testAPI(t, func(rw http.ResponseWriter, _ *http.Request) { io.WriteString(rw, tc.body) })}
-		shelf, err := w.Shelf(context.Background())
-		if (err != nil) != tc.fail || err == nil && shelf.Complete != tc.complete {
-			t.Fatalf("%s: %+v %v", tc.body, shelf, err)
-		}
-		if err != nil && strings.Contains(err.Error(), "private-test-token") {
-			t.Fatal("provider body leaked")
-		}
-	}
-}
-
-type pendingReader struct {
-	shelf  ShelfResult
-	calls  []string
-	lookup func(string) (Book, error)
-}
-
-func (r *pendingReader) Shelf(context.Context) (ShelfResult, error) { return r.shelf, nil }
-func (r *pendingReader) Book(_ context.Context, id string) (Book, error) {
-	r.calls = append(r.calls, id)
-	if r.lookup != nil {
-		return r.lookup(id)
-	}
-	return Book{ID: id, Title: "Synthetic", TranslatorKnown: true}, nil
 }
 
 func TestPendingReportsUnknownMetadataAndActivityWithoutRawErrors(t *testing.T) {
@@ -282,15 +248,12 @@ func TestPendingYearAndFinishedOnlyFiltering(t *testing.T) {
 		{ID: "102", Title: "Book 2025 Incomplete", LastOpened: value(t2025), FinishReading: value(0), Secret: value(0)},
 		{ID: "103", Title: "Book 2024 Finished", LastOpened: value(t2024), FinishReading: value(1), Secret: value(0)},
 	}
-	w := &WeRead{testAPI(t, func(rw http.ResponseWriter, r *http.Request) {
-		var args map[string]any
-		json.NewDecoder(r.Body).Decode(&args)
-		if args["api_name"] == "/shelf/sync" {
-			json.NewEncoder(rw).Encode(map[string]any{"books": books, "bookCount": len(books)})
-			return
-		}
-		json.NewEncoder(rw).Encode(map[string]any{"bookId": args["bookId"], "title": "Title", "author": "Author", "translator": ""})
-	})}
+	w := &pendingReader{
+		shelf: ShelfResult{Books: books, Complete: true},
+		lookup: func(id string) (Book, error) {
+			return Book{ID: id, Title: "Title", Author: "Author", TranslatorKnown: true}, nil
+		},
+	}
 
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
