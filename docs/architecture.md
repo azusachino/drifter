@@ -1,260 +1,203 @@
 # Drifter architecture
 
-Drifter is a local companion between WeRead reading data and Hardcover catalog
-identities. The current product is a CLI plus one foreground HTTP server and a
-shared Go core. Both interfaces read the same private SQLite mapping/decision store.
-Provider clients are read-only: a mapping does not authorize status updates.
-Kindle Unlimited intake, status synchronization and deployment are not
-implemented.
+Drifter connects personal reading facts from source services (such as WeRead)
+with destination catalog works and editions on Hardcover. It operates as a local
+companion offering two user-facing interfaces: an interactive command-line tool
+(`drifter`) and a foreground HTTP server (`drifter-server`) providing an
+unauthenticated, server-rendered web dashboard.
+
+Both interfaces sit atop a shared Go core (`internal/companion`) backed by a
+private, versioned SQLite database. Provider integrations follow a clean
+hexagonal (ports and adapters) design.
+
+---
+
+## Architectural model
+
+Drifter decouples the domain model, business rules, and state machine from
+external services using ports and adapters:
+
+```text
+┌────────────────────────────────────────────────────────┐
+│                   Driving Adapters                     │
+│         CLI (Cobra)       │    HTTP Server (Chi)       │
+└───────────────┬───────────────────────────┬────────────┘
+                │                           │
+                ▼                           ▼
+┌────────────────────────────────────────────────────────┐
+│                 Companion Domain Core                  │
+│                                                        │
+│  • Domain Models & Contracts (Source, Target)          │
+│  • Worklist Engine (Pending, Review Decisions)         │
+│  • Matching Engine (Author Partition, Exact Editions)  │
+│  • Three-Way Status Sync & Conflict Evaluator          │
+│  • Two-Phase Intent Ledger & Baseline Tracker          │
+│  • SQLite Storage Engine (Schema v6)                   │
+└───────────────┬───────────────────────────┬────────────┘
+                │                           │
+                ▼                           ▼
+┌────────────────────────────────────────────────────────┐
+│                   Driven Adapters                      │
+│                                                        │
+│  internal/provider/weread   │  internal/provider/      │
+│  (SourceProvider adapter)   │  hardcover (Target)      │
+│ ────────────────────────────┴────────────────────────  │
+│  internal/provider/transport (Rate-limited HTTP)       │
+│  internal/isbn (Douban Books & OpenLibrary Resolvers)  │
+│  internal/catalog (Community Catalog Assertions)       │
+└────────────────────────────────────────────────────────┘
+```
+
+The core (`internal/companion`) has **zero dependencies** on external provider
+packages. Providers import the core package to satisfy interfaces.
+
+---
 
 ## Components
 
-| Component | Location | Responsibility |
+| Component | Package / Path | Responsibility |
 | --- | --- | --- |
-| CLI and wiring | `cmd/cli`, `internal/cli` | Thin CLI executable and Cobra command tree; handlers load strict settings, construct providers lazily, and emit JSON/structured logs or run explicit terminal review. |
-| Server command runner | `cmd/server`, `internal/server` | Thin signal/environment entrypoint and flag/configuration runner for the standalone HTTP server. |
-| Shared feature core | `internal/companion/operations.go`, `pending.go`, `decision.go` | Source/target contracts, matching, explicit confirmation, pending selection, account-scoped local operations and owned writes. |
-| WeRead client | `internal/companion/weread.go` | Read-only shelf, search, book metadata and explicitly requested personal progress. |
-| Hardcover client | `internal/companion/hardcover.go` | Read-only edition lookup, bounded candidate search and work/edition membership validation. |
-| Provider transport | `internal/companion/http.go` | Fixed HTTPS endpoints, no redirects, bounded responses, timeouts, per-client pacing and sanitized errors. |
-| Mapping store and ownership | `internal/companion/store.go`, `ownership*.go` | Versioned SQLite, private-file validation, schema initialization, confirmed mappings and scoped decisions, sidecar process lock and owned-operation lifetime. |
-| Local HTTP server | `internal/httpserver` | Foreground listener, server-rendered mapping interface, request boundary, read routes and explicit mapping mutations through shared core. |
-| Configuration | `internal/config` | Settings-only TOML with full validation, unknown-key rejection and refusal of credential-like settings. |
-| ISBN metadata resolution | `internal/isbn`, called by `internal/companion` and CLI | Authoritative ISBN lookup (Douban, OpenLibrary, custom URL template) resolving original titles/authors to bridge translation gaps. |
-| Matching catalogs | `internal/catalog`, called by `internal/companion` | Bounded, request-triggered local/HTTPS loading, v1 schema validation, untrusted match evidence, offline local merge and validated output encoding. |
-| Catalog export | `internal/companion/catalog_export.go`, `internal/cli/catalog.go` | Read-only account-filtered projection of confirmed mappings to public v1 assertions; no database creation/migration or provider calls. |
-| Logging and probes | `internal/logging`, `internal/probes` | JSON `slog` output and local `/healthz`/`/readyz` checks. |
+| CLI executable | `cmd/cli`, `internal/cli` | Thin executable wiring Cobra commands for terminal review, manual linking, status syncing, and catalog export. |
+| HTTP server daemon | `cmd/server`, `internal/server` | Signal management, configuration loading, and runner for the local web server. |
+| Web dashboard | `internal/httpserver` | Server-rendered, zero-script web admin dashboard (Mappings, Pending, Match, Export, Sync tabs). |
+| Domain core | `internal/companion` | Core models (`Book`, `Progress`, `MatchReport`, `UserBookStatus`), state evaluation, and SQLite persistence. |
+| WeRead provider | `internal/provider/weread` | Intake adapter implementing `companion.SourceProvider` and `companion.PreviewSource`. |
+| Hardcover provider | `internal/provider/hardcover` | Target adapter implementing `companion.TargetProvider`, `companion.PreviewTarget`, and `companion.ApplyTarget`. |
+| HTTP transport | `internal/provider/transport` | Token validation, response caps (2 MiB), pacing gates, and error sanitization. |
+| ISBN resolution | `internal/isbn` | Bibliographic resolution (Douban, OpenLibrary, custom URL) to bridge the translation gap. |
+| Community catalogs | `internal/catalog` | JSON schema validation, offline catalog merge, and untrusted match hints. |
+| SQLite storage | `internal/companion/store.go` | Private SQLite database (schema v6) with process locking, baselines, intents, and audit runs. |
+| Config & logging | `internal/config`, `internal/logging` | Strict TOML validation, `log/slog` structured logs, and standalone health probes. |
 
-## Domain and authority
+---
 
-A source book is identified inside a source account namespace. A target work may
-have multiple editions. `internal/companion` owns validation and mapping
-operations; adapters decode inputs, choose outputs and manage lifetimes. The
-HTTP server does not call the CLI, and the CLI does not make HTTP requests to
-itself.
+## Domain concepts & authority boundaries
 
-The owner selects source account/book, target account/work and either work-only
-or a specific edition. The core fetches the source book and validates target
-existence and edition membership before storing. This proves those records
-exist and are related by the provider; it does not prove literary identity.
-Search results, ISBN uniqueness, or ranking are candidates, never a mapping.
-Replacement must be requested explicitly. Unlink is scoped by both account
-labels and source book ID. Labels are user-chosen namespaces, not authenticated
-provider account IDs.
+1. **Source Book**: A book record identified within an intake source namespace.
+   Two source books with similar titles are distinct.
+2. **Target Work & Edition**: A Hardcover work entity, which contains zero or
+   more specific editions. Drifter supports both work-only and edition-specific
+   links.
+3. **Mapping**: An explicit, confirmed identity relationship between a source
+   book and a target work or edition. A mapping links identity; it does not
+   itself execute status changes without explicit invocation.
+4. **Account Fingerprint**: Cryptographic binding (`weread:<vid>`,
+   `hardcover:<id>`) recorded in SQLite on first run. If credentials change to a
+   different user, Drifter fails closed to prevent cross-account pollution.
+5. **Pending Worklist**: Recently opened books on the source shelf filtered
+   against existing mappings and review exclusions. Cursors scan the live shelf
+   without storing personal reading history.
 
-`PendingWorklist` reads the selected source shelf, filters private/activity and
-already-mapped and suppressing-decision rows before enrichment, and reports
-completeness/issues. Its versioned seek cursor binds the original window, scope,
-inclusion flags and last attempted tuple; each page attempts at most 100
-metadata rows. It does
-not contact Hardcover or write a mapping. Personal progress is fetched only by
-the explicit inspect option and is not stored. Provider status writes and
-synchronization do not exist.
+---
 
-## Data flow
+## Status synchronization lifecycle
 
-The [workflow diagram](diagrams/cli-mapping-workflow.html) remains focused on
-the CLI pending/matching/confirmation sequence and does not yet show the HTTP
-interface. The [HTTP user-story/test map](plans/http-server.md) describes the
-current server behavior and acceptance evidence.
+Drifter's reading status synchronization engine guarantees safety through
+four sequential stages:
 
 ```text
-CLI command ───────┐
-                   ├──▶ shared companion operations ──▶ WeRead read client
-HTTP request ──────┘                  │
-                                      ├──▶ Hardcover read client
-                                      └──▶ private SQLite mappings/decisions
+┌─────────────────────────┐     ┌─────────────────────────┐
+│ 1. Verify Fingerprint   │ ──▶ │ 2. Three-Way Merge      │
+│ Check SQLite account    │     │ Source vs Target vs Base│
+└───────────┬─────────────┘     └───────────┬─────────────┘
+            │                               │
+            ▼                               ▼
+┌─────────────────────────┐     ┌─────────────────────────┐
+│ 3. Two-Phase Intent     │ ──▶ │ 4. Verify & Record      │
+│ Staged intent & mutate  │     │ Read-back & baseline    │
+└─────────────────────────┘     └─────────────────────────┘
 ```
 
-Matching performs bounded exact-edition lookup first, then bounded candidate
-search; configured catalogs load only during the shared core `Match` operation
-and return separate, untrusted assertions and hints. They never confirm a mapping.
-Terminal review may explicitly reuse a hint title
-or author in a new bounded shared match; author equality stable-partitions the
-same candidates without changing exact editions. Standalone matching is
-unchanged. `export` uses a current-schema SQLite read-only
-query filtered by both explicitly supplied account labels and selects only the
-catalog-eligible identity columns; it never creates or migrates state. The
-standalone `merge` operation loads only explicitly named local documents
-through the shared bounded loader and validates the complete output against the
-bundled v1 schema. Neither command contacts providers or mutates personal state.
-Pending reads use WeRead and SQLite only. The local page and mapping list read
-SQLite only; provider construction is lazy and shared by each server instance.
+### 1. Three-way merge evaluation
 
-## CLI and HTTP interfaces
+Before any remote mutation is dispatched, Drifter evaluates the source status,
+current target status, and last known baseline:
 
-`drifter-server` owns one foreground HTTP process, independently of the CLI.
-`cmd/server` wires signals and environment-provided credentials into the
-`internal/server` runner; HTTP routes and templates remain in
-`internal/httpserver`. The default bind is `127.0.0.1:8081`;
-wildcard binds are rejected. The root `GET /` serves an
-embedded server-rendered mapping page. It uses native forms and no browser
-JavaScript asset or frontend build. The page and saved-mapping reads do not
-construct or call providers. Provider-backed requests happen only when a user
-explicitly asks for pending data or confirms/replaces a mapping.
+- **Create**: Target record is absent; propose initializing target status.
+- **No-Op**: Target status already matches source status; zero mutations sent.
+- **Update**: Source reading progress advanced while target remained unchanged
+  since last baseline; propose updating target.
+- **Conflict (Manual Target Edit)**: Target changed on Hardcover while source
+  was unchanged. Drifter refuses to overwrite the manual edit and records a
+  hold.
+- **Conflict (Divergent)**: Both source and target changed to different values.
+- **Hold (Private Book)**: Book is marked private in WeRead; excluded from
+  sync unless `--allow-private` is explicitly set.
 
-| Method and route | Behavior |
-| --- | --- |
-| `GET /`, `HEAD /` | Mapping interface; local store only. |
-| `GET /api/mappings`, `HEAD /api/mappings` | Read-only mapping list. |
-| `GET /api/pending?account=…&target_account=…[&days=N&after=CURSOR]` | Explicit WeRead-backed pending request. |
-| `GET /api/csrf` | Return the process token for a trusted same-origin JSON client. |
-| `POST /api/mappings/confirm` | Strict JSON explicit confirmation. |
-| `POST /api/mappings/replace` | Strict JSON explicit replacement. |
-| `DELETE /api/mappings/unlink` | Strict JSON account-scoped unlink. |
-| `POST /mappings/confirm` | Bounded URL-encoded native form confirmation; success redirects to `/`. |
-| `POST /mappings/replace` | Bounded URL-encoded native form replacement; success redirects to `/`. |
-| `POST /mappings/unlink` | Bounded URL-encoded native form unlink; success redirects to `/`. |
-| `GET /healthz`, `/readyz` | Local liveness/readiness checks. |
+### 2. Two-phase mutation & recovery
 
-JSON confirmation/replacement requires source account, source book ID, target
-account, target work ID and an explicit edition choice (`edition_id: 0` means
-work-only; a positive ID selects an edition). Form actions require the same
-explicit work-only or specific-edition choice. The HTTP adapter delegates
-validation, conflict rules and writes to the same shared core as CLI linking;
-there is no parallel mapping policy in the handler. Replace/unlink carry the
-displayed `expected_work_id` and `expected_edition_id`; the store compares them
-atomically. Stale targets conflict, and replacement cannot resurrect a deleted
-row. Standalone CLI `link --replace`/`unlink` retain their explicit unguarded
-semantics. See the [wire contract](cli.md#health-probes-and-http-server).
+To guard against network drops and duplicate remote writes:
 
-The server admits one provider-backed operation at a time with no waiting queue
-and a 90-second deadline. Busy/timeout outcomes are sanitized 503/504; timed-out
-pending reports preserve completed rows and remain incomplete. Local reads,
-probes and unlink do not consume the provider slot.
+1. **Staged Intent**: A record is written to `sync_intents` with status
+   `pending`, then transitioned to `in_flight`.
+2. **Target Mutation**: An approved GraphQL mutation updates only the
+   `status_id` field on Hardcover. Ratings, reviews, and reading logs are never
+   modified.
+3. **Read-back Verification**: Drifter queries Hardcover to verify the mutation
+   succeeded before marking the intent `applied`.
+4. **Baseline & Audit**: On verification, `status_baselines` is updated and a
+   `sync_receipts` entry is recorded.
+5. **Restart Reconciliation**: If an operation times out (e.g. HTTP 504), the
+   intent remains `uncertain`. On restart, Drifter reads remote state and
+   resolves the intent without issuing duplicate writes.
 
-## Browser and request boundary
+### 3. Continuous account reconciliation
 
-Chi routes are grouped into page/probe, API and native mapping-action routes;
-handlers remain ordinary `net/http` handlers over the shared core. One
-`httplog` request middleware wraps the Host/Origin boundary and router, so
-security rejections are observed without adding a second request logger.
+`drifter reconcile` processes all confirmed mappings for an account:
 
-The server checks Host against its configured listener and rejects cross-origin
-Origin and cross-site Fetch Metadata on browser requests. Mutation JSON must
-use `application/json`, stay within the body bound, decode strictly (unknown,
-duplicate, trailing and malformed values are refused), and provide the
-per-process CSRF token. Native forms use separate size-bounded
-`application/x-www-form-urlencoded` endpoints with the same Host, Origin and
-token checks. GET and HEAD never mutate. No CORS is provided. The token is a
-cross-site request defense, not authentication.
+- Sequential execution with monotonic run IDs recorded in `sync_runs`.
+- **Partial Failure Isolation**: A timeout or failure on one book does not abort
+  unrelated books in the run.
+- **Persistent Holds**: Conflicts are saved in `sync_holds` with full serialized
+  evidence for inspection.
+- `--dry-run` performs full three-way evaluation without issuing writes or
+  creating runs.
 
-The response uses no-store, nosniff, frame denial and a restrictive CSP. It
-loads no script. The page uses
-`Referrer-Policy: strict-origin-when-cross-origin`: Chromium sent
-`Origin: null` for the native form when the previous `no-referrer` policy was
-set, so the correct same-origin form was rejected by the server. A browser
-experiment confirmed this policy sends the exact same-origin Origin while
-cross-origin referrers contain only the origin. The native-form Playwright test
-locks down the behavior; request validation was not weakened.
+---
 
-Default loopback binding is the supported safe mode. The server has no user
-authentication. Explicit non-loopback binding is unauthenticated and requires
-an independently protected network boundary; the CSRF token does not change
-that fact. Provider errors and mutation responses are sanitized. Request
-records contain only method, allowlisted route pattern, status and processing
-duration, in addition to standard time/level fields and a constant message. The
-logger replaces the middleware's URL-bearing message and drops all other
-attributes, including headers, remote address, body, query, provider errors,
-and panic text/stack. Request and response body capture is off.
+## Web dashboard & security boundary
 
-## SQLite and ownership lifecycle
+The web interface provided by `drifter-server` is designed with minimal attack
+surface:
 
-The SQLite database is local state, not an identity service. Its schema is
-versioned; initialization is transactional, mapping keys include both account
-namespaces, and secure-delete is enabled. The database must be a regular
-non-symlink file with restrictive permissions and a safe parent directory.
+- **Loopback Default**: Listens on `127.0.0.1:8081` by default. Wildcard
+  bindings are rejected.
+- **Host & Origin Validation**: Strict Host header validation and Origin
+  checking to prevent DNS rebinding and cross-origin attacks.
+- **Zero Client Scripts**: All views are server-rendered with native HTML forms;
+  no client JavaScript or third-party frontend dependencies.
+- **CSRF Defense**: Per-process CSRF tokens defend state mutations.
+- **Data Protection**: Provider responses, shelf captures, and authentication
+  tokens are never stored in browser cookies or persistent web caches.
 
-Before serving, the HTTP server acquires a sidecar OS lock (`flock` on supported
-macOS/Linux systems), canonicalizes the database path, rejects hard-link
-ambiguity and initializes/opens the owned store. Owned initialization and every
-owned mutation retain an in-process lease scope for the complete operation.
-Closing the owner rejects new scopes and waits for active operations before
-releasing the process lock. Shutdown cancels provider work, drains HTTP requests,
-closes the store and then releases the lease. Standalone CLI initialization and
-writes use a nonblocking ownership check; they fail while the server owns the
-database. A CLI reader may use an already-current schema read-only under the
-lease, but does not migrate it.
+---
 
-### Terminal review and decisions
+## Database schema & storage
 
-`internal/cli/review.go` owns terminal input/output and uses shared pending,
-matching and validated confirmation. It acquires database ownership before
-providers or prompts and releases it on every exit. Page acquisition, candidate
-lookup and final confirmation each have a 60-second budget; owner input has none.
-Only explicit `yes` links. EOF/cancellation never mean consent. Per-book failures
-preserve prior choices, continue safe work and return nonzero failed-ID summaries.
-Fresh review invocations retry still-pending rows; continuation is a live shelf
-scan, not a snapshot, so moved-ahead activity may require a fresh scan.
+Drifter stores local state in SQLite (schema version 6):
 
-Schema v2 adds decisions keyed by provider/source account/book/target account.
-Exclude/not-in-catalog suppress only that scope; skip returns next invocation.
-Link/unlink leave independent decisions intact. Legacy v0/v1 upgrades preserve
-mappings transactionally; rollback/future-version refusal and read-only current
-schema access remain required. Public catalog v1 is independent and unchanged.
+- `mappings`: Confirmed source-to-target links.
+- `review_decisions`: Account-scoped skip, exclude, and not-in-catalog choices.
+- `account_fingerprints`: Verified provider account bindings.
+- `status_baselines`: Last observed source/target status snapshots.
+- `target_authorities`: Explicit source authority assignments for target works.
+- `sync_intents` & `sync_receipts`: Two-phase commit ledger.
+- `sync_runs` & `sync_holds`: Audit run logs and unresolved conflict holds.
 
-## Configuration and credentials
+File safety is enforced at startup: the database must be a regular file with
+`0600` permissions and a non-writable parent directory. Exclusive process
+locks (`flock`) prevent concurrent write contention between the CLI and server.
 
-`config.toml` contains validated settings (log level, probe address, HTTP
-listener address, optional database path and explicit matching catalog sources),
-never secrets. Missing settings use defaults; unknown keys and credential-like
-keys fail closed. Subscribed catalog files/URLs are literal and load only during
-`match` or explicit terminal review lookup; export/merge are separately explicit
-offline CLI operations. Changes apply at process startup, not live reload.
-Credentials come from
-`WEREAD_API_KEY` and `HARDCOVER_API_KEY` in the invoking process environment.
-Provider endpoints are fixed HTTPS URLs. The clients reject redirects, bound
-response size and timeout, pace their own calls, and do not automatically
-retry. These safeguards are not a provider quota guarantee.
+---
 
-The standalone `serve-probes` command remains separate from the mapping HTTP
-server. `/readyz` checks local database access and makes no provider requests.
+## Development & quality gates
 
-## Development and verification
+Every change to Drifter must pass four gates:
 
-The supported local gates are `make check`, pinned Markdown lint for changed
-docs, and synthetic Playwright journeys via `make e2e`. Make and a C compiler
-are required because the SQLite driver uses CGO. `.mise.toml` pins Go 1.27.2,
-Node and rumdl; `go.mod` requires Go 1.27.0. CI's mise action installs the same
-toolchain before running Make gates. Tests use synthetic provider
-implementations and temporary SQLite, never live credentials.
-
-The [HTTP acceptance plan](plans/http-server.md) maps user stories to CLI, HTTP,
-browser and shared-core tests. The larger matching work is in the
-[matching-worklist plan](plans/matching-worklist.md); neither plan is a claim
-that status synchronization or the full broader milestone is complete.
-
-## Dependency choices
-
-| Dependency | Rationale |
-| --- | --- |
-| Go standard library (`net/http`, JSON, `log/slog`, crypto) | Small audit surface and standard-handler boundary. |
-| [`github.com/go-chi/chi/v5` v5.5.0](https://pkg.go.dev/github.com/go-chi/chi/v5@v5.5.0) | Method-aware route groups while retaining standard `http.Handler` composition. |
-| [`github.com/go-chi/httplog/v3` v3.5.0](https://pkg.go.dev/github.com/go-chi/httplog/v3@v3.5.0) | Structured request logging on `log/slog`; Drifter wraps it with a strict field/message allowlist. |
-| [`github.com/santhosh-tekuri/jsonschema/v6` v6.0.3](https://pkg.go.dev/github.com/santhosh-tekuri/jsonschema/v6@v6.0.3) | Draft 2020-12 validation for the closed, versioned catalog schema; schema references remain bundled. |
-| [`github.com/spf13/cobra` v1.10.2](https://pkg.go.dev/github.com/spf13/cobra@v1.10.2) | Nested command/help tree, flag validation and per-command handlers; Go 1.15 module baseline supports the pinned Go 1.27.2 toolchain. |
-| `github.com/mattn/go-sqlite3` | Durable local state with explicit CGO tradeoff. |
-| `github.com/BurntSushi/toml` | Small settings-only configuration with unknown-key detection. |
-| GitHub Actions and pinned `govulncheck` | Owning CI checks and advisory vulnerability scanning. |
-
-Chi documents route composition and `http.Handler` interoperability in its
-[official README](https://github.com/go-chi/chi/tree/v5.5.0). The request
-logger's defaults include URL and panic fields; its [official options/API
-documentation](https://pkg.go.dev/github.com/go-chi/httplog/v3@v3.5.0) informed
-the explicit safe schema and handler filter in `internal/httpserver/requestlog.go`.
-
-Cobra is limited to command parsing and help; it does not manage settings or
-credentials. Configuration remains strict `BurntSushi/toml` with explicit
-unknown-key and credential-like-key rejection. Viper, an ORM, frontend
-framework/build chain, retry library, telemetry SDK, user-authentication system
-and background job runner remain absent.
-
-The command-tree implementation follows Cobra's official
-[user guide](https://github.com/spf13/cobra/blob/v1.10.2/site/content/user_guide.md)
-for `AddCommand`, `RunE`, required flags and repeated `StringArray` flags, and its
-[`Command` API](https://github.com/spf13/cobra/blob/v1.10.2/command.go) for
-`ExecuteContext`, `SetOut`/`SetErr`, `SilenceErrors` and `SilenceUsage`. The
-pinned [v1.10.2 release](https://github.com/spf13/cobra/releases/tag/v1.10.2)
-(published 2025-12-04, latest listed at selection) declares Go 1.15 in its
-[versioned module file](https://github.com/spf13/cobra/blob/v1.10.2/go.mod). Cobra is not a settings manager;
-TOML remains loaded directly by `internal/config`, and Viper is not included.
+1. `make check`: `go vet`, `go mod verify`, `go test -race ./...`, and binary
+   builds.
+2. `make e2e`: Headless Playwright browser journey tests against the web
+   dashboard.
+3. `rumdl check`: Markdown standards compliance with strict 80-character line
+   limits.
+4. Workstation integration checks (`make check` at repository root).

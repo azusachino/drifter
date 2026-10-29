@@ -1,16 +1,13 @@
 # Drifter CLI reference
 
-A headless reading-status companion: **WeRead / Kindle Unlimited → Drifter →
-Hardcover**. Hardcover → Iroha remains an independent Iroha integration.
+A headless reading-status companion: **WeRead → Drifter → Hardcover**.
 
-Provider operations are **read-only**: inspect WeRead books/progress and
-validate explicitly selected Hardcover identities. Local mappings can be
+Provider operations include read-only inspection (WeRead books and progress)
+and safe, two-phase status synchronization (Hardcover). Local mappings can be
 confirmed, replaced and unlinked with CLI commands or the foreground
-`drifter-server` HTTP server and mapping interface. No provider status writes
-occur. The server
-does not synchronize statuses, import catalog entries or infer fuzzy matches.
-KU intake and deployment are not implemented. Settings-only TOML and
-standalone health probes remain available.
+`drifter-server` HTTP server and mapping interface. Status synchronization is
+idempotent, conflict-aware, and guarded by three-way merge baselines.
+Settings-only TOML and standalone health probes remain available.
 
 ## Build and check
 
@@ -491,25 +488,56 @@ missing key is also idempotent; it never changes a provider library.
 
 **Account labels are namespaces you choose, not authenticated account IDs.**
 Use separate labels for distinct accounts; never reuse a label after switching
-credentials. Before any future remote writing, stable account identity and
-explicit source authority must be verified. A confirmed identity mapping does
-not itself authorize status synchronization.
+credentials. Stable account identity is bound on first use via fingerprints.
 
-## Continuous reconciliation
+## Status synchronization & reconciliation
 
-Synchronize confirmed reading statuses across accounts with three-way evaluation:
+Drifter provides safe, two-phase status synchronization from WeRead to
+Hardcover based on three-way merge evaluation.
+
+### Single-work status synchronization
+
+```sh
+# Preview status evaluation without modifying remote records
+bin/drifter sync --account my-weread --target-account my-hardcover \
+  --work-id 456 --dry-run
+
+# Apply status update for a confirmed work
+bin/drifter sync --account my-weread --target-account my-hardcover \
+  --work-id 456
+
+# Force-adopt source progress and backdated completion date
+bin/drifter sync --account my-weread --target-account my-hardcover \
+  --work-id 456 --adopt-source
+```
+
+Supported flags on `sync`:
+
+- `--work-id ID`: Target Hardcover work ID (required).
+- `--dry-run`: Previews the 3-way evaluation with zero remote mutations.
+- `--adopt-source`: Adopts source status and read date even when target state
+  differs without baseline agreement.
+- `--allow-private`: Consents to syncing private-marked source books (enforcing
+  private visibility on Hardcover).
+- `--source-vid VID`: Declares source WeRead user VID for 0-review accounts.
+
+### Continuous account reconciliation
+
+Reconcile reading statuses across all confirmed mappings for an account:
 
 ```sh
 bin/drifter reconcile --account my-weread --target-account my-hardcover \
-  [--adopt-source] [--dry-run]
+  [--adopt-source] [--allow-private] [--source-vid VID] [--dry-run]
 ```
 
-`reconcile` inspects source reading progress, completion status, and read dates
-across all local mappings for the account pair. When target state is missing or
-source progress advances, Drifter applies updates and backdates completed read
-dates to Hardcover. Supply `--adopt-source` to automatically adopt advanced
-source progress or completed read dates without holding on differing target
-activity. Use `--dry-run` to preview proposed actions without remote writes.
+`reconcile` iterates sequentially through all confirmed mappings, evaluates
+three-way merge status, executes needed mutations with two-phase intents, and
+records run metrics in `sync_runs`.
+
+- **Partial Failure Isolation**: A timeout or network error on one book does not
+  abort the run; remaining works continue safely.
+- **Conflict Holds**: Works encountering conflicts (e.g. manual edits on
+  Hardcover or competing source mappings) are held in `sync_holds`.
 
 ## Local state and privacy
 
@@ -519,35 +547,19 @@ Default database:
   absolute path.
 - Otherwise `$HOME/.local/state/drifter/mappings.sqlite`.
 
-Use `--db PATH` on mapping, pending, decision, review or export commands to
-override it; review config precedence is described above.
-Local listing may initialize an empty database; `export` never does. New
-application directories are mode 700 and the database must be a regular,
-non-symlink mode-600 file. The daemon also leaves a
-mode-600 `.owner.lock` sidecar; the kernel releases its lock on process exit,
-but do not remove the file while Drifter is running. Parent-directory symlink
-aliases resolve to the same sidecar, and hard-linked database files are
-rejected. The database's immediate parent must
-not be writable by other users. Keep the state directory under your control;
-these checks do not protect against a hostile process running as you.
+Use `--db PATH` on mapping, pending, decision, review, sync or export commands
+to override it.
 
 Persisted mapping fields are source/provider account namespaces, source book ID,
 confirmed target IDs, source title and ISBN. Decisions store only their namespace
-key and kind (`skip`, `exclude`, `not-in-catalog`), not shelf or hint snapshots.
-These are personal metadata: keep them out of Git and public artifacts. The
-mapping JSON route exposes the
-same saved fields and must be protected like the local database. Raw provider
-responses, personal progress,
-excerpts, device identifiers and tokens are not stored. JSON progress output is
-still personal data; protect redirected output yourself.
+key and kind (`skip`, `exclude`, `not-in-catalog`). Audit tables store run logs,
+intents, receipts, and baselines. Raw provider responses, excerpts, and tokens
+are never stored.
 
-The database uses SQLite `PRAGMA user_version` (currently version 2). Opening
-a legacy version-0 or version-1 database upgrades it transactionally, preserving
-mappings and adding the decisions table. Unsupported versions and missing
-required schema are refused; a failed upgrade rolls back tables and version.
-Version-1 binaries refuse version-2 state; public catalog v1 is unchanged. Do not
-manually lower the version or use an older binary against newer state. Back up
-privately before upgrading; schema versioning is not a downgrade mechanism.
+The database uses SQLite `PRAGMA user_version` (currently version 6). Upgrades
+from older schemas (v0 through v5) are executed transactionally on startup,
+preserving all existing mappings, decisions, and baselines. Unsupported or
+corrupted databases roll back and fail closed.
 
 Mappings remain until explicitly unlinked. SQLite secure-delete is enabled, but
 backups and filesystem recovery are not erased by unlink. Back up the database
