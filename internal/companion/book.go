@@ -40,9 +40,42 @@ func progressStatus(percent, started int, finishedAt int64) (Progress, error) {
 	return Progress{percent, started == 1, finishedAt, status}, nil
 }
 
+// ProgressStatus computes the proposed reading status from progress facts.
+func ProgressStatus(percent, started int, finishedAt int64) (Progress, error) {
+	return progressStatus(percent, started, finishedAt)
+}
+
+// SearchResult holds candidate books and pagination state from a source catalog search.
+type SearchResult struct {
+	Books   []Book `json:"books"`
+	HasMore bool   `json:"has_more"`
+}
+
 // NormalizeISBN validates identity evidence; an arbitrary ASIN is not an ISBN.
 func NormalizeISBN(raw string) (string, error) {
 	return catalog.NormalizeISBN(raw)
+}
+
+// ISBNVariants returns valid ISBN-13 and calculated ISBN-10 variants for lookup.
+func ISBNVariants(raw string) ([]string, error) {
+	isbn, err := NormalizeISBN(raw)
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{isbn}
+	if strings.HasPrefix(isbn, "978") {
+		prefix, sum := isbn[3:12], 0
+		for i, r := range prefix {
+			sum += int(r-'0') * (10 - i)
+		}
+		check := (11 - sum%11) % 11
+		last := fmt.Sprint(check)
+		if check == 10 {
+			last = "X"
+		}
+		ids = append(ids, prefix+last)
+	}
+	return ids, nil
 }
 
 func ValidBookID(id string) bool {

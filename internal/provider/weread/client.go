@@ -1,4 +1,5 @@
-package companion
+// Package weread implements the intake provider adapter for WeRead API.
+package weread
 
 import (
 	"context"
@@ -7,18 +8,39 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/azusachino/drifter/internal/companion"
+	"github.com/azusachino/drifter/internal/provider/transport"
 )
 
-const weReadURL = "https://i.weread.qq.com/api/agent/gateway"
+// DefaultURL is the production WeRead agent gateway endpoint.
+const DefaultURL = "https://i.weread.qq.com/api/agent/gateway"
 
-type WeRead struct{ api *api }
-
-func NewWeRead(token string) (*WeRead, error) {
-	a, err := newAPI("WeRead", weReadURL, token, time.Second)
-	return &WeRead{a}, err
+// Client is the WeRead intake provider client.
+type Client struct {
+	api *transport.Client
 }
 
-func (w *WeRead) call(ctx context.Context, name string, args map[string]any, target any) error {
+var (
+	_ companion.SourceProvider = (*Client)(nil)
+	_ companion.PreviewSource  = (*Client)(nil)
+)
+
+// New constructs an authenticated WeRead client using DefaultURL and a 1s rate-limit interval.
+func New(token string) (*Client, error) {
+	api, err := transport.NewClient("WeRead", DefaultURL, token, time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{api: api}, nil
+}
+
+// NewWithTransport creates a WeRead client with a custom transport (useful for testing).
+func NewWithTransport(api *transport.Client) *Client {
+	return &Client{api: api}
+}
+
+func (c *Client) call(ctx context.Context, name string, args map[string]any, target any) error {
 	// Only explicit read operations exist; there is no generic exported gateway.
 	switch name {
 	case "/store/search", "/book/info", "/book/getprogress", "/shelf/sync", "/review/list/mine", "/user/notebooks":
@@ -27,7 +49,7 @@ func (w *WeRead) call(ctx context.Context, name string, args map[string]any, tar
 	}
 	args["api_name"], args["skill_version"] = name, "1.0.5"
 	var raw json.RawMessage
-	if err := w.api.post(ctx, args, &raw); err != nil {
+	if err := c.api.Post(ctx, args, &raw); err != nil {
 		return err
 	}
 	var envelope struct {
@@ -49,14 +71,10 @@ func (w *WeRead) call(ctx context.Context, name string, args map[string]any, tar
 	return nil
 }
 
-type SearchResult struct {
-	Books   []Book `json:"books"`
-	HasMore bool   `json:"has_more"`
-}
-
-func (w *WeRead) Search(ctx context.Context, title string) (SearchResult, error) {
+// Search queries the WeRead store for books matching title.
+func (c *Client) Search(ctx context.Context, title string) (companion.SearchResult, error) {
 	if title == "" || len(title) > 1024 {
-		return SearchResult{}, fmt.Errorf("title required (maximum 1024 bytes)")
+		return companion.SearchResult{}, fmt.Errorf("title required (maximum 1024 bytes)")
 	}
 	var response struct {
 		HasMore *int `json:"hasMore"`
@@ -71,28 +89,55 @@ func (w *WeRead) Search(ctx context.Context, title string) (SearchResult, error)
 			} `json:"books"`
 		} `json:"results"`
 	}
-	if err := w.call(ctx, "/store/search", map[string]any{"keyword": title, "scope": 10}, &response); err != nil {
-		return SearchResult{}, err
+	if err := c.call(ctx, "/store/search", map[string]any{"keyword": title, "scope": 10}, &response); err != nil {
+		return companion.SearchResult{}, err
 	}
 	if response.Results == nil || response.HasMore == nil || (*response.HasMore != 0 && *response.HasMore != 1) {
-		return SearchResult{}, fmt.Errorf("WeRead search results or pagination fields missing or invalid")
+		return companion.SearchResult{}, fmt.Errorf("WeRead search results or pagination fields missing or invalid")
 	}
-	result := SearchResult{Books: []Book{}, HasMore: *response.HasMore != 0}
+	result := companion.SearchResult{Books: []companion.Book{}, HasMore: *response.HasMore != 0}
 	for _, group := range response.Results {
 		for _, row := range group.Books {
 			b := row.Info
-			if !ValidBookID(b.ID) || b.Title == "" {
-				return SearchResult{}, fmt.Errorf("WeRead search returned invalid identity")
+			if !companion.ValidBookID(b.ID) || b.Title == "" {
+				return companion.SearchResult{}, fmt.Errorf("WeRead search returned invalid identity")
 			}
-			result.Books = append(result.Books, Book{ID: b.ID, Title: b.Title, Author: b.Author, ReaderURL: b.URL})
+			result.Books = append(result.Books, companion.Book{ID: b.ID, Title: b.Title, Author: b.Author, ReaderURL: b.URL})
 		}
 	}
 	return result, nil
 }
 
-func (w *WeRead) Book(ctx context.Context, id string) (Book, error) {
-	if !ValidBookID(id) {
-		return Book{}, fmt.Errorf("invalid WeRead book ID")
+// Shelf retrieves the current shelf contents.
+func (c *Client) Shelf(ctx context.Context) (companion.ShelfResult, error) {
+	var response struct {
+		Books   []companion.ShelfBook `json:"books"`
+		Count   *int                  `json:"bookCount"`
+		HasMore *int                  `json:"hasMore"`
+	}
+	if err := c.call(ctx, "/shelf/sync", map[string]any{}, &response); err != nil {
+		return companion.ShelfResult{}, err
+	}
+	if response.Books == nil || (response.Count != nil && *response.Count < 0) ||
+		(response.HasMore != nil && *response.HasMore != 0 && *response.HasMore != 1) {
+		return companion.ShelfResult{}, fmt.Errorf("WeRead shelf fields missing or invalid")
+	}
+	seen := make(map[string]bool, len(response.Books))
+	for _, book := range response.Books {
+		if !companion.ValidShelfID(book.ID) || seen[book.ID] {
+			return companion.ShelfResult{}, fmt.Errorf("WeRead shelf identity invalid or duplicated")
+		}
+		seen[book.ID] = true
+	}
+	complete := (response.Count == nil || *response.Count == len(response.Books)) &&
+		(response.HasMore == nil || *response.HasMore == 0)
+	return companion.ShelfResult{Books: response.Books, Complete: complete}, nil
+}
+
+// Book fetches detailed metadata for a single WeRead book by ID.
+func (c *Client) Book(ctx context.Context, id string) (companion.Book, error) {
+	if !companion.ValidBookID(id) {
+		return companion.Book{}, fmt.Errorf("valid book ID required")
 	}
 	var row struct {
 		ID         string  `json:"bookId"`
@@ -103,22 +148,31 @@ func (w *WeRead) Book(ctx context.Context, id string) (Book, error) {
 		Publisher  string  `json:"publisher"`
 		URL        string  `json:"readerLink"`
 	}
-	if err := w.call(ctx, "/book/info", map[string]any{"bookId": id}, &row); err != nil {
-		return Book{}, err
+	if err := c.call(ctx, "/book/info", map[string]any{"bookId": id}, &row); err != nil {
+		return companion.Book{}, err
 	}
 	if row.ID != id || row.Title == "" {
-		return Book{}, fmt.Errorf("WeRead book identity missing or differs from request")
+		return companion.Book{}, fmt.Errorf("WeRead book identity missing or invalid in query response")
 	}
-	book := Book{ID: row.ID, Title: row.Title, Author: row.Author, ISBN: row.ISBN, Publisher: row.Publisher, ReaderURL: row.URL, TranslatorKnown: true}
+	book := companion.Book{
+		ID:              row.ID,
+		Title:           row.Title,
+		Author:          row.Author,
+		ISBN:            row.ISBN,
+		Publisher:       row.Publisher,
+		ReaderURL:       row.URL,
+		TranslatorKnown: true,
+	}
 	if row.Translator != nil {
 		book.Translator = *row.Translator
 	}
 	return book, nil
 }
 
-func (w *WeRead) Progress(ctx context.Context, id string) (Progress, error) {
-	if !ValidBookID(id) {
-		return Progress{}, fmt.Errorf("invalid WeRead book ID")
+// Progress retrieves personal reading progress for a WeRead book.
+func (c *Client) Progress(ctx context.Context, id string) (companion.Progress, error) {
+	if !companion.ValidBookID(id) {
+		return companion.Progress{}, fmt.Errorf("valid book ID required")
 	}
 	var row struct {
 		ID   string `json:"bookId"`
@@ -128,13 +182,13 @@ func (w *WeRead) Progress(ctx context.Context, id string) (Progress, error) {
 			Finished int64 `json:"finishTime"`
 		} `json:"book"`
 	}
-	if err := w.call(ctx, "/book/getprogress", map[string]any{"bookId": id}, &row); err != nil {
-		return Progress{}, err
+	if err := c.call(ctx, "/book/getprogress", map[string]any{"bookId": id}, &row); err != nil {
+		return companion.Progress{}, err
 	}
 	if row.ID != id || row.Book == nil || row.Book.Percent == nil || row.Book.Started == nil {
-		return Progress{}, fmt.Errorf("WeRead progress identity or required fields missing")
+		return companion.Progress{}, fmt.Errorf("WeRead progress identity or required fields missing")
 	}
-	return progressStatus(*row.Book.Percent, *row.Book.Started, row.Book.Finished)
+	return companion.ProgressStatus(*row.Book.Percent, *row.Book.Started, row.Book.Finished)
 }
 
 // ValidVID checks whether a WeRead user VID string is non-empty, numeric, and within standard bounds (1-32 digits).
@@ -172,10 +226,7 @@ func parseVID(raw any) string {
 }
 
 // ResolveAccountFingerprint queries WeRead for the caller's user VID.
-// If declaredVID is valid, it uses it directly.
-// Otherwise, it queries /review/list/mine or discovers a book via /user/notebooks to extract userVid.
-// If zero reviews exist, it falls back to declaredVID if valid, or returns an actionable error.
-func (w *WeRead) ResolveAccountFingerprint(ctx context.Context, declaredVID string) (string, error) {
+func (c *Client) ResolveAccountFingerprint(ctx context.Context, declaredVID string) (string, error) {
 	if ValidVID(declaredVID) {
 		return fmt.Sprintf("weread:%s", strings.TrimSpace(declaredVID)), nil
 	}
@@ -213,14 +264,14 @@ func (w *WeRead) ResolveAccountFingerprint(ctx context.Context, declaredVID stri
 			} `json:"review"`
 		} `json:"reviews"`
 	}
-	err := w.call(ctx, "/review/list/mine", map[string]any{}, &response)
+	err := c.call(ctx, "/review/list/mine", map[string]any{}, &response)
 	if err == nil {
 		if vid := extractVID(response.Reviews); vid != "" {
 			return fmt.Sprintf("weread:%s", vid), nil
 		}
 	}
 
-	// If direct /review/list/mine was rejected (e.g. gateway requires bookid) or returned 0 reviews,
+	// If direct /review/list/mine was rejected or returned 0 reviews,
 	// try discovering a book with notes/reviews via /user/notebooks.
 	var nbResp struct {
 		Books []struct {
@@ -228,15 +279,15 @@ func (w *WeRead) ResolveAccountFingerprint(ctx context.Context, declaredVID stri
 			ReviewCount int    `json:"reviewCount"`
 		} `json:"books"`
 	}
-	if nbErr := w.call(ctx, "/user/notebooks", map[string]any{"count": 20}, &nbResp); nbErr == nil && len(nbResp.Books) > 0 {
+	if nbErr := c.call(ctx, "/user/notebooks", map[string]any{"count": 20}, &nbResp); nbErr == nil && len(nbResp.Books) > 0 {
 		var targetBookID string
 		for _, b := range nbResp.Books {
-			if b.ReviewCount > 0 && ValidBookID(b.BookID) {
+			if b.ReviewCount > 0 && companion.ValidBookID(b.BookID) {
 				targetBookID = b.BookID
 				break
 			}
 		}
-		if targetBookID == "" && ValidBookID(nbResp.Books[0].BookID) {
+		if targetBookID == "" && companion.ValidBookID(nbResp.Books[0].BookID) {
 			targetBookID = nbResp.Books[0].BookID
 		}
 
@@ -251,7 +302,7 @@ func (w *WeRead) ResolveAccountFingerprint(ctx context.Context, declaredVID stri
 					} `json:"review"`
 				} `json:"reviews"`
 			}
-			if revErr := w.call(ctx, "/review/list/mine", map[string]any{"bookid": targetBookID}, &bookRevResp); revErr == nil {
+			if revErr := c.call(ctx, "/review/list/mine", map[string]any{"bookid": targetBookID}, &bookRevResp); revErr == nil {
 				if vid := extractVID(bookRevResp.Reviews); vid != "" {
 					return fmt.Sprintf("weread:%s", vid), nil
 				}

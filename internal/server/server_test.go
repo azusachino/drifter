@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/azusachino/drifter/internal/companion"
+	"github.com/azusachino/drifter/internal/provider/hardcover"
+	"github.com/azusachino/drifter/internal/provider/weread"
 	"github.com/azusachino/drifter/internal/server"
 )
 
@@ -91,11 +93,11 @@ func TestRunStartsWithoutProviderCredentialsAndStops(t *testing.T) {
 	providers := server.ProviderFactories{
 		Source: func() (companion.Source, error) {
 			sourceCalls++
-			return companion.NewWeRead(os.Getenv("WEREAD_API_KEY"))
+			return weread.New(os.Getenv("WEREAD_API_KEY"))
 		},
 		Target: func() (companion.Target, error) {
 			targetCalls++
-			return companion.NewHardcover(os.Getenv("HARDCOVER_API_KEY"))
+			return hardcover.New(os.Getenv("HARDCOVER_API_KEY"))
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())

@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-var _ PreviewSource = (*WeRead)(nil)
-var _ PreviewTarget = (*Hardcover)(nil)
+var _ PreviewSource = (*mockPreviewSource)(nil)
+var _ PreviewTarget = (*mockPreviewTarget)(nil)
 
 type mockPreviewSource struct {
 	book        Book
