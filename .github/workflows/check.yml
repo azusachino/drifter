@@ -4,6 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+    # No required checks are configured; revisit this filter if that changes.
+    paths-ignore:
+      - README.md
+      - 'docs/**'
+
+# A unique main-run group preserves pending main runs as well as running ones.
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -16,6 +25,16 @@ jobs:
       - uses: jdx/mise-action@v3
       - name: Ensure C toolchain for CGO (go-sqlite3)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libc6-dev
+      - name: Cache Go modules and build artifacts
+        uses: actions/cache@v4
+        with:
+          # Go comes from mise, so setup-go's cache does not apply here.
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-
       - name: Owning gate (fmt, vet, mod verify, race tests, build)
         run: make check
       - name: govulncheck (advisory)
