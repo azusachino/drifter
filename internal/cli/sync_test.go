@@ -218,3 +218,84 @@ func TestCLISyncZeroFlagsDefaultAccounts(t *testing.T) {
 		t.Fatalf("expected action applied, got %q", res.Action)
 	}
 }
+
+func TestCLISyncMutualExclusionAdoptSourceAdoptTarget(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "state.sqlite")
+	var out, stderr bytes.Buffer
+	err := run(context.Background(), []string{
+		"sync",
+		"--book-id", "123456",
+		"--adopt-source",
+		"--adopt-target",
+		"--db", dbPath,
+	}, &out, &stderr, clients{})
+	if err == nil {
+		t.Fatal("expected error when both --adopt-source and --adopt-target are set")
+	}
+}
+
+func TestCLISyncAdoptTarget(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "state.sqlite")
+	store, err := companion.OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping := companion.Mapping{
+		Provider:      "weread",
+		SourceAccount: "mine",
+		BookID:        "123456",
+		TargetAccount: "default",
+		WorkID:        500,
+		EditionID:     600,
+		SourceTitle:   "Sync Book",
+		SourceISBN:    "9780123456789",
+	}
+	if err := store.Confirm(context.Background(), mapping, false); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	src := &cliMockPreviewSource{
+		book:        companion.Book{ID: "123456", Title: "Sync Book"},
+		progress:    companion.Progress{Status: "reading", Percent: 50, Started: true},
+		fingerprint: "weread:10001",
+	}
+	tgt := &cliMockApplyTarget{
+		cliMockPreviewTarget: cliMockPreviewTarget{
+			status: &companion.UserBookStatus{
+				ID:       999,
+				BookID:   500,
+				StatusID: companion.HardcoverStatusRead,
+			},
+			fingerprint: "hardcover:20002",
+		},
+	}
+
+	var out, stderr bytes.Buffer
+	err = run(context.Background(), []string{
+		"sync",
+		"--book-id", "123456",
+		"--source-account", "mine",
+		"--target-account", "default",
+		"--adopt-target",
+		"--db", dbPath,
+	}, &out, &stderr, clients{
+		previewSource: func() (companion.PreviewSource, error) { return src, nil },
+		previewTarget: func() (companion.PreviewTarget, error) { return tgt, nil },
+		applyTarget:   func() (companion.ApplyTarget, error) { return tgt, nil },
+	})
+	if err != nil {
+		t.Fatalf("sync with --adopt-target failed: %v", err)
+	}
+
+	var res companion.ApplyResult
+	if err := json.Unmarshal(out.Bytes(), &res); err != nil {
+		t.Fatalf("failed to decode sync result: %v", err)
+	}
+	if res.Action != "no-op" {
+		t.Fatalf("expected action no-op, got %q", res.Action)
+	}
+	if res.Reason != companion.ReasonAdoptTargetApproved {
+		t.Fatalf("expected reason %s, got %s", companion.ReasonAdoptTargetApproved, res.Reason)
+	}
+}

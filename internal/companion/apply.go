@@ -19,6 +19,7 @@ type ApplySyncOptions struct {
 	AllowPrivateSync  bool
 	DeclaredSourceVID string
 	AdoptSource       bool
+	AdoptTarget       bool
 	Now               time.Time
 }
 
@@ -131,6 +132,7 @@ func ApplySync(
 		AllowPrivateSync:  opts.AllowPrivateSync,
 		DeclaredSourceVID: opts.DeclaredSourceVID,
 		AdoptSource:       opts.AdoptSource,
+		AdoptTarget:       opts.AdoptTarget,
 		Now:               now,
 	})
 	if err != nil {
@@ -156,9 +158,18 @@ func ApplySync(
 		baseResult.Action = "no-op"
 		baseResult.AppliedStatusID = proposal.ProposedStatusID
 		baseResult.AppliedStatus = proposal.ProposedStatus
-		// If bootstrap with matching target and no prior baseline, record initial baseline
+		if opts.AdoptTarget && proposal.CurrentStatusID > 0 {
+			baseResult.AppliedStatusID = proposal.CurrentStatusID
+			baseResult.AppliedStatus = proposal.CurrentStatus
+		}
+		// If bootstrap with matching target and no prior baseline, record initial baseline.
+		// If adopt-target is approved, save or update baseline to match accepted target status.
 		existingBaseline, _ := store.GetStatusBaseline(ctx, provider, sourceAccount, bookID, targetAccount)
-		if existingBaseline == nil {
+		if existingBaseline == nil || opts.AdoptTarget {
+			targetStatusID := proposal.ProposedStatusID
+			if opts.AdoptTarget && proposal.CurrentStatusID > 0 {
+				targetStatusID = proposal.CurrentStatusID
+			}
 			_ = store.SaveStatusBaseline(ctx, StatusBaseline{
 				Provider:          provider,
 				SourceAccount:     sourceAccount,
@@ -167,7 +178,7 @@ func ApplySync(
 				WorkID:            proposal.WorkID,
 				EditionID:         proposal.EditionID,
 				SourceStatusID:    proposal.ProposedStatusID,
-				TargetStatusID:    proposal.ProposedStatusID,
+				TargetStatusID:    targetStatusID,
 				PolicyVersion:     proposal.PolicyVersion,
 				SourceFingerprint: proposal.SourceFingerprint,
 				TargetFingerprint: proposal.TargetFingerprint,

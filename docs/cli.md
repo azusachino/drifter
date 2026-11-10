@@ -517,6 +517,8 @@ Supported flags on `sync`:
 - `--dry-run`: Previews the 3-way evaluation with zero remote mutations.
 - `--adopt-source`: Adopts source status and read date even when target state
   differs without baseline agreement.
+- `--adopt-target`: Adopts target status advancement (e.g. manual edit on
+  Hardcover) as the accepted baseline without overwriting target.
 - `--allow-private`: Consents to syncing private-marked source books (enforcing
   private visibility on Hardcover).
 - `--source-vid VID`: Declares source WeRead user VID for 0-review accounts.
@@ -527,7 +529,7 @@ Reconcile reading statuses across all confirmed mappings for an account:
 
 ```sh
 bin/drifter reconcile --account my-weread --target-account my-hardcover \
-  [--adopt-source] [--allow-private] [--source-vid VID] [--dry-run]
+  [--adopt-source | --adopt-target] [--allow-private] [--source-vid VID] [--dry-run]
 ```
 
 `reconcile` iterates sequentially through all confirmed mappings, evaluates

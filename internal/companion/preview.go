@@ -36,6 +36,7 @@ const (
 	ReasonPublicTargetPrivacy        = "public_target_privacy_conflict"
 	ReasonPolicyVersionMismatch      = "policy_version_mismatch"
 	ReasonInvalidTargetStatus        = "invalid_target_status"
+	ReasonAdoptTargetApproved        = "adopt_target_approved"
 )
 
 // HardcoverStatusName returns the canonical Hardcover status label for an ID.
@@ -210,6 +211,7 @@ type StatusEvaluationParams struct {
 	PolicyVersion    string
 	AllowPrivateSync bool
 	AdoptSource      bool
+	AdoptTarget      bool
 	Now              time.Time
 }
 
@@ -396,6 +398,13 @@ func EvaluateStatus(p StatusEvaluationParams) SyncProposal {
 				prop.CurrentStatus, p.TargetStatus.StatusID, prop.ProposedStatus, proposedStatusID)
 			return prop
 		}
+		if p.AdoptTarget {
+			prop.Action = ActionNoOp
+			prop.Reason = ReasonAdoptTargetApproved
+			prop.Message = fmt.Sprintf("bootstrap adopt-target approved: accepting existing target status %s (%d) as baseline",
+				prop.CurrentStatus, p.TargetStatus.StatusID)
+			return prop
+		}
 		// Target exists with differing status on first sync: do not overwrite without explicit approval.
 		return makeConflict(
 			ReasonDifferingTargetOnBootstrap,
@@ -448,6 +457,13 @@ func EvaluateStatus(p StatusEvaluationParams) SyncProposal {
 
 	case !sourceChanged && targetChanged:
 		// US5: Protect manual target edit
+		if p.AdoptTarget {
+			prop.Action = ActionNoOp
+			prop.Reason = ReasonAdoptTargetApproved
+			prop.Message = fmt.Sprintf("adopt-target approved: accepting manual target status %s (%d) as baseline",
+				prop.CurrentStatus, p.TargetStatus.StatusID)
+			return prop
+		}
 		return makeConflict(
 			ReasonManualTargetEdit,
 			ReasonManualTargetEdit,
@@ -460,6 +476,13 @@ func EvaluateStatus(p StatusEvaluationParams) SyncProposal {
 			prop.Action = ActionNoOp
 			prop.Reason = ReasonConvergentAgreement
 			prop.Message = fmt.Sprintf("source and target both independently converged to status %s (%d)", prop.ProposedStatus, proposedStatusID)
+			return prop
+		}
+		if p.AdoptTarget {
+			prop.Action = ActionNoOp
+			prop.Reason = ReasonAdoptTargetApproved
+			prop.Message = fmt.Sprintf("adopt-target approved: accepting target status %s (%d) over differing source status %s (%d) as baseline",
+				prop.CurrentStatus, p.TargetStatus.StatusID, prop.ProposedStatus, proposedStatusID)
 			return prop
 		}
 		return makeConflict(
@@ -495,6 +518,7 @@ type PreviewSyncOptions struct {
 	AllowPrivateSync  bool
 	DeclaredSourceVID string
 	AdoptSource       bool
+	AdoptTarget       bool
 	Now               time.Time
 }
 
@@ -592,6 +616,7 @@ func PreviewSync(
 		PolicyVersion:        opts.PolicyVersion,
 		AllowPrivateSync:     opts.AllowPrivateSync,
 		AdoptSource:          opts.AdoptSource,
+		AdoptTarget:          opts.AdoptTarget,
 		Now:                  now,
 	}
 

@@ -200,4 +200,24 @@ func TestHardcoverResolveAccountFingerprint(t *testing.T) {
 			t.Fatal("expected error on zero user ID")
 		}
 	})
+
+	t.Run("surfaces detailed GraphQL error messages", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+			io.WriteString(rw, `{"errors":[{"message":"rate limit exceeded"},{"message":"unauthorized access"}]}`)
+		}))
+		t.Cleanup(server.Close)
+		api, err := transport.NewClientWithHTTP("Hardcover", server.URL, "private-test-token", 0, server.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		h := NewWithTransport(api)
+
+		err = h.query(context.Background(), "query Exact { me { id } }", nil, &struct{}{})
+		if err == nil {
+			t.Fatal("expected error on GraphQL errors response")
+		}
+		if !strings.Contains(err.Error(), "rate limit exceeded; unauthorized access") {
+			t.Fatalf("expected detailed error messages in error string, got %v", err)
+		}
+	})
 }

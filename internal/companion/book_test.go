@@ -28,7 +28,7 @@ func TestProgressDoesNotInventUnreadOrCompletion(t *testing.T) {
 		want             string
 	}{
 		{0, 0, 0, "unknown"}, {0, 1, 0, "reading"}, {1, 0, 0, "reading"},
-		{100, 1, 0, "unknown"}, {100, 1, 123, "read"},
+		{100, 1, 0, "reading"}, {100, 1, 123, "read"},
 		{95, 1, 123, "read"}, {99, 1, 123, "read"},
 	} {
 		got, err := progressStatus(tt.percent, tt.started, tt.finished)

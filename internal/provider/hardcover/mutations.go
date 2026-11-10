@@ -70,8 +70,11 @@ func (c *Client) mutate(ctx context.Context, mutation string, variables map[stri
 		}
 		return err
 	}
-	if len(response.Errors) > 0 || len(response.Data) == 0 || string(response.Data) == "null" {
-		return fmt.Errorf("Hardcover mutation rejected or data missing")
+	if len(response.Errors) > 0 {
+		return fmt.Errorf("Hardcover mutation rejected: %s", c.formatGraphQLErrors(response.Errors))
+	}
+	if len(response.Data) == 0 || string(response.Data) == "null" {
+		return fmt.Errorf("Hardcover mutation data missing")
 	}
 	if err := json.Unmarshal(response.Data, target); err != nil {
 		return fmt.Errorf("Hardcover mutation response has invalid fields: %w", err)

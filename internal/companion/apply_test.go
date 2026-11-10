@@ -287,6 +287,82 @@ func TestApplySyncRefusesConflictAndHoldWithoutWrites(t *testing.T) {
 	}
 }
 
+func TestApplySyncAdoptTargetResolvesConflict(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	mapping := Mapping{
+		Provider:      "weread",
+		SourceAccount: "mine",
+		BookID:        "123456",
+		TargetAccount: "default",
+		WorkID:        500,
+		EditionID:     600,
+		SourceTitle:   "Conflict Book",
+		SourceISBN:    "9780123456789",
+	}
+	store, _ := setupTestStoreWithMapping(t, mapping)
+	defer store.Close()
+
+	baseline := StatusBaseline{
+		Provider:          "weread",
+		SourceAccount:     "mine",
+		BookID:            "123456",
+		TargetAccount:     "default",
+		WorkID:            500,
+		EditionID:         600,
+		SourceStatusID:    HardcoverStatusCurrentlyReading,
+		TargetStatusID:    HardcoverStatusCurrentlyReading,
+		PolicyVersion:     "v1",
+		SourceFingerprint: "weread:10001",
+		TargetFingerprint: "hardcover:20002",
+		LastSyncedAt:      now.Add(-24 * time.Hour),
+	}
+	if err := store.SaveStatusBaseline(ctx, baseline); err != nil {
+		t.Fatal(err)
+	}
+
+	src := &mockPreviewSource{
+		book:        Book{ID: "123456", Title: "Conflict Book"},
+		progress:    Progress{Status: "reading", Percent: 50, Started: true},
+		fingerprint: "weread:10001",
+	}
+	tgt := &mockApplyTarget{
+		status: &UserBookStatus{
+			ID:       999,
+			BookID:   500,
+			StatusID: HardcoverStatusDidNotFinish,
+		},
+		fingerprint: "hardcover:20002",
+	}
+
+	res, err := ApplySync(ctx, store, src, tgt, "weread", "mine", "123456", "default", ApplySyncOptions{
+		PolicyVersion: "v1",
+		AdoptTarget:   true,
+		Now:           now,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error on adopt target: %v", err)
+	}
+
+	if res.Action != "no-op" {
+		t.Fatalf("expected action no-op with adopt target, got %q", res.Action)
+	}
+	if res.Reason != ReasonAdoptTargetApproved {
+		t.Fatalf("expected reason %s, got %s", ReasonAdoptTargetApproved, res.Reason)
+	}
+	if len(tgt.mutations) != 0 {
+		t.Fatalf("expected zero mutations sent to target, got %d", len(tgt.mutations))
+	}
+
+	b, err := store.GetStatusBaseline(ctx, "weread", "mine", "123456", "default")
+	if err != nil || b == nil {
+		t.Fatalf("expected saved baseline: %v", err)
+	}
+	if b.TargetStatusID != HardcoverStatusDidNotFinish {
+		t.Fatalf("expected baseline target status %d (DNF), got %d", HardcoverStatusDidNotFinish, b.TargetStatusID)
+	}
+}
+
 func TestApplySyncUncertainTimeoutHold_US7(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)

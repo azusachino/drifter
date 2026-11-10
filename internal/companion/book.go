@@ -34,7 +34,7 @@ func progressStatus(percent, started int, finishedAt int64) (Progress, error) {
 	status := "unknown"
 	if finishedAt > 0 {
 		status = "read"
-	} else if percent < 100 && (started == 1 || percent > 0) {
+	} else if started == 1 || percent > 0 {
 		status = "reading"
 	}
 	return Progress{percent, started == 1, finishedAt, status}, nil
