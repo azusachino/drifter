@@ -49,6 +49,33 @@ func NewWithTransportAndUserID(api *transport.Client, userID int64) *Client {
 	return &Client{api: api, userID: userID}
 }
 
+func (c *Client) formatGraphQLErrors(raw []json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	token := ""
+	if c != nil && c.api != nil {
+		token = c.api.Token()
+	}
+	messages := make([]string, 0, len(raw))
+	for _, r := range raw {
+		var obj struct {
+			Message string `json:"message"`
+		}
+		msg := ""
+		if err := json.Unmarshal(r, &obj); err == nil && obj.Message != "" {
+			msg = obj.Message
+		} else {
+			msg = strings.TrimSpace(string(r))
+		}
+		if token != "" && strings.Contains(msg, token) {
+			msg = strings.ReplaceAll(msg, token, "[REDACTED]")
+		}
+		messages = append(messages, msg)
+	}
+	return strings.Join(messages, "; ")
+}
+
 func (c *Client) query(ctx context.Context, query string, variables any, target any) error {
 	if !strings.HasPrefix(strings.TrimSpace(query), "query ") {
 		return fmt.Errorf("only Hardcover queries are supported")
@@ -60,8 +87,11 @@ func (c *Client) query(ctx context.Context, query string, variables any, target 
 	if err := c.api.Post(ctx, map[string]any{"query": query, "variables": variables}, &response); err != nil {
 		return err
 	}
-	if len(response.Errors) > 0 || len(response.Data) == 0 || string(response.Data) == "null" {
-		return fmt.Errorf("Hardcover query rejected or data missing")
+	if len(response.Errors) > 0 {
+		return fmt.Errorf("Hardcover query rejected: %s", c.formatGraphQLErrors(response.Errors))
+	}
+	if len(response.Data) == 0 || string(response.Data) == "null" {
+		return fmt.Errorf("Hardcover query data missing")
 	}
 	if err := json.Unmarshal(response.Data, target); err != nil {
 		return fmt.Errorf("Hardcover query response has invalid fields: %w", err)

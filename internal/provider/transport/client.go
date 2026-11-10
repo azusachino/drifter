@@ -51,6 +51,14 @@ func NewClientWithHTTP(name, url, token string, interval time.Duration, httpClie
 	}, nil
 }
 
+// Token returns the configured bearer token.
+func (c *Client) Token() string {
+	if c == nil {
+		return ""
+	}
+	return c.token
+}
+
 // Post marshals payload as JSON, applies pacing, and unmarshals the response into target.
 func (c *Client) Post(ctx context.Context, payload any, target any) error {
 	body, err := json.Marshal(payload)

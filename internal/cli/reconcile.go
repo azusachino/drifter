@@ -19,6 +19,7 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 		sourceVID     string
 		allowPrivate  bool
 		adoptSource   bool
+		adoptTarget   bool
 		dryRun        bool
 	)
 
@@ -38,9 +39,13 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 	flags.StringVar(&sourceVID, "source-vid", os.Getenv("WEREAD_VID"), "declared source user VID for account fingerprint binding")
 	flags.BoolVar(&allowPrivate, "allow-private", false, "allow synchronizing private reading status")
 	flags.BoolVar(&adoptSource, "adopt-source", false, "adopt source reading progress advance or read date updates on target")
+	flags.BoolVar(&adoptTarget, "adopt-target", false, "adopt target reading status advancements as accepted baseline")
 	flags.BoolVar(&dryRun, "dry-run", false, "preview reconciliation without mutating target")
 
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
+		if adoptSource && adoptTarget {
+			return fmt.Errorf("cannot specify both --adopt-source and --adopt-target")
+		}
 		path, err := decisionPath(dbPath)
 		if err != nil {
 			return err
@@ -88,6 +93,7 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 				AllowPrivateSync:  allowPrivate,
 				DeclaredSourceVID: sourceVID,
 				AdoptSource:       adoptSource,
+				AdoptTarget:       adoptTarget,
 				DryRun:            dryRun,
 				Now:               time.Now().UTC(),
 			},

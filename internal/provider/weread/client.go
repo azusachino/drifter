@@ -311,7 +311,7 @@ func (c *Client) ResolveAccountFingerprint(ctx context.Context, declaredVID stri
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("WeRead account identity resolution failed: %w (write a review or set WEREAD_VID / --source-vid to bind identity)", err)
+		return "", fmt.Errorf("WeRead account identity resolution failed: %w (write a review/note or set WEREAD_VID / --source-vid to bind identity)", err)
 	}
-	return "", fmt.Errorf("WeRead account has zero reviews and no valid declared VID; write at least one review or set WEREAD_VID to bind account identity")
+	return "", fmt.Errorf("WeRead account has zero reviews and no valid declared VID; write at least one review/note or set WEREAD_VID / --source-vid to bind account identity")
 }

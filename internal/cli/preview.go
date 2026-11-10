@@ -54,6 +54,7 @@ func (app *cliApp) previewCommand() *cobra.Command {
 		sourceVID     string
 		allowPrivate  bool
 		adoptSource   bool
+		adoptTarget   bool
 	)
 
 	command := &cobra.Command{
@@ -73,10 +74,14 @@ func (app *cliApp) previewCommand() *cobra.Command {
 	flags.StringVar(&sourceVID, "source-vid", os.Getenv("WEREAD_VID"), "declared source user VID for account fingerprint binding")
 	flags.BoolVar(&allowPrivate, "allow-private", false, "allow previewing private book synchronization")
 	flags.BoolVar(&adoptSource, "adopt-source", false, "preview resolving first-sync bootstrap conflict by adopting source progress")
+	flags.BoolVar(&adoptTarget, "adopt-target", false, "preview resolving status conflict by adopting target status as baseline")
 
 	markRequiredFlags(command, "book-id")
 
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
+		if adoptSource && adoptTarget {
+			return fmt.Errorf("cannot specify both --adopt-source and --adopt-target")
+		}
 		path, err := decisionPath(dbPath)
 		if err != nil {
 			return err
@@ -128,6 +133,7 @@ func (app *cliApp) previewCommand() *cobra.Command {
 				AllowPrivateSync:  allowPrivate,
 				DeclaredSourceVID: sourceVID,
 				AdoptSource:       adoptSource,
+				AdoptTarget:       adoptTarget,
 				Now:               time.Now().UTC(),
 			},
 		)

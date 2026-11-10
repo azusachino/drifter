@@ -240,3 +240,75 @@ func TestCLIReconcileAdoptSource(t *testing.T) {
 		t.Fatalf("expected applied update with adopt-source, got %+v", sumAdopt)
 	}
 }
+
+func TestCLIReconcileAdoptTarget(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "reconcile_adopt_target.sqlite")
+	store, err := companion.OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("open store failed: %v", err)
+	}
+	defer store.Close()
+
+	if err := store.Confirm(ctx, companion.Mapping{
+		Provider:      "weread",
+		SourceAccount: "default",
+		BookID:        "888",
+		TargetAccount: "default",
+		WorkID:        202,
+	}, false); err != nil {
+		t.Fatalf("confirm mapping failed: %v", err)
+	}
+
+	src := &cliMultiMockSource{
+		fingerprint: "weread:default",
+		books: map[string]companion.Book{
+			"888": {ID: "888", Title: "Book 2", TranslatorKnown: true},
+		},
+		progresses: map[string]companion.Progress{
+			"888": {Status: "reading", Percent: 30, Started: true},
+		},
+	}
+	tgt := &cliMultiMockTarget{
+		fingerprint: "hardcover:default",
+		statuses: map[int64]*companion.UserBookStatus{
+			202: {ID: 2020, BookID: 202, StatusID: companion.HardcoverStatusRead}, // Target is Read on Hardcover
+		},
+	}
+
+	// 1. Mutual exclusion error when both flags set
+	var outMutex, stderrMutex bytes.Buffer
+	err = run(ctx, []string{
+		"reconcile",
+		"--adopt-source",
+		"--adopt-target",
+		"--db", dbPath,
+	}, &outMutex, &stderrMutex, clients{})
+	if err == nil {
+		t.Fatal("expected error when both --adopt-source and --adopt-target are set")
+	}
+
+	// 2. With --adopt-target, bootstrap conflict is resolved as no-op and baseline is created
+	var outAdopt, stderrAdopt bytes.Buffer
+	err = run(ctx, []string{
+		"reconcile",
+		"--account", "default",
+		"--target-account", "default",
+		"--adopt-target",
+		"--db", dbPath,
+	}, &outAdopt, &stderrAdopt, clients{
+		previewSource: func() (companion.PreviewSource, error) { return src, nil },
+		previewTarget: func() (companion.PreviewTarget, error) { return tgt, nil },
+		applyTarget:   func() (companion.ApplyTarget, error) { return tgt, nil },
+	})
+	if err != nil {
+		t.Fatalf("reconcile with adopt-target failed: %v", err)
+	}
+	var sumAdopt companion.ReconcileSummary
+	if err := json.Unmarshal(outAdopt.Bytes(), &sumAdopt); err != nil {
+		t.Fatalf("decode summary failed: %v", err)
+	}
+	if sumAdopt.NoOpCount != 1 || sumAdopt.ConflictCount != 0 {
+		t.Fatalf("expected no-op with adopt-target, got %+v", sumAdopt)
+	}
+}

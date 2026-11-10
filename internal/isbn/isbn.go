@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/azusachino/drifter/internal/catalog"
@@ -52,22 +53,36 @@ const (
 
 // DoubanProvider resolves ISBN metadata by scraping Douban Books subject pages.
 type DoubanProvider struct {
-	client  *http.Client
-	baseURL string
+	client   *http.Client
+	baseURL  string
+	interval time.Duration
+	gate     chan struct{}
+	next     time.Time
+	mu       sync.Mutex
 }
 
 // NewDoubanProvider creates a Douban ISBN provider using the official Douban Books ISBN endpoint.
 func NewDoubanProvider() *DoubanProvider {
-	return NewDoubanProviderWithBaseURL("https://book.douban.com/isbn/")
+	return NewDoubanProviderWithClient("https://book.douban.com/isbn/", &http.Client{Timeout: defaultHTTPTimeout}, 1500*time.Millisecond)
 }
 
 // NewDoubanProviderWithBaseURL creates a Douban provider with a custom base URL (useful for testing).
 func NewDoubanProviderWithBaseURL(baseURL string) *DoubanProvider {
+	return NewDoubanProviderWithClient(baseURL, &http.Client{Timeout: defaultHTTPTimeout}, 0)
+}
+
+// NewDoubanProviderWithClient creates a Douban provider with custom base URL, HTTP client, and request pacing interval.
+func NewDoubanProviderWithClient(baseURL string, client *http.Client, interval time.Duration) *DoubanProvider {
+	var gate chan struct{}
+	if interval > 0 {
+		gate = make(chan struct{}, 1)
+		gate <- struct{}{}
+	}
 	return &DoubanProvider{
-		client: &http.Client{
-			Timeout: defaultHTTPTimeout,
-		},
-		baseURL: baseURL,
+		client:   client,
+		baseURL:  baseURL,
+		interval: interval,
+		gate:     gate,
 	}
 }
 
@@ -187,6 +202,34 @@ func (p *DoubanProvider) LookupISBN(ctx context.Context, rawISBN string) (*Metad
 	norm, err := catalog.NormalizeISBN(rawISBN)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, rawISBN)
+	}
+
+	if p.gate != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-p.gate:
+		}
+		defer func() { p.gate <- struct{}{} }()
+
+		p.mu.Lock()
+		wait := time.Until(p.next)
+		p.mu.Unlock()
+		if wait > 0 {
+			timer := time.NewTimer(wait)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		p.mu.Lock()
+		p.next = time.Now().Add(p.interval)
+		p.mu.Unlock()
 	}
 
 	reqURL := p.baseURL + norm

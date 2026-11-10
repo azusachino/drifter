@@ -145,6 +145,32 @@ func TestBootstrapEvaluation_US1(t *testing.T) {
 			t.Fatalf("unexpected source evidence: %+v", ev.Source)
 		}
 	})
+
+	t.Run("bootstrap with adoptTarget accepts existing target status without mutation", func(t *testing.T) {
+		p := StatusEvaluationParams{
+			Provider:       "weread",
+			SourceAccount:  "mine",
+			BookID:         "10001",
+			SourceBook:     Book{ID: "10001", Title: "Sample"},
+			SourceProgress: Progress{Status: "reading", Percent: 50, Started: true},
+			TargetAccount:  "default",
+			WorkID:         501,
+			TargetStatus: &UserBookStatus{
+				ID:       999,
+				BookID:   501,
+				StatusID: HardcoverStatusWantToRead, // Target exists as Want to Read
+			},
+			AdoptTarget: true,
+		}
+
+		prop := EvaluateStatus(p)
+		if prop.Action != ActionNoOp {
+			t.Fatalf("expected action no-op with adoptTarget, got %q", prop.Action)
+		}
+		if prop.Reason != ReasonAdoptTargetApproved {
+			t.Fatalf("expected reason %s, got %s", ReasonAdoptTargetApproved, prop.Reason)
+		}
+	})
 }
 
 func TestManualTargetEditProtection_US5(t *testing.T) {
@@ -201,6 +227,24 @@ func TestManualTargetEditProtection_US5(t *testing.T) {
 		if prop.ConflictEvidence.Baseline.TargetStatusID != HardcoverStatusCurrentlyReading {
 			t.Fatalf("expected baseline target status %d, got %d",
 				HardcoverStatusCurrentlyReading, prop.ConflictEvidence.Baseline.TargetStatusID)
+		}
+	})
+
+	t.Run("manual target edit with adoptTarget accepts target status as baseline", func(t *testing.T) {
+		p := baseParams
+		p.AdoptTarget = true
+		p.TargetStatus = &UserBookStatus{
+			ID:       777,
+			BookID:   501,
+			StatusID: HardcoverStatusRead, // Changed manually on Hardcover
+		}
+
+		prop := EvaluateStatus(p)
+		if prop.Action != ActionNoOp {
+			t.Fatalf("expected action no-op, got %q", prop.Action)
+		}
+		if prop.Reason != ReasonAdoptTargetApproved {
+			t.Fatalf("expected reason %s, got %s", ReasonAdoptTargetApproved, prop.Reason)
 		}
 	})
 

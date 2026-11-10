@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/azusachino/drifter/internal/config"
 )
@@ -417,5 +418,26 @@ func TestNewProviderFromConfig(t *testing.T) {
 	}
 	if p := NewProviderFromConfig(config.ISBNConfig{Enabled: true, Provider: "unknown"}); p != nil {
 		t.Fatal("expected nil provider for unknown provider")
+	}
+}
+
+func TestDoubanProviderPacing(t *testing.T) {
+	var count int
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		count++
+		rw.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	p := NewDoubanProviderWithClient(server.URL+"/", server.Client(), 20*time.Millisecond)
+	start := time.Now()
+	_, _ = p.LookupISBN(context.Background(), "9787521768527")
+	_, _ = p.LookupISBN(context.Background(), "9787521768527")
+	elapsed := time.Since(start)
+	if elapsed < 18*time.Millisecond {
+		t.Fatalf("expected at least 18ms between paced requests, elapsed %v", elapsed)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 requests, got %d", count)
 	}
 }

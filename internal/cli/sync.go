@@ -38,6 +38,7 @@ func (app *cliApp) syncCommand() *cobra.Command {
 		allowPrivate  bool
 		dryRun        bool
 		adoptSource   bool
+		adoptTarget   bool
 	)
 
 	command := &cobra.Command{
@@ -58,10 +59,14 @@ func (app *cliApp) syncCommand() *cobra.Command {
 	flags.BoolVar(&allowPrivate, "allow-private", false, "allow synchronizing private reading status")
 	flags.BoolVar(&dryRun, "dry-run", false, "evaluate and preview status sync proposal without mutating target")
 	flags.BoolVar(&adoptSource, "adopt-source", false, "resolve first-sync bootstrap conflict by updating target to match source progress")
+	flags.BoolVar(&adoptTarget, "adopt-target", false, "resolve status conflict by adopting target status as baseline")
 
 	markRequiredFlags(command, "book-id")
 
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
+		if adoptSource && adoptTarget {
+			return fmt.Errorf("cannot specify both --adopt-source and --adopt-target")
+		}
 		path, err := decisionPath(dbPath)
 		if err != nil {
 			return err
@@ -116,6 +121,7 @@ func (app *cliApp) syncCommand() *cobra.Command {
 					AllowPrivateSync:  allowPrivate,
 					DeclaredSourceVID: sourceVID,
 					AdoptSource:       adoptSource,
+					AdoptTarget:       adoptTarget,
 					Now:               now,
 				},
 			)
@@ -144,6 +150,7 @@ func (app *cliApp) syncCommand() *cobra.Command {
 				AllowPrivateSync:  allowPrivate,
 				DeclaredSourceVID: sourceVID,
 				AdoptSource:       adoptSource,
+				AdoptTarget:       adoptTarget,
 				Now:               now,
 			},
 		)
