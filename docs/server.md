@@ -90,7 +90,7 @@ sequenceDiagram
   actor Consumer as Consumer (Iroha)
   participant Server as Drifter Server (:8081)
   participant WeRead as WeRead Cloud API
-  participant Store as SQLite (mappings v7)
+  participant Store as SQLite (mappings v8)
 
   Consumer->>Server: GET /api/v1/reading/snapshot?limit=50
   Note over Consumer,Server: Authorization: Bearer DRIFTER_API_TOKEN
