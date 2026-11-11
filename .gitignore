@@ -50,3 +50,5 @@ go.work.sum
 # archify working files
 .archify/
 *.delivery-pending.json
+.rumdl_cache/
+.pi/

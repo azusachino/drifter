@@ -1,7 +1,10 @@
 GO = mise exec -- go
 GOFMT = mise exec -- gofmt
 
-.PHONY: check fmt fmt-check test build e2e e2e-install
+CONTAINER_TOOL ?= podman
+IMAGE_TAG ?= azusachino.com/drifter:latest
+
+.PHONY: check fmt fmt-check test build image-build e2e e2e-install
 
 check: fmt-check
 	$(GO) vet ./...
@@ -22,6 +25,9 @@ build:
 	mkdir -p bin
 	$(GO) build -o bin/drifter ./cmd/cli
 	$(GO) build -o bin/drifter-server ./cmd/server
+
+image-build:
+	$(CONTAINER_TOOL) build -t $(IMAGE_TAG) --build-arg SOURCE_REVISION="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" -f Containerfile .
 
 e2e:
 	mise exec -- npm run e2e
