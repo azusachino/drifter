@@ -32,5 +32,5 @@ WORKDIR /var/lib/drifter
 EXPOSE 8081
 
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/drifter-server"]
-CMD ["--config", "/etc/drifter/config.toml", "--db", "/var/lib/drifter/mappings.sqlite"]
+CMD ["--config", "/etc/drifter/config.toml", "--db", "/var/lib/drifter/db/mappings.sqlite"]
 

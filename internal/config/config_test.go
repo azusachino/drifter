@@ -57,6 +57,20 @@ path = "/var/lib/drifter/mappings.sqlite"
 	}
 }
 
+func TestLoadUnspecifiedServerAddressWithAllowedHosts(t *testing.T) {
+	cfg, err := Load(write(t, `
+[server]
+addr = "0.0.0.0:8081"
+allowed_hosts = ["drifter.h.azusachino.com", "drifter.harus-media"]
+`))
+	if err != nil {
+		t.Fatalf("expected 0.0.0.0:8081 to be accepted when allowed_hosts is configured, got: %v", err)
+	}
+	if cfg.Server.Addr != "0.0.0.0:8081" || len(cfg.Server.AllowedHosts) != 2 {
+		t.Fatalf("unexpected server config: %+v", cfg.Server)
+	}
+}
+
 func TestLoadRejectsInvalidOrUnsafeConfiguration(t *testing.T) {
 	for name, content := range map[string]string{
 		"unknown-key":             "[log]\nlevel = \"info\"\n\n[sync]\nauto_write = true\n",

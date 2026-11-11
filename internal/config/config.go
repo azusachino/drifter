@@ -154,8 +154,8 @@ func (c Config) validate() error {
 	}
 	serverHost, _, _ := net.SplitHostPort(c.Server.Addr)
 	serverIP := net.ParseIP(serverHost)
-	if serverHost == "" || serverHost == "*" || (serverIP != nil && serverIP.IsUnspecified()) {
-		return fmt.Errorf("server.addr must name a concrete listener host for Host validation")
+	if serverHost == "" || serverHost == "*" || (serverIP != nil && serverIP.IsUnspecified() && len(c.Server.AllowedHosts) == 0) {
+		return fmt.Errorf("server.addr must name a concrete listener host for Host validation unless server.allowed_hosts is configured")
 	}
 	for _, h := range c.Server.AllowedHosts {
 		if strings.TrimSpace(h) == "" || strings.ContainsAny(h, "/\\@?#") {

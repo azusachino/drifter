@@ -398,6 +398,7 @@ func TestReadingChangesReturnsDeltaAndWatermark(t *testing.T) {
 	now := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
 	source := &changesSource{now: now}
 	db := snapshotDatabase(t)
+	snapshotSetMappingUpdatedAt(t, db, "123", now.Add(-30*time.Minute))
 	base := newSnapshotServer(t, source, db, now, "synthetic-api-token")
 	authorization := map[string]string{"Authorization": "Bearer synthetic-api-token"}
 	since := now.Add(-time.Hour)
