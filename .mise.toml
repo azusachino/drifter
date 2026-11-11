@@ -1,0 +1,8 @@
+# Tools this repo's CI needs. The shared pins live in the workstation's
+# vendor/harus-nix mise config, which Home Manager installs as a machine-global
+# config: a GitHub runner has no such config, so anything `make` runs in CI is
+# repeated here at the shared minor version. `make toolchain-check` in the
+# workstation root fails when this file drifts from it.
+
+[tools]
+go = "1.27"
