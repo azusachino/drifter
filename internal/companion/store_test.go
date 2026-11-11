@@ -18,6 +18,69 @@ func testMapping() Mapping {
 	}
 }
 
+// mappingIdentity drops storage instants so an assertion stays about the
+// confirmed target rather than the moment it was confirmed.
+func mappingIdentity(m Mapping) Mapping {
+	m.CreatedAt, m.UpdatedAt = time.Time{}, time.Time{}
+	return m
+}
+
+func mappingIdentities(rows []Mapping) []Mapping {
+	trimmed := make([]Mapping, 0, len(rows))
+	for _, row := range rows {
+		trimmed = append(trimmed, mappingIdentity(row))
+	}
+	return trimmed
+}
+
+func TestConfirmRecordsAndReplacesMappingTimestamps(t *testing.T) {
+	ctx := context.Background()
+	s, err := OpenStore(filepath.Join(t.TempDir(), "mappings.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	m := testMapping()
+	if err := s.Confirm(ctx, m, false); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.GetMapping(ctx, m.Provider, m.SourceAccount, m.BookID, m.TargetAccount)
+	if err != nil || first == nil {
+		t.Fatalf("confirmed mapping unreadable: %+v, %v", first, err)
+	}
+	if first.CreatedAt.IsZero() || !first.CreatedAt.Equal(first.UpdatedAt) {
+		t.Fatalf("confirmation did not record one shared instant: %+v", first)
+	}
+	// Stored instants are second-granular, so a replacement can only be
+	// observed as later after the clock has left that second behind.
+	time.Sleep(1100 * time.Millisecond)
+	changed := m
+	changed.WorkID, changed.EditionID = 99, 100
+	if err := s.Confirm(ctx, changed, true); err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.GetMapping(ctx, m.Provider, m.SourceAccount, m.BookID, m.TargetAccount)
+	if err != nil || second == nil {
+		t.Fatalf("replaced mapping unreadable: %+v, %v", second, err)
+	}
+	if !second.CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("replacement rewrote the created instant: %v -> %v", first.CreatedAt, second.CreatedAt)
+	}
+	if !second.UpdatedAt.After(first.UpdatedAt) {
+		t.Fatalf("replacement did not advance the updated instant: %v -> %v", first.UpdatedAt, second.UpdatedAt)
+	}
+	if err := s.Confirm(ctx, changed, false); err != nil {
+		t.Fatal(err)
+	}
+	third, err := s.GetMapping(ctx, m.Provider, m.SourceAccount, m.BookID, m.TargetAccount)
+	if err != nil || third == nil {
+		t.Fatalf("re-confirmed mapping unreadable: %+v, %v", third, err)
+	}
+	if !third.UpdatedAt.Equal(second.UpdatedAt) {
+		t.Fatalf("a no-op confirmation advanced the updated instant: %v -> %v", second.UpdatedAt, third.UpdatedAt)
+	}
+}
+
 func TestStorePersistenceAndReplacement(t *testing.T) {
 	ctx := context.Background()
 	// URI-sensitive characters must not become connection parameters.
@@ -39,7 +102,7 @@ func TestStorePersistenceAndReplacement(t *testing.T) {
 		t.Fatal("different mapping silently replaced existing confirmation")
 	}
 	rows, err := s.List(ctx)
-	if err != nil || !reflect.DeepEqual(rows, []Mapping{m}) {
+	if err != nil || !reflect.DeepEqual(mappingIdentities(rows), []Mapping{m}) {
 		t.Fatalf("original confirmation changed: %+v, %v", rows, err)
 	}
 	if err := s.Close(); err != nil {
@@ -51,14 +114,14 @@ func TestStorePersistenceAndReplacement(t *testing.T) {
 	}
 	defer s.Close()
 	rows, err = s.List(ctx)
-	if err != nil || !reflect.DeepEqual(rows, []Mapping{m}) {
+	if err != nil || !reflect.DeepEqual(mappingIdentities(rows), []Mapping{m}) {
 		t.Fatalf("confirmation did not survive reopen: %+v, %v", rows, err)
 	}
 	if err := s.Confirm(ctx, changed, true); err != nil {
 		t.Fatal(err)
 	}
 	rows, err = s.List(ctx)
-	if err != nil || !reflect.DeepEqual(rows, []Mapping{changed}) {
+	if err != nil || !reflect.DeepEqual(mappingIdentities(rows), []Mapping{changed}) {
 		t.Fatalf("explicit replacement failed: %+v, %v", rows, err)
 	}
 	info, err := os.Stat(path)
@@ -209,7 +272,7 @@ func TestStoreTreatsMetadataAsData(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows, err := s.List(context.Background())
-	if err != nil || !reflect.DeepEqual(rows, []Mapping{m}) {
+	if err != nil || !reflect.DeepEqual(mappingIdentities(rows), []Mapping{m}) {
 		t.Fatalf("metadata changed SQL: %+v, %v", rows, err)
 	}
 }

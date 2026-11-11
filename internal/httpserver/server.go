@@ -163,6 +163,7 @@ func New(options Options) (*Server, error) {
 	})
 	router.Route("/api/v1", func(v1 chi.Router) {
 		v1.Get("/reading/snapshot", s.handleReadingSnapshot)
+		v1.Get("/reading/changes", s.handleReadingChanges)
 	})
 	router.Route("/mappings", func(mappings chi.Router) {
 		mappings.Post("/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, false) })
@@ -589,22 +590,93 @@ func (s *Server) handleReadingSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	snapshot, err := companion.ExportReadingSnapshot(ctx, s.database, source, options)
 	if err != nil {
-		if errors.Is(err, companion.ErrInvalidSnapshotCursor) {
-			apiError(w, http.StatusBadRequest, "invalid_cursor")
-			return
-		}
-		if errors.Is(err, companion.ErrSnapshotStateUnavailable) {
-			apiError(w, http.StatusServiceUnavailable, "mapping_database_unavailable")
-			return
-		}
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.Canceled) {
-			apiError(w, http.StatusGatewayTimeout, "operation_timeout")
-			return
-		}
-		apiError(w, http.StatusBadGateway, "snapshot_failed")
+		writeSnapshotFailure(w, ctx, err)
 		return
 	}
 	writeJSON(w, r, snapshot)
+}
+
+// handleReadingChanges serves one page of reading facts that changed at or after
+// a consumer's watermark. A watermark beyond the delta horizon is refused with
+// 410 Gone rather than answered with a delta that may be incomplete.
+func (s *Server) handleReadingChanges(w http.ResponseWriter, r *http.Request) {
+	if !readRequestAllowed(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, "GET")
+		return
+	}
+	if !s.bearerAuthorized(r) {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		apiError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if !noBody(w, r) {
+		return
+	}
+	options, err := changesOptions(r.URL.Query(), s.now)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, "invalid_changes_query")
+		return
+	}
+	if err := companion.ValidateReadingSnapshotCursor(options.Cursor); err != nil {
+		apiError(w, http.StatusBadRequest, "invalid_cursor")
+		return
+	}
+	// The horizon is a contract answer, not provider work: refuse it before an
+	// operation slot is taken so a busy provider can never mask the 410.
+	if s.now().UTC().Sub(options.Since) > companion.MaxChangeHorizon {
+		writeHorizonExceeded(w, r)
+		return
+	}
+	ctx, release, admitted := s.admit(r.Context())
+	if !admitted {
+		apiError(w, http.StatusServiceUnavailable, "provider_operation_busy")
+		return
+	}
+	defer release()
+	source, err := s.pendingSource()
+	if err != nil {
+		apiError(w, http.StatusServiceUnavailable, "provider_unavailable")
+		return
+	}
+	changes, err := companion.ExportReadingChanges(ctx, s.database, source, options)
+	if err != nil {
+		if errors.Is(err, companion.ErrHorizonExceeded) {
+			writeHorizonExceeded(w, r)
+			return
+		}
+		writeSnapshotFailure(w, ctx, err)
+		return
+	}
+	writeJSON(w, r, changes)
+}
+
+// writeHorizonExceeded tells a consumer its watermark is too old for a delta and
+// that a full snapshot is required instead of a possibly incomplete answer.
+func writeHorizonExceeded(w http.ResponseWriter, r *http.Request) {
+	writeJSONStatus(w, r, http.StatusGone, map[string]any{
+		"error":             "horizon_exceeded",
+		"message":           "watermark is older than 14 days; full snapshot required",
+		"snapshot_required": true,
+	})
+}
+
+// writeSnapshotFailure maps a snapshot or changes export failure onto the
+// versioned API error contract.
+func writeSnapshotFailure(w http.ResponseWriter, ctx context.Context, err error) {
+	switch {
+	case errors.Is(err, companion.ErrInvalidSnapshotCursor):
+		apiError(w, http.StatusBadRequest, "invalid_cursor")
+	case errors.Is(err, companion.ErrSnapshotStateUnavailable):
+		apiError(w, http.StatusServiceUnavailable, "mapping_database_unavailable")
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled),
+		errors.Is(ctx.Err(), context.DeadlineExceeded), errors.Is(ctx.Err(), context.Canceled):
+		apiError(w, http.StatusGatewayTimeout, "operation_timeout")
+	default:
+		apiError(w, http.StatusBadGateway, "snapshot_failed")
+	}
 }
 
 // bearerAuthorized accepts exactly one well-formed Bearer credential and
@@ -1369,13 +1441,10 @@ func snapshotOptions(query url.Values, now func() time.Time) (companion.ReadingS
 		Cursor:        query.Get("cursor"),
 		Now:           now,
 	}
-	if options.SourceAccount == "" {
-		options.SourceAccount = companion.DefaultSourceAccount
-	}
-	if options.TargetAccount == "" {
-		options.TargetAccount = companion.DefaultTargetAccount
-	}
-	if !companion.ValidLabel(options.SourceAccount) || !companion.ValidLabel(options.TargetAccount) {
+	// No account label is demanded: an omitted label is resolved from the bound
+	// provider account, never silently required to be "default".
+	if (options.SourceAccount != "" && !companion.ValidLabel(options.SourceAccount)) ||
+		(options.TargetAccount != "" && !companion.ValidLabel(options.TargetAccount)) {
 		return companion.ReadingSnapshotOptions{}, fmt.Errorf("invalid snapshot accounts")
 	}
 	limit := companion.DefaultReadingSnapshotLimit
@@ -1394,6 +1463,66 @@ func snapshotOptions(query url.Values, now func() time.Time) (companion.ReadingS
 	}
 	options.Limit = limit
 	return options, nil
+}
+
+func changesOptions(query url.Values, now func() time.Time) (companion.ReadingChangesOptions, error) {
+	for key, values := range query {
+		switch key {
+		case "account", "target_account", "since", "limit", "cursor":
+		default:
+			return companion.ReadingChangesOptions{}, fmt.Errorf("invalid changes query")
+		}
+		if len(values) != 1 {
+			return companion.ReadingChangesOptions{}, fmt.Errorf("invalid changes query")
+		}
+	}
+	since, err := parseWatermark(query.Get("since"))
+	if err != nil {
+		return companion.ReadingChangesOptions{}, err
+	}
+	options := companion.ReadingChangesOptions{
+		SourceAccount: query.Get("account"),
+		TargetAccount: query.Get("target_account"),
+		Since:         since,
+		Cursor:        query.Get("cursor"),
+		Now:           now,
+	}
+	if (options.SourceAccount != "" && !companion.ValidLabel(options.SourceAccount)) ||
+		(options.TargetAccount != "" && !companion.ValidLabel(options.TargetAccount)) {
+		return companion.ReadingChangesOptions{}, fmt.Errorf("invalid changes accounts")
+	}
+	limit := companion.DefaultReadingChangesLimit
+	if raw := query.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return companion.ReadingChangesOptions{}, fmt.Errorf("invalid changes limit")
+		}
+		limit = parsed
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > companion.MaxReadingChangesLimit {
+		limit = companion.MaxReadingChangesLimit
+	}
+	options.Limit = limit
+	return options, nil
+}
+
+// parseWatermark accepts the RFC3339 watermark this API issues, or a unix
+// second count for a consumer that stores instants numerically.
+func parseWatermark(raw string) (time.Time, error) {
+	if raw == "" {
+		return time.Time{}, fmt.Errorf("since is required")
+	}
+	if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+		return parsed.UTC(), nil
+	}
+	seconds, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid since watermark")
+	}
+	return time.Unix(seconds, 0).UTC(), nil
 }
 
 func writeJSON(w http.ResponseWriter, r *http.Request, value any) {

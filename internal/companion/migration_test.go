@@ -76,11 +76,11 @@ func TestStoreVersionsNewAndLegacyDatabases(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if schemaVersion(t, s.db) != 6 {
-					t.Fatal("database not upgraded to version 6")
+				if schemaVersion(t, s.db) != 7 {
+					t.Fatal("database not upgraded to version 7")
 				}
 				rows, err := s.List(context.Background())
-				if err != nil || !reflect.DeepEqual(rows, want) {
+				if err != nil || !reflect.DeepEqual(mappingIdentities(rows), want) {
 					t.Fatalf("mapping preservation: %+v, %v", rows, err)
 				}
 				if err := s.Close(); err != nil {
@@ -92,7 +92,7 @@ func TestStoreVersionsNewAndLegacyDatabases(t *testing.T) {
 }
 
 func TestStoreRefusesUnsupportedVersionsWithoutCreatingSchema(t *testing.T) {
-	for _, version := range []int{7, -1} {
+	for _, version := range []int{8, -1} {
 		path := filepath.Join(t.TempDir(), "mappings.sqlite")
 		db := fixtureDB(t, path)
 		if _, err := db.Exec("PRAGMA user_version = " + strconv.Itoa(version)); err != nil {
@@ -199,13 +199,13 @@ PRAGMA user_version = 3;
 	}
 	defer s.Close()
 
-	if schemaVersion(t, s.db) != 6 {
-		t.Fatalf("expected version 6, got %d", schemaVersion(t, s.db))
+	if schemaVersion(t, s.db) != 7 {
+		t.Fatalf("expected version 7, got %d", schemaVersion(t, s.db))
 	}
 
 	// Verify existing data preserved
 	mGot, err := s.GetMapping(ctx, mapping.Provider, mapping.SourceAccount, mapping.BookID, mapping.TargetAccount)
-	if err != nil || mGot == nil || *mGot != mapping {
+	if err != nil || mGot == nil || mappingIdentity(*mGot) != mapping {
 		t.Fatalf("mapping preservation failed: got %+v, err %v", mGot, err)
 	}
 	fpGot, err := s.GetAccountFingerprint(ctx, "weread", "mine")
@@ -320,8 +320,8 @@ PRAGMA user_version = 4;
 	}
 	defer s.Close()
 
-	if schemaVersion(t, s.db) != 6 {
-		t.Fatalf("expected version 6, got %d", schemaVersion(t, s.db))
+	if schemaVersion(t, s.db) != 7 {
+		t.Fatalf("expected version 7, got %d", schemaVersion(t, s.db))
 	}
 
 	// Verify v4 baseline is preserved
@@ -467,8 +467,8 @@ PRAGMA user_version = 5;
 	}
 	defer s.Close()
 
-	if schemaVersion(t, s.db) != 6 {
-		t.Fatalf("expected version 6, got %d", schemaVersion(t, s.db))
+	if schemaVersion(t, s.db) != 7 {
+		t.Fatalf("expected version 7, got %d", schemaVersion(t, s.db))
 	}
 
 	// Verify v6 sync_runs and sync_holds work
@@ -506,5 +506,55 @@ PRAGMA user_version = 5;
 	holds, err := s.ListSyncHolds(ctx, mapping.SourceAccount, mapping.TargetAccount)
 	if err != nil || len(holds) != 1 || holds[0].ID != holdID {
 		t.Fatalf("list sync holds failed: got %+v, err %v", holds, err)
+	}
+}
+
+// TestMappingTimestampsMigrateFromVersionSix keeps the v6 mapping schema as a
+// literal fixture so the upgrade that adds observable link instants stays
+// verifiable against the schema it actually replaced.
+func TestMappingTimestampsMigrateFromVersionSix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mappings.sqlite")
+	db := fixtureDB(t, path)
+	v6Schema := `
+CREATE TABLE mappings (
+	provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+	target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+	edition_id INTEGER NOT NULL CHECK(edition_id >= 0), source_title TEXT NOT NULL, source_isbn TEXT NOT NULL,
+	PRIMARY KEY(provider, source_account, book_id, target_account));
+PRAGMA user_version = 6;
+`
+	if _, err := db.Exec(v6Schema); err != nil {
+		t.Fatal(err)
+	}
+	mapping := testMapping()
+	if _, err := db.Exec(`INSERT INTO mappings VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		mapping.Provider, mapping.SourceAccount, mapping.BookID, mapping.TargetAccount,
+		mapping.WorkID, mapping.EditionID, mapping.SourceTitle, mapping.SourceISBN); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	upgradedAfter := time.Now().UTC().Add(-time.Minute)
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("failed to open store from v6: %v", err)
+	}
+	defer s.Close()
+	if schemaVersion(t, s.db) != 7 {
+		t.Fatalf("expected version 7, got %d", schemaVersion(t, s.db))
+	}
+	rows, err := s.List(context.Background())
+	if err != nil || len(rows) != 1 || mappingIdentity(rows[0]) != mapping {
+		t.Fatalf("mapping preservation failed: %+v, %v", rows, err)
+	}
+	upgraded := rows[0]
+	if upgraded.CreatedAt.IsZero() || upgraded.UpdatedAt.IsZero() {
+		t.Fatalf("timestamps were not backfilled: %+v", upgraded)
+	}
+	if upgraded.CreatedAt.Before(upgradedAfter) || upgraded.UpdatedAt.Before(upgradedAfter) {
+		t.Fatalf("backfill invented an earlier instant: %+v", upgraded)
+	}
+	if !upgraded.CreatedAt.Equal(upgraded.UpdatedAt) {
+		t.Fatalf("backfill recorded two instants for one upgrade: %+v", upgraded)
 	}
 }

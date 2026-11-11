@@ -19,7 +19,7 @@ var safeRoutes = map[string]struct{}{
 	"/mappings/confirm": {}, "/mappings/replace": {}, "/mappings/unlink": {},
 
 	// Versioned read API for an authenticated cross-service consumer.
-	"/api/v1/reading/snapshot": {},
+	"/api/v1/reading/snapshot": {}, "/api/v1/reading/changes": {},
 }
 
 func requestRouteLogAttribute(next http.Handler) http.Handler {

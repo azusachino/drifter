@@ -22,7 +22,7 @@ func seedCatalogExportRows(t *testing.T, path string, selected, other int) {
 		store.Close()
 		t.Fatal(err)
 	}
-	insert := `INSERT INTO mappings VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	insert := `INSERT INTO mappings (provider, source_account, book_id, target_account, work_id, edition_id, source_title, source_isbn) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	for i := 1; i <= selected; i++ {
 		if _, err := tx.Exec(insert, "weread", "selected-source", fmt.Sprint(i), "selected-target", i, 0, "private-title", "private-isbn"); err != nil {
 			tx.Rollback()
@@ -66,7 +66,7 @@ func TestCatalogExportBoundsSelectedRowsAndPreservesAtLimitAccountScope(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.db.Exec(`INSERT INTO mappings VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "weread", "selected-source", "5001", "selected-target", 5001, 0, "private-title", "private-isbn"); err != nil {
+	if _, err := writer.db.Exec(`INSERT INTO mappings (provider, source_account, book_id, target_account, work_id, edition_id, source_title, source_isbn) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "weread", "selected-source", "5001", "selected-target", 5001, 0, "private-title", "private-isbn"); err != nil {
 		writer.Close()
 		t.Fatal(err)
 	}

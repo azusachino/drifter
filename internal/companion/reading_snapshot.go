@@ -28,13 +28,18 @@ var ErrInvalidSnapshotCursor = errors.New("invalid reading snapshot cursor")
 var ErrSnapshotStateUnavailable = errors.New("reading snapshot state unavailable")
 
 // ReadingSnapshot is one page of provider-neutral reading facts for an account.
+// SourceIdentity and TargetIdentity name the provider account behind the local
+// account labels; a label is a namespace, never an identity. An identity stays
+// empty when no binding and no provider can confirm it.
 type ReadingSnapshot struct {
-	Version       string                `json:"version"`
-	GeneratedAt   time.Time             `json:"generated_at"`
-	SourceAccount string                `json:"source_account"`
-	Cursor        string                `json:"cursor,omitempty"`
-	HasMore       bool                  `json:"has_more"`
-	Books         []ReadingSnapshotBook `json:"books"`
+	Version        string                `json:"version"`
+	GeneratedAt    time.Time             `json:"generated_at"`
+	SourceIdentity string                `json:"source_identity"`
+	TargetIdentity string                `json:"target_identity,omitempty"`
+	Watermark      string                `json:"watermark"`
+	HasMore        bool                  `json:"has_more"`
+	Cursor         string                `json:"cursor,omitempty"`
+	Books          []ReadingSnapshotBook `json:"books"`
 }
 
 // ReadingSnapshotBook is the export view of one source book. Facts the source
@@ -77,6 +82,73 @@ type ReadingSnapshotOptions struct {
 	Now           func() time.Time
 }
 
+// readingAccounts is the account pair a snapshot reads, together with the
+// provider identities bound to those local labels when the store records them.
+type readingAccounts struct {
+	source         string
+	target         string
+	sourceIdentity string
+	targetIdentity string
+}
+
+// resolveReadingAccounts resolves the mapping namespace pair and the provider
+// identities behind it. A namespace label is local bookkeeping, so the identity
+// is the recorded provider fingerprint or the live provider's own answer; it
+// stays empty rather than being invented from a label.
+func resolveReadingAccounts(ctx context.Context, store *Store, source Source, sourceAccount, targetAccount string) (readingAccounts, error) {
+	sourceLabel, targetLabel, err := store.ResolveAccounts(ctx, sourceAccount, targetAccount)
+	if err != nil {
+		return readingAccounts{}, fmt.Errorf("reading snapshot requires valid source and target account labels")
+	}
+	fingerprints, err := store.ListAccountFingerprints(ctx)
+	if err != nil {
+		return readingAccounts{}, fmt.Errorf("%w: account fingerprints could not be read", ErrSnapshotStateUnavailable)
+	}
+	accounts := readingAccounts{source: sourceLabel, target: targetLabel}
+	accounts.sourceIdentity = boundFingerprint(fingerprints, DefaultSourceProvider, accounts.source)
+	if accounts.sourceIdentity == "" && sourceAccount == "" {
+		// No label was demanded and nothing is bound to the inferred label: the
+		// single bound source account is the honest answer.
+		if bound := singleProviderFingerprint(fingerprints, DefaultSourceProvider); bound != nil {
+			accounts.source, accounts.sourceIdentity = bound.Account, bound.Fingerprint
+		}
+	}
+	accounts.targetIdentity = boundFingerprint(fingerprints, DefaultTargetProvider, accounts.target)
+	if accounts.sourceIdentity == "" {
+		if provider, ok := source.(SourceProvider); ok {
+			if resolved, err := provider.ResolveAccountFingerprint(ctx, ""); err == nil && ValidFingerprint(resolved) {
+				accounts.sourceIdentity = resolved
+			}
+		}
+	}
+	return accounts, nil
+}
+
+func boundFingerprint(fingerprints []AccountFingerprint, provider, account string) string {
+	for _, fingerprint := range fingerprints {
+		if fingerprint.Provider == provider && fingerprint.Account == account {
+			return fingerprint.Fingerprint
+		}
+	}
+	return ""
+}
+
+// singleProviderFingerprint returns the only account bound to a provider, and
+// nil when none or several accounts are bound.
+func singleProviderFingerprint(fingerprints []AccountFingerprint, provider string) *AccountFingerprint {
+	var bound *AccountFingerprint
+	for i := range fingerprints {
+		if fingerprints[i].Provider != provider {
+			continue
+		}
+		if bound != nil {
+			return nil
+		}
+		bound = &fingerprints[i]
+	}
+	return bound
+}
+
 // ExportReadingSnapshot emits one page of shelf reading facts for an explicitly
 // selected account pair, enriched with confirmed mapping targets. It opens
 // state read-only and never creates or migrates the mapping database.
@@ -84,14 +156,7 @@ func ExportReadingSnapshot(ctx context.Context, dbPath string, source Source, op
 	if source == nil {
 		return nil, fmt.Errorf("reading snapshot requires a source provider")
 	}
-	sourceAccount, targetAccount := options.SourceAccount, options.TargetAccount
-	if sourceAccount == "" {
-		sourceAccount = DefaultSourceAccount
-	}
-	if targetAccount == "" {
-		targetAccount = DefaultTargetAccount
-	}
-	if !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) {
+	if (options.SourceAccount != "" && !ValidLabel(options.SourceAccount)) || (options.TargetAccount != "" && !ValidLabel(options.TargetAccount)) {
 		return nil, fmt.Errorf("reading snapshot requires valid source and target account labels")
 	}
 	limit := options.Limit
@@ -114,7 +179,11 @@ func ExportReadingSnapshot(ctx context.Context, dbPath string, source Source, op
 		return nil, fmt.Errorf("%w: confirmed mappings could not be opened", ErrSnapshotStateUnavailable)
 	}
 	defer store.Close()
-	mappings, err := store.ListMappingsForAccount(ctx, DefaultSourceProvider, sourceAccount, targetAccount)
+	accounts, err := resolveReadingAccounts(ctx, store, source, options.SourceAccount, options.TargetAccount)
+	if err != nil {
+		return nil, err
+	}
+	mappings, err := store.ListMappingsForAccount(ctx, DefaultSourceProvider, accounts.source, accounts.target)
 	if err != nil {
 		return nil, fmt.Errorf("%w: confirmed mappings could not be read", ErrSnapshotStateUnavailable)
 	}
@@ -123,11 +192,14 @@ func ExportReadingSnapshot(ctx context.Context, dbPath string, source Source, op
 		return nil, fmt.Errorf("reading snapshot could not read the source shelf")
 	}
 	books := orderSnapshotBooks(shelf.Books)
+	generatedAt := now().UTC()
 	snapshot := &ReadingSnapshot{
-		Version:       ReadingSnapshotVersion,
-		GeneratedAt:   now().UTC(),
-		SourceAccount: sourceAccount,
-		Books:         []ReadingSnapshotBook{},
+		Version:        ReadingSnapshotVersion,
+		GeneratedAt:    generatedAt,
+		SourceIdentity: accounts.sourceIdentity,
+		TargetIdentity: accounts.targetIdentity,
+		Watermark:      generatedAt.Format(time.RFC3339),
+		Books:          []ReadingSnapshotBook{},
 	}
 	if offset >= len(books) {
 		return snapshot, nil
@@ -148,20 +220,31 @@ func ExportReadingSnapshot(ctx context.Context, dbPath string, source Source, op
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		book, err := snapshotBook(ctx, source, row)
+		mapping, mapped := targets[row.ID]
+		book, err := enrichSnapshotBook(ctx, source, row, mapping, mapped)
 		if err != nil {
 			return nil, err
-		}
-		if mapping, ok := targets[row.ID]; ok && mapping.WorkID > 0 {
-			book.MatchedTarget = &ReadingMatchedTarget{
-				TargetProvider: DefaultTargetProvider,
-				WorkID:         mapping.WorkID,
-				EditionID:      mapping.EditionID,
-			}
 		}
 		snapshot.Books = append(snapshot.Books, book)
 	}
 	return snapshot, nil
+}
+
+// enrichSnapshotBook reads one shelf row and attaches the confirmed target when
+// a mapping exists for the same source identity.
+func enrichSnapshotBook(ctx context.Context, source Source, row ShelfBook, mapping Mapping, mapped bool) (ReadingSnapshotBook, error) {
+	book, err := snapshotBook(ctx, source, row)
+	if err != nil {
+		return ReadingSnapshotBook{}, err
+	}
+	if mapped && mapping.WorkID > 0 {
+		book.MatchedTarget = &ReadingMatchedTarget{
+			TargetProvider: DefaultTargetProvider,
+			WorkID:         mapping.WorkID,
+			EditionID:      mapping.EditionID,
+		}
+	}
+	return book, nil
 }
 
 // snapshotBook combines shelf identity, optional catalog metadata and progress.

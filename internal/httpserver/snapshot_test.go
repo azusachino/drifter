@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -107,10 +108,82 @@ func snapshotDatabase(t *testing.T) string {
 	if err := store.Confirm(context.Background(), mapping, false); err != nil {
 		t.Fatal(err)
 	}
+	// Bound identities let the versioned API report who it is actually reading
+	// instead of echoing a local account label.
+	boundAt := time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)
+	for _, binding := range []struct{ provider, account, fingerprint string }{
+		{"weread", "default", "weread:23849102"},
+		{"hardcover", "default", "hardcover:4821"},
+	} {
+		if _, err := store.VerifyOrBindAccountFingerprint(context.Background(), binding.provider, binding.account, binding.fingerprint, boundAt); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// snapshotSetMappingUpdatedAt rewrites only the stored link instant so delta
+// selection can be asserted without waiting on the wall clock.
+func snapshotSetMappingUpdatedAt(t *testing.T, path, bookID string, updatedAt time.Time) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE mappings SET updated_at=? WHERE book_id=?`, updatedAt.UTC().Format(time.RFC3339), bookID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// snapshotInsertMapping adds a confirmed link without taking the server's
+// ownership lease, so a mapping-only delta is observable over HTTP.
+func snapshotInsertMapping(t *testing.T, path, bookID string, workID int64, updatedAt time.Time) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	stamp := updatedAt.UTC().Format(time.RFC3339)
+	if _, err := db.Exec(`INSERT INTO mappings (provider, source_account, book_id, target_account,
+		work_id, edition_id, source_title, source_isbn, created_at, updated_at)
+		VALUES ('weread', 'default', ?, 'default', ?, 0, '', '', ?, ?)
+		ON CONFLICT(provider, source_account, book_id, target_account) DO UPDATE SET updated_at=excluded.updated_at`,
+		bookID, workID, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// changesSource serves a shelf with one book read inside the delta window and
+// one read long before it, so delta filtering is observable over HTTP.
+type changesSource struct {
+	now        time.Time
+	shelfCalls atomic.Int32
+}
+
+func (s *changesSource) Shelf(context.Context) (companion.ShelfResult, error) {
+	s.shelfCalls.Add(1)
+	secret := 0
+	return companion.ShelfResult{Complete: true, Books: []companion.ShelfBook{
+		{ID: "123", Title: "刚读过", LastOpened: epoch(s.now.Add(-time.Minute).Unix()), Secret: &secret},
+		{ID: "456", Title: "很久以前读过", LastOpened: epoch(s.now.Add(-48 * time.Hour).Unix()), Secret: &secret},
+	}}, nil
+}
+
+func (*changesSource) Search(context.Context, string) (companion.SearchResult, error) {
+	panic("unused")
+}
+
+func (*changesSource) Book(_ context.Context, id string) (companion.Book, error) {
+	return companion.Book{ID: id, Title: "Enriched " + id, Author: "作者"}, nil
+}
+
+func (*changesSource) Progress(_ context.Context, id string) (companion.Progress, error) {
+	return companion.Progress{Percent: 42, Started: true, ReadingTimeSeconds: 600, LastReadAt: 1700000000, Status: "reading"}, nil
 }
 
 func TestReadingSnapshotRequiresBearerToken(t *testing.T) {
@@ -190,8 +263,14 @@ func TestReadingSnapshotReturnsPagedBooks(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Version != companion.ReadingSnapshotVersion || !snapshot.GeneratedAt.Equal(now) || snapshot.SourceAccount != "default" {
+	if snapshot.Version != companion.ReadingSnapshotVersion || !snapshot.GeneratedAt.Equal(now) {
 		t.Fatalf("unexpected envelope: %+v", snapshot)
+	}
+	if snapshot.SourceIdentity != "weread:23849102" || snapshot.TargetIdentity != "hardcover:4821" {
+		t.Fatalf("identities=%q/%q", snapshot.SourceIdentity, snapshot.TargetIdentity)
+	}
+	if snapshot.Watermark != now.Format(time.RFC3339) {
+		t.Fatalf("watermark=%q", snapshot.Watermark)
 	}
 	if len(snapshot.Books) != 2 || snapshot.HasMore || snapshot.Cursor != "" {
 		t.Fatalf("unexpected page: %+v", snapshot)
@@ -294,4 +373,143 @@ func TestReadingSnapshotRejectsUnsupportedMethods(t *testing.T) {
 	if response.StatusCode != http.StatusMethodNotAllowed || source.shelfCalls.Load() != 0 {
 		t.Fatalf("status=%d", response.StatusCode)
 	}
+}
+
+func TestReadingChangesRequiresBearerToken(t *testing.T) {
+	now := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	source := &changesSource{now: now}
+	base := newSnapshotServer(t, source, snapshotDatabase(t), now, "synthetic-api-token")
+	for _, header := range []map[string]string{
+		nil,
+		{"Authorization": "Bearer wrong-token"},
+		{"Authorization": "Basic synthetic-api-token"},
+	} {
+		response := request(t, base, http.MethodGet, "/api/v1/reading/changes?since="+now.Add(-time.Hour).Format(time.RFC3339), header, nil)
+		if response.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("status=%d headers=%v", response.StatusCode, header)
+		}
+	}
+	if source.shelfCalls.Load() != 0 {
+		t.Fatal("an unauthorized request reached the provider")
+	}
+}
+
+func TestReadingChangesReturnsDeltaAndWatermark(t *testing.T) {
+	now := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	source := &changesSource{now: now}
+	db := snapshotDatabase(t)
+	base := newSnapshotServer(t, source, db, now, "synthetic-api-token")
+	authorization := map[string]string{"Authorization": "Bearer synthetic-api-token"}
+	since := now.Add(-time.Hour)
+
+	response := request(t, base, http.MethodGet, "/api/v1/reading/changes?since="+since.Format(time.RFC3339), authorization, nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", response.StatusCode)
+	}
+	var changes companion.ReadingSnapshot
+	if err := json.NewDecoder(response.Body).Decode(&changes); err != nil {
+		t.Fatal(err)
+	}
+	if len(changes.Books) != 1 || changes.Books[0].SourceBookID != "123" || changes.Books[0].Status != "reading" {
+		t.Fatalf("delta books=%+v", changes.Books)
+	}
+	if changes.SourceIdentity != "weread:23849102" || changes.TargetIdentity != "hardcover:4821" {
+		t.Fatalf("identities=%q/%q", changes.SourceIdentity, changes.TargetIdentity)
+	}
+	if changes.Watermark != now.Format(time.RFC3339) || !changes.GeneratedAt.Equal(now) || changes.HasMore || changes.Cursor != "" {
+		t.Fatalf("changes envelope=%+v", changes)
+	}
+
+	// A re-link is a change even when the source read nothing new, so the mapping
+	// instant alone must select a book.
+	snapshotSetMappingUpdatedAt(t, db, "123", since.Add(-time.Minute))
+	snapshotInsertMapping(t, db, "456", 654321, since.Add(time.Minute))
+	relinked := request(t, base, http.MethodGet, "/api/v1/reading/changes?since="+since.Format(time.RFC3339), authorization, nil)
+	if relinked.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", relinked.StatusCode)
+	}
+	var relinkedChanges companion.ReadingSnapshot
+	if err := json.NewDecoder(relinked.Body).Decode(&relinkedChanges); err != nil {
+		t.Fatal(err)
+	}
+	// "456" was last read 48h before the watermark, so only its re-link can
+	// select it; "123" stays selected by its own read instant.
+	if ids := snapshotIDs(relinkedChanges.Books); len(ids) != 2 || ids[0] != "123" || ids[1] != "456" {
+		t.Fatalf("mapping-only delta=%v", ids)
+	}
+}
+
+func TestReadingChangesRefusesOldWatermarkWithGone(t *testing.T) {
+	now := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	source := &changesSource{now: now}
+	base := newSnapshotServer(t, source, snapshotDatabase(t), now, "synthetic-api-token")
+	stale := now.Add(-15 * 24 * time.Hour).Format(time.RFC3339)
+	response := request(t, base, http.MethodGet, "/api/v1/reading/changes?since="+stale,
+		map[string]string{"Authorization": "Bearer synthetic-api-token"}, nil)
+	if response.StatusCode != http.StatusGone {
+		t.Fatalf("status=%d", response.StatusCode)
+	}
+	var body struct {
+		Error            string `json:"error"`
+		Message          string `json:"message"`
+		SnapshotRequired bool   `json:"snapshot_required"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error != "horizon_exceeded" || !body.SnapshotRequired || body.Message != "watermark is older than 14 days; full snapshot required" {
+		t.Fatalf("gone body=%+v", body)
+	}
+	if source.shelfCalls.Load() != 0 {
+		t.Fatal("a refused horizon reached the provider")
+	}
+}
+
+func TestReadingChangesQueryParsing(t *testing.T) {
+	now := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	source := &changesSource{now: now}
+	base := newSnapshotServer(t, source, snapshotDatabase(t), now, "synthetic-api-token")
+	authorization := map[string]string{"Authorization": "Bearer synthetic-api-token"}
+	since := now.Add(-time.Hour)
+
+	// A unix-second watermark is accepted alongside RFC3339.
+	unix := request(t, base, http.MethodGet, fmt.Sprintf("/api/v1/reading/changes?since=%d", since.Unix()), authorization, nil)
+	if unix.StatusCode != http.StatusOK {
+		t.Fatalf("unix watermark status=%d", unix.StatusCode)
+	}
+
+	for _, tc := range []struct{ name, path string }{
+		{"missing since", "/api/v1/reading/changes"},
+		{"invalid since", "/api/v1/reading/changes?since=yesterday"},
+		{"unknown parameter", "/api/v1/reading/changes?account=default&since=" + since.Format(time.RFC3339) + "&watermark=1"},
+		{"duplicate parameter", "/api/v1/reading/changes?since=" + since.Format(time.RFC3339) + "&since=" + since.Format(time.RFC3339)},
+		{"invalid cursor", "/api/v1/reading/changes?since=" + since.Format(time.RFC3339) + "&cursor=not-a-cursor"},
+		{"invalid account", "/api/v1/reading/changes?since=" + since.Format(time.RFC3339) + "&account=%20space"},
+		{"invalid limit", "/api/v1/reading/changes?since=" + since.Format(time.RFC3339) + "&limit=lots"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := request(t, base, http.MethodGet, tc.path, authorization, nil)
+			if response.StatusCode != http.StatusBadRequest {
+				t.Fatalf("path %q status=%d", tc.path, response.StatusCode)
+			}
+			var body map[string]string
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil || body["error"] == "" {
+				t.Fatalf("path %q body=%+v err=%v", tc.path, body, err)
+			}
+		})
+	}
+
+	post := request(t, base, http.MethodPost, "/api/v1/reading/changes?since="+since.Format(time.RFC3339), authorization, http.NoBody)
+	if post.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("post status=%d", post.StatusCode)
+	}
+}
+
+// snapshotIDs lists exported source book IDs for order assertions.
+func snapshotIDs(books []companion.ReadingSnapshotBook) []string {
+	ids := make([]string, 0, len(books))
+	for _, book := range books {
+		ids = append(ids, book.SourceBookID)
+	}
+	return ids
 }
