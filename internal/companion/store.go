@@ -35,15 +35,31 @@ type MappingTarget struct {
 	EditionID int64
 }
 
+// Mapping is one confirmed source-to-target link. CreatedAt and UpdatedAt are
+// storage instants maintained by the store: CreatedAt records when the link was
+// first confirmed, UpdatedAt advances on every replacement, so a consumer can
+// ask which links changed since a watermark.
 type Mapping struct {
-	Provider      string `json:"provider"`
-	SourceAccount string `json:"source_account"`
-	BookID        string `json:"book_id"`
-	TargetAccount string `json:"target_account"`
-	WorkID        int64  `json:"work_id"`
-	EditionID     int64  `json:"edition_id,omitempty"`
-	SourceTitle   string `json:"source_title"`
-	SourceISBN    string `json:"source_isbn,omitempty"`
+	Provider      string    `json:"provider"`
+	SourceAccount string    `json:"source_account"`
+	BookID        string    `json:"book_id"`
+	TargetAccount string    `json:"target_account"`
+	WorkID        int64     `json:"work_id"`
+	EditionID     int64     `json:"edition_id,omitempty"`
+	SourceTitle   string    `json:"source_title"`
+	SourceISBN    string    `json:"source_isbn,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// mappingTimestamp parses one stored mapping instant. An absent or corrupt value
+// stays zero so a reader never mistakes it for real observed activity.
+func mappingTimestamp(raw string) time.Time {
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }
 
 func ValidLabel(label string) bool {
@@ -202,7 +218,7 @@ func openStore(path string, readOnly bool, owner *DatabaseOwnership) (*Store, er
 	return &Store{db: db, path: path, owner: owner, readOnly: readOnly}, nil
 }
 
-const storeVersion = 6
+const storeVersion = 7
 
 func validateStoreSchema(db *sql.DB) error {
 	var version int
@@ -213,7 +229,7 @@ func validateStoreSchema(db *sql.DB) error {
 		return fmt.Errorf("unsupported database schema version %d (supported: %d)", version, storeVersion)
 	}
 	rows, err := db.Query(`SELECT provider,source_account,book_id,target_account,
-		work_id,edition_id,source_title,source_isbn FROM mappings LIMIT 0`)
+		work_id,edition_id,source_title,source_isbn,created_at,updated_at FROM mappings LIMIT 0`)
 	if err != nil {
 		return err
 	}
@@ -428,6 +444,22 @@ func migrateStore(db *sql.DB) error {
 		}
 		version = 6
 	}
+	if version == 6 {
+		// Existing links become observable deltas from the upgrade instant; no
+		// earlier confirmation instant was ever recorded, so none is invented.
+		for _, column := range []string{"created_at", "updated_at"} {
+			if _, err := tx.Exec(`ALTER TABLE mappings ADD COLUMN ` + column + ` TEXT NOT NULL DEFAULT ''`); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(`UPDATE mappings SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE created_at = ''`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 7"); err != nil {
+			return err
+		}
+		version = 7
+	}
 	return tx.Commit()
 }
 
@@ -456,11 +488,12 @@ func (s *Store) Confirm(ctx context.Context, m Mapping, replace bool) error {
 		return err
 	}
 	defer release()
-	query := `INSERT INTO mappings VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(provider,source_account,book_id,target_account) DO NOTHING`
+	confirmedAt := time.Now().UTC().Format(time.RFC3339)
+	query := `INSERT INTO mappings (provider,source_account,book_id,target_account,work_id,edition_id,source_title,source_isbn,created_at,updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(provider,source_account,book_id,target_account) DO NOTHING`
 	if replace {
-		query = `INSERT INTO mappings VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(provider,source_account,book_id,target_account) DO UPDATE SET work_id=excluded.work_id, edition_id=excluded.edition_id, source_title=excluded.source_title, source_isbn=excluded.source_isbn`
+		query = `INSERT INTO mappings (provider,source_account,book_id,target_account,work_id,edition_id,source_title,source_isbn,created_at,updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(provider,source_account,book_id,target_account) DO UPDATE SET work_id=excluded.work_id, edition_id=excluded.edition_id, source_title=excluded.source_title, source_isbn=excluded.source_isbn, updated_at=excluded.updated_at`
 	}
-	r, err := s.db.ExecContext(ctx, query, m.Provider, m.SourceAccount, m.BookID, m.TargetAccount, m.WorkID, m.EditionID, m.SourceTitle, m.SourceISBN)
+	r, err := s.db.ExecContext(ctx, query, m.Provider, m.SourceAccount, m.BookID, m.TargetAccount, m.WorkID, m.EditionID, m.SourceTitle, m.SourceISBN, confirmedAt, confirmedAt)
 	if err != nil {
 		return err
 	}
@@ -492,7 +525,8 @@ func (s *Store) ReplaceExpected(ctx context.Context, m Mapping, expected Mapping
 		return err
 	}
 	defer release()
-	r, err := s.db.ExecContext(ctx, `UPDATE mappings SET work_id=?,edition_id=?,source_title=?,source_isbn=? WHERE provider=? AND source_account=? AND book_id=? AND target_account=? AND work_id=? AND edition_id=?`, m.WorkID, m.EditionID, m.SourceTitle, m.SourceISBN, m.Provider, m.SourceAccount, m.BookID, m.TargetAccount, expected.WorkID, expected.EditionID)
+	replacedAt := time.Now().UTC().Format(time.RFC3339)
+	r, err := s.db.ExecContext(ctx, `UPDATE mappings SET work_id=?,edition_id=?,source_title=?,source_isbn=?,updated_at=? WHERE provider=? AND source_account=? AND book_id=? AND target_account=? AND work_id=? AND edition_id=?`, m.WorkID, m.EditionID, m.SourceTitle, m.SourceISBN, replacedAt, m.Provider, m.SourceAccount, m.BookID, m.TargetAccount, expected.WorkID, expected.EditionID)
 	if err != nil {
 		return err
 	}
@@ -539,7 +573,7 @@ func (s *Store) UnlinkExpected(ctx context.Context, provider, sourceAccount, boo
 }
 
 func (s *Store) List(ctx context.Context) ([]Mapping, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT provider,source_account,book_id,target_account,work_id,edition_id,source_title,source_isbn FROM mappings ORDER BY provider,source_account,book_id,target_account`)
+	rows, err := s.db.QueryContext(ctx, `SELECT provider,source_account,book_id,target_account,work_id,edition_id,source_title,source_isbn,created_at,updated_at FROM mappings ORDER BY provider,source_account,book_id,target_account`)
 	if err != nil {
 		return nil, err
 	}
@@ -547,9 +581,11 @@ func (s *Store) List(ctx context.Context) ([]Mapping, error) {
 	result := []Mapping{}
 	for rows.Next() {
 		var m Mapping
-		if err := rows.Scan(&m.Provider, &m.SourceAccount, &m.BookID, &m.TargetAccount, &m.WorkID, &m.EditionID, &m.SourceTitle, &m.SourceISBN); err != nil {
+		var createdAt, updatedAt string
+		if err := rows.Scan(&m.Provider, &m.SourceAccount, &m.BookID, &m.TargetAccount, &m.WorkID, &m.EditionID, &m.SourceTitle, &m.SourceISBN, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
+		m.CreatedAt, m.UpdatedAt = mappingTimestamp(createdAt), mappingTimestamp(updatedAt)
 		result = append(result, m)
 	}
 	return result, rows.Err()
@@ -599,16 +635,18 @@ func (s *Store) GetMapping(ctx context.Context, provider, sourceAccount, bookID,
 		return nil, ErrInvalidMappingKey
 	}
 	var m Mapping
-	err := s.db.QueryRowContext(ctx, `SELECT provider,source_account,book_id,target_account,work_id,edition_id,source_title,source_isbn
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(ctx, `SELECT provider,source_account,book_id,target_account,work_id,edition_id,source_title,source_isbn,created_at,updated_at
 		FROM mappings WHERE provider=? AND source_account=? AND book_id=? AND target_account=?`,
 		provider, sourceAccount, bookID, targetAccount).
-		Scan(&m.Provider, &m.SourceAccount, &m.BookID, &m.TargetAccount, &m.WorkID, &m.EditionID, &m.SourceTitle, &m.SourceISBN)
+		Scan(&m.Provider, &m.SourceAccount, &m.BookID, &m.TargetAccount, &m.WorkID, &m.EditionID, &m.SourceTitle, &m.SourceISBN, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	m.CreatedAt, m.UpdatedAt = mappingTimestamp(createdAt), mappingTimestamp(updatedAt)
 	return &m, nil
 }
 
@@ -617,7 +655,7 @@ func (s *Store) ListMappingsForTarget(ctx context.Context, targetAccount string,
 	if !ValidLabel(targetAccount) || workID <= 0 {
 		return nil, ErrInvalidMappingKey
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT provider,source_account,book_id,target_account,work_id,edition_id,source_title,source_isbn
+	rows, err := s.db.QueryContext(ctx, `SELECT provider,source_account,book_id,target_account,work_id,edition_id,source_title,source_isbn,created_at,updated_at
 		FROM mappings WHERE target_account=? AND work_id=? ORDER BY provider,source_account,book_id`, targetAccount, workID)
 	if err != nil {
 		return nil, err
@@ -626,9 +664,11 @@ func (s *Store) ListMappingsForTarget(ctx context.Context, targetAccount string,
 	result := []Mapping{}
 	for rows.Next() {
 		var m Mapping
-		if err := rows.Scan(&m.Provider, &m.SourceAccount, &m.BookID, &m.TargetAccount, &m.WorkID, &m.EditionID, &m.SourceTitle, &m.SourceISBN); err != nil {
+		var createdAt, updatedAt string
+		if err := rows.Scan(&m.Provider, &m.SourceAccount, &m.BookID, &m.TargetAccount, &m.WorkID, &m.EditionID, &m.SourceTitle, &m.SourceISBN, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
+		m.CreatedAt, m.UpdatedAt = mappingTimestamp(createdAt), mappingTimestamp(updatedAt)
 		result = append(result, m)
 	}
 	return result, rows.Err()
@@ -639,7 +679,7 @@ func (s *Store) ListMappingsForAccount(ctx context.Context, provider, sourceAcco
 	if !ValidLabel(provider) || !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) {
 		return nil, ErrInvalidMappingKey
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT provider,source_account,book_id,target_account,work_id,edition_id,source_title,source_isbn
+	rows, err := s.db.QueryContext(ctx, `SELECT provider,source_account,book_id,target_account,work_id,edition_id,source_title,source_isbn,created_at,updated_at
 		FROM mappings WHERE provider=? AND source_account=? AND target_account=? ORDER BY book_id`,
 		provider, sourceAccount, targetAccount)
 	if err != nil {
@@ -649,9 +689,11 @@ func (s *Store) ListMappingsForAccount(ctx context.Context, provider, sourceAcco
 	result := []Mapping{}
 	for rows.Next() {
 		var m Mapping
-		if err := rows.Scan(&m.Provider, &m.SourceAccount, &m.BookID, &m.TargetAccount, &m.WorkID, &m.EditionID, &m.SourceTitle, &m.SourceISBN); err != nil {
+		var createdAt, updatedAt string
+		if err := rows.Scan(&m.Provider, &m.SourceAccount, &m.BookID, &m.TargetAccount, &m.WorkID, &m.EditionID, &m.SourceTitle, &m.SourceISBN, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
+		m.CreatedAt, m.UpdatedAt = mappingTimestamp(createdAt), mappingTimestamp(updatedAt)
 		result = append(result, m)
 	}
 	return result, rows.Err()

@@ -77,6 +77,154 @@ structured with CSS-only navigation tabs:
 - **Export**: download the current mapping state as JSON (`/api/export`).
 - **Sync**: inspect recent reconciliation runs, baselines, and active holds.
 
+## Reading snapshot API
+
+`GET /api/v1/reading/snapshot` serves one page of provider-neutral reading
+facts for an account pair, so another service can ingest the shelf without
+reading Drifter's SQLite state. It is read-only: it opens the mapping database
+read-only and never writes provider status.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Consumer as Consumer (Iroha)
+  participant Server as Drifter Server (:8081)
+  participant WeRead as WeRead Cloud API
+  participant Store as SQLite (mappings v7)
+
+  Consumer->>Server: GET /api/v1/reading/snapshot?limit=50
+  Note over Consumer,Server: Authorization: Bearer DRIFTER_API_TOKEN
+  Server->>Server: Constant-time Bearer token verify & slot admit
+  Server->>WeRead: FetchUserShelf(account)
+  WeRead-->>Server: Shelf items (status, readingTime, readUpdateTime)
+  Server->>Store: Query confirmed mappings (work_id, edition_id)
+  Store-->>Server: Confirmed target links
+  Server->>Server: Enrich bibliographic metadata (ISBN, publisher, translator)
+  Server-->>Consumer: 200 OK JSON ReadingSnapshot (envelope, cursor, books)
+```
+
+```mermaid
+flowchart LR
+  subgraph Upstream ["Upstream Reading Source"]
+    WR["WeRead Cloud API\n(shelf, readingTime, readUpdateTime)"]
+  end
+
+  subgraph DrifterDaemon ["Drifter Daemon (:8081)"]
+    HTTP["GET /api/v1/reading/snapshot\n(Bearer Auth & Admission)"]
+    SNAP["Snapshot Engine\n(Pagination & Metadata Enrichment)"]
+    SQL[("SQLite Store\n(mappings, decisions)")]
+  end
+
+  subgraph ConsumerSystem ["Downstream Cockpit (Iroha)"]
+    CONN["Drifter Connector\n(media_sync_drifter)"]
+    RAW[("tb_source_receipts\n(raw JSON snapshot)")]
+    ADAPT["Drifter Adapter\n(pure parser)"]
+    CORE[("Iroha DB\n(items, creators, progress)")]
+  end
+
+  WR -->|"1. Live shelf"| SNAP
+  SQL -->|"2. Identity targets"| SNAP
+  SNAP --> HTTP
+  CONN -->|"3. GET Bearer"| HTTP
+  HTTP -->|"4. ReadingSnapshot JSON"| CONN
+  CONN -->|"5. Store raw"| RAW
+  CONN -->|"6. Parse"| ADAPT
+  ADAPT -->|"7. Upsert"| CORE
+```
+
+The endpoint requires a Bearer credential supplied at runtime:
+
+```sh
+curl --fail-with-body \
+  -H "Authorization: Bearer $DRIFTER_API_TOKEN" \
+  'http://127.0.0.1:8081/api/v1/reading/snapshot?limit=50'
+```
+
+`DRIFTER_API_TOKEN` is read from the environment; there is no TOML setting and
+no built-in default. When it is unset, every snapshot request is rejected with
+`401 {"error":"unauthorized"}` rather than serving reading facts without
+authentication. The credential is compared in constant time and is never
+logged.
+
+Query parameters are optional:
+
+| Parameter | Meaning |
+| --- | --- |
+| `account` | Source account namespace; when omitted, the bound source account is used. |
+| `target_account` | Target account namespace whose confirmed mappings are attached; when omitted, the bound target account is used. |
+| `limit` | Page size, clamped to 1–100; defaults to 50. |
+| `cursor` | Opaque token from the previous page's `cursor` field. |
+
+Unknown or repeated parameters are rejected with `400`. No query requires
+`account=default`: an account label is a local namespace, and the export
+reports the provider identity actually bound behind it.
+
+The response carries `version` (`1.0`), `generated_at`, `source_identity`
+(e.g. `weread:23849102`), optional `target_identity` (e.g. `hardcover:4821`),
+`watermark` (the RFC3339 instant to send back as `since`), `has_more`, the next
+`cursor` while `has_more` is true, and `books`. An identity is reported only
+when the store or the live provider confirms it; it stays empty rather than
+echoing a local label. Books are ordered by last open time, then source
+identity. Each book carries its own provider identity
+(`source_provider`, `source_book_id`, `title`, `author`), optional catalog
+metadata (`translator`, `publisher`, `isbn`, `cover_url`, `reader_url`),
+progress (`status` of `completed`, `reading` or `planned`, `progress_percent`,
+`reading_time_seconds`, `last_read_at`, `finished_at`), `is_custom` for `CB_...`
+uploads, and `matched_target` when a confirmed mapping exists.
+
+Facts the source does not report stay absent: `started_on` is always omitted
+because WeRead reports no true start instant or start day, and
+`reading_time_seconds`, `last_read_at` and `finished_at` are omitted when the
+source has no such fact. Reading time is cumulative, never a session interval.
+
+Errors use the JSON error shape: `401 unauthorized`, `400
+invalid_snapshot_query`, `400 invalid_cursor`, `503 provider_unavailable`,
+`provider_operation_busy` or `mapping_database_unavailable`, `502
+snapshot_failed`, and `504 operation_timeout`.
+
+## Reading changes API
+
+`GET /api/v1/reading/changes` serves only the shelf facts that changed at or
+after the caller's watermark, so a consumer follows the shelf without
+re-reading every page. It requires the same Bearer credential and admission as
+the snapshot route and reads state read-only.
+
+```sh
+curl --fail-with-body \
+  -H "Authorization: Bearer $DRIFTER_API_TOKEN" \
+  'http://127.0.0.1:8081/api/v1/reading/changes?since=2026-11-11T09:00:00Z'
+```
+
+| Parameter | Meaning |
+| --- | --- |
+| `since` | Required watermark: RFC3339 (e.g. `2026-11-11T09:00:00Z`) or a unix second count. |
+| `account`, `target_account` | Optional namespaces, resolved as for the snapshot route. |
+| `limit` | Page size, clamped to 1–100; defaults to 50. |
+| `cursor` | Opaque token from the previous delta page. |
+
+A book is a change when either the source reports a read instant at or after
+`since`, or its confirmed mapping was created or updated then — so a re-link
+is visible even when nothing was read. The response is the snapshot envelope,
+with `watermark` set to the latest observed change instant and never earlier
+than `generated_at`, plus only the changed books on that page. Send that
+`watermark` back as the next `since`.
+
+A watermark may trail by at most 14 days. An older or missing horizon is not
+answered with a partial delta:
+
+```json
+{
+  "error": "horizon_exceeded",
+  "message": "watermark is older than 14 days; full snapshot required",
+  "snapshot_required": true
+}
+```
+
+That response is `410 Gone`, sent before any provider call, and tells the
+consumer to re-read `/api/v1/reading/snapshot` and adopt its `watermark`.
+Other errors match the snapshot contract, with `400 invalid_changes_query` for
+a missing, repeated or unparseable `since`, parameter or limit.
+
 ## Rootless runtime verification
 
 Verified with Podman 5.8.7 on the macOS-hosted Linux/arm64 VM (`rootless=true`,

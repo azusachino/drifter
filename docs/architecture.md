@@ -32,7 +32,7 @@ external services using ports and adapters:
 │  • Matching Engine (Author Partition, Exact Editions)  │
 │  • Three-Way Status Sync & Conflict Evaluator          │
 │  • Two-Phase Intent Ledger & Baseline Tracker          │
-│  • SQLite Storage Engine (Schema v6)                   │
+│  • SQLite Storage Engine (Schema v7)                   │
 └───────────────┬───────────────────────────┬────────────┘
                 │                           │
                 ▼                           ▼
@@ -66,7 +66,7 @@ packages. Providers import the core package to satisfy interfaces.
 | HTTP transport | `internal/provider/transport` | Token validation, response caps (2 MiB), pacing gates, and error sanitization. |
 | ISBN resolution | `internal/isbn` | Bibliographic resolution (Douban, OpenLibrary, custom URL) to bridge the translation gap. |
 | Community catalogs | `internal/catalog` | JSON schema validation, offline catalog merge, and untrusted match hints. |
-| SQLite storage | `internal/companion/store.go` | Private SQLite database (schema v6) with process locking, baselines, intents, and audit runs. |
+| SQLite storage | `internal/companion/store.go` | Private SQLite database (schema v7) with process locking, baselines, intents, and audit runs. |
 | Config & logging | `internal/config`, `internal/logging` | Strict TOML validation, `log/slog` structured logs, and standalone health probes. |
 
 ---
@@ -174,9 +174,10 @@ surface:
 
 ## Database schema & storage
 
-Drifter stores local state in SQLite (schema version 6):
+Drifter stores local state in SQLite (schema version 7):
 
-- `mappings`: Confirmed source-to-target links.
+- `mappings`: Confirmed source-to-target links with creation and
+  update instants, so a consumer can read only what changed.
 - `review_decisions`: Account-scoped skip, exclude, and not-in-catalog choices.
 - `account_fingerprints`: Verified provider account bindings.
 - `status_baselines`: Last observed source/target status snapshots.

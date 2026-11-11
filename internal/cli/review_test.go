@@ -339,7 +339,7 @@ func TestReviewGuardedReplacementAndStaleExpectedTarget(t *testing.T) {
 					return err
 				}
 				defer conn.Close()
-				_, err = conn.Exec(`INSERT INTO mappings VALUES ('weread','source','42','target',?,0,'','') ON CONFLICT(provider,source_account,book_id,target_account) DO UPDATE SET work_id=excluded.work_id`, work)
+				_, err = conn.Exec(`INSERT INTO mappings (provider, source_account, book_id, target_account, work_id, edition_id, source_title, source_isbn) VALUES ('weread','source','42','target',?,0,'','') ON CONFLICT(provider,source_account,book_id,target_account) DO UPDATE SET work_id=excluded.work_id`, work)
 				return err
 			}
 			answer := "yes\n"

@@ -177,9 +177,11 @@ func (c *Client) Progress(ctx context.Context, id string) (companion.Progress, e
 	var row struct {
 		ID   string `json:"bookId"`
 		Book *struct {
-			Percent  *int  `json:"progress"`
-			Started  *int  `json:"isStartReading"`
-			Finished int64 `json:"finishTime"`
+			Percent     *int   `json:"progress"`
+			Started     *int   `json:"isStartReading"`
+			Finished    int64  `json:"finishTime"`
+			ReadingTime *int   `json:"readingTime"`
+			UpdateTime  *int64 `json:"readUpdateTime"`
 		} `json:"book"`
 	}
 	if err := c.call(ctx, "/book/getprogress", map[string]any{"bookId": id}, &row); err != nil {
@@ -188,7 +190,14 @@ func (c *Client) Progress(ctx context.Context, id string) (companion.Progress, e
 	if row.ID != id || row.Book == nil || row.Book.Percent == nil || row.Book.Started == nil {
 		return companion.Progress{}, fmt.Errorf("WeRead progress identity or required fields missing")
 	}
-	return companion.ProgressStatus(*row.Book.Percent, *row.Book.Started, row.Book.Finished)
+	facts := companion.ProgressFacts{Percent: *row.Book.Percent, Started: *row.Book.Started, FinishedAt: row.Book.Finished}
+	if row.Book.ReadingTime != nil {
+		facts.ReadingTimeSeconds = *row.Book.ReadingTime
+	}
+	if row.Book.UpdateTime != nil {
+		facts.LastReadAt = *row.Book.UpdateTime
+	}
+	return companion.ProgressStatusFacts(facts)
 }
 
 // ValidVID checks whether a WeRead user VID string is non-empty, numeric, and within standard bounds (1-32 digits).

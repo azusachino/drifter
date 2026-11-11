@@ -104,6 +104,16 @@ func TestProgressZeroCanBeStarted(t *testing.T) {
 	}
 }
 
+func TestProgressCapturesReadingTimeAndLastRead(t *testing.T) {
+	w := testClient(t, func(rw http.ResponseWriter, _ *http.Request) {
+		io.WriteString(rw, `{"bookId":"123","book":{"progress":42,"isStartReading":1,"readingTime":18240,"readUpdateTime":1700000000}}`)
+	})
+	p, err := w.Progress(context.Background(), "123")
+	if err != nil || p.ReadingTimeSeconds != 18240 || p.LastReadAt != 1700000000 || p.Status != "reading" {
+		t.Fatalf("%+v %v", p, err)
+	}
+}
+
 func TestSearchRequiresResultsAndPagination(t *testing.T) {
 	for _, body := range []string{`{}`, `{"results":null,"hasMore":0}`, `{"results":[]}`, `{"results":[],"hasMore":2}`, `{"results":[{"books":[{"bookInfo":{"bookId":"0","title":"invalid"}}]}],"hasMore":0}`} {
 		w := testClient(t, func(rw http.ResponseWriter, _ *http.Request) { io.WriteString(rw, body) })
@@ -126,6 +136,8 @@ func TestProgressRejectsMissingOrInvalidFacts(t *testing.T) {
 		`{"bookId":"123","book":{"progress":101,"isStartReading":1}}`,
 		`{"bookId":"123","book":{"progress":0,"isStartReading":2}}`,
 		`{"bookId":"123","book":{"progress":100,"isStartReading":1,"finishTime":-1}}`,
+		`{"bookId":"123","book":{"progress":100,"isStartReading":1,"readingTime":-1}}`,
+		`{"bookId":"123","book":{"progress":100,"isStartReading":1,"readUpdateTime":-1}}`,
 	} {
 		w := testClient(t, func(rw http.ResponseWriter, _ *http.Request) { io.WriteString(rw, body) })
 		if _, err := w.Progress(context.Background(), "123"); err == nil {

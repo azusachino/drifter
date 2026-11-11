@@ -9,7 +9,12 @@ separate products. This work does not implement status synchronization or write
 to provider libraries.
 
 Canonical page: `GET /`. Read routes: `GET|HEAD /api/mappings`,
-`GET /api/pending`, and `GET /api/csrf`. Mutations: explicit JSON endpoints
+`GET /api/pending`, and `GET /api/csrf`. The versioned read route
+`GET /api/v1/reading/snapshot` requires a Bearer credential
+(`DRIFTER_API_TOKEN`) and serves paginated reading facts to another service;
+`GET /api/v1/reading/changes` serves watermarked deltas and answers an
+out-of-horizon watermark with `410`; see
+[the server guide](../server.md#reading-snapshot-api). Mutations: explicit JSON endpoints
 (`/api/mappings/confirm`, `/replace`, `/unlink`) and bounded native form routes
 (`/mappings/confirm`, `/replace`, `/unlink`). No `/admin` compatibility alias
 is retained on this unreleased branch. Confirmation identifies source
@@ -30,6 +35,8 @@ synthetic providers only, never live credentials or provider calls.
 | Request pending explicitly; reject unsupported methods/queries and share paced clients. | `TestPendingRouteSharesLazySourceClient`, `TestConcurrentPendingRequestsShareOneProviderClient`, `TestPendingHeadIsRejectedWithoutProviderCalls`; core `TestPendingShelfFiltersBeforeMetadataAndClassifies`. |
 | Confirm explicit source/target IDs; reject invalid work/edition membership; require explicit replacement on conflicts. | `TestMappingMutationHTTPUsesCoreValidationAndOwnedStore`, `TestNativeMappingFormsUseExplicitCoreActions`; core `TestDaemonOwnedConfirmationAndUnlinkUseCoreValidation`; CLI `TestCLIRejectedEditionDoesNotCreateMapping`. |
 | Unlink only the selected account-scoped mapping; missing unlink is idempotent. | HTTP `TestMappingMutationHTTPUsesCoreValidationAndOwnedStore`, `TestNativeMappingFormsUseExplicitCoreActions`; core `TestStoreAccountScopedUnlink`. |
+| Serve one paginated reading snapshot page only to an authenticated caller; reject missing, wrong or limit-exceeding credentials before provider calls; never fabricate start dates. | HTTP `TestReadingSnapshotRequiresBearerToken`, `TestReadingSnapshotReturnsPagedBooks`, `TestReadingSnapshotQueryParameters`; core `TestReadingSnapshotPaginatesWithCursorAndEnrichesMetadata`, `TestReadingSnapshotNeverFabricatesStartDatesOrActivity`. |
+| Read only reading facts that changed since a watermark, refusing a watermark older than 14 days with 410 before any provider call. | HTTP `TestReadingChangesRequiresBearerToken`, `TestReadingChangesReturnsDeltaAndWatermark`, `TestReadingChangesRefusesOldWatermarkWithGone`, `TestReadingChangesQueryParsing`; core `TestReadingChangesFiltersBySourceReadInstant`, `TestReadingChangesFiltersByMappingUpdateInstant`, `TestReadingChangesRefusesWatermarksBeyondTheHorizon`. |
 | Reject malformed/cross-origin mutation requests before provider calls or writes. | HTTP `TestMutationRejectionsPrecedeProviderCallsAndStateWrites`; browser test `native mapping form submits with same-origin Origin and no page script`. |
 | Read mappings in the CLI while the server owns SQLite; refuse standalone writers. | CLI `TestCLIWritersRefuseDaemonOwnershipAndReadsRemainAvailable`; subprocess ownership tests. |
 | Cancel in-flight provider work, drain requests and retain the database lease through an owned write/close race. | HTTP `TestServeCancellationPropagatesIntoInFlightPendingLookup`; core `TestOwnerCloseWaitsForInFlightOwnedWrite`. |

@@ -43,6 +43,22 @@ func TestProgressDoesNotInventUnreadOrCompletion(t *testing.T) {
 	}
 }
 
+func TestProgressCarriesActivityFacts(t *testing.T) {
+	got, err := ProgressStatusFacts(ProgressFacts{Percent: 42, Started: 1, ReadingTimeSeconds: 18240, LastReadAt: 1700000000})
+	if err != nil || got.Status != "reading" || got.ReadingTimeSeconds != 18240 || got.LastReadAt != 1700000000 {
+		t.Fatalf("%+v %v", got, err)
+	}
+	unread, err := ProgressStatusFacts(ProgressFacts{})
+	if err != nil || unread.Status != "unknown" || unread.ReadingTimeSeconds != 0 || unread.LastReadAt != 0 {
+		t.Fatalf("absent activity facts were invented: %+v %v", unread, err)
+	}
+	for _, facts := range []ProgressFacts{{Percent: 1, ReadingTimeSeconds: -1}, {Percent: 1, LastReadAt: -1}} {
+		if _, err := ProgressStatusFacts(facts); err == nil {
+			t.Fatalf("accepted %+v", facts)
+		}
+	}
+}
+
 func TestBookID(t *testing.T) {
 	for _, id := range []string{"", "0", "00", "../12", "12\n", "-1"} {
 		if ValidBookID(id) {

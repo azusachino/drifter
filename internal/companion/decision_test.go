@@ -66,7 +66,7 @@ func TestDecisionMigrationFromVersionOnePreservesMappingsAndReadOnlySchema(t *te
 		t.Fatal(err)
 	}
 	rows, err := s.List(context.Background())
-	if err != nil || len(rows) != 1 || rows[0] != m {
+	if err != nil || len(rows) != 1 || mappingIdentity(rows[0]) != m {
 		t.Fatalf("mapping lost: %+v %v", rows, err)
 	}
 	if _, err := s.db.Exec(`INSERT INTO decisions VALUES ('weread','source','42','target','skip')`); err != nil {
