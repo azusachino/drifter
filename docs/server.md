@@ -84,6 +84,54 @@ facts for an account pair, so another service can ingest the shelf without
 reading Drifter's SQLite state. It is read-only: it opens the mapping database
 read-only and never writes provider status.
 
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Consumer as Consumer (Iroha)
+  participant Server as Drifter Server (:8081)
+  participant WeRead as WeRead Cloud API
+  participant Store as SQLite (mappings v6)
+
+  Consumer->>Server: GET /api/v1/reading/snapshot?account=default&limit=50
+  Note over Consumer,Server: Authorization: Bearer DRIFTER_API_TOKEN
+  Server->>Server: Constant-time Bearer token verify & slot admit
+  Server->>WeRead: FetchUserShelf(account)
+  WeRead-->>Server: Shelf items (status, readingTime, readUpdateTime)
+  Server->>Store: Query confirmed mappings (work_id, edition_id)
+  Store-->>Server: Confirmed target links
+  Server->>Server: Enrich bibliographic metadata (ISBN, publisher, translator)
+  Server-->>Consumer: 200 OK JSON ReadingSnapshot (envelope, cursor, books)
+```
+
+```mermaid
+flowchart LR
+  subgraph Upstream ["Upstream Reading Source"]
+    WR["WeRead Cloud API\n(shelf, readingTime, readUpdateTime)"]
+  end
+
+  subgraph DrifterDaemon ["Drifter Daemon (:8081)"]
+    HTTP["GET /api/v1/reading/snapshot\n(Bearer Auth & Admission)"]
+    SNAP["Snapshot Engine\n(Pagination & Metadata Enrichment)"]
+    SQL[("SQLite Store\n(mappings, decisions)")]
+  end
+
+  subgraph ConsumerSystem ["Downstream Cockpit (Iroha)"]
+    CONN["Drifter Connector\n(media_sync_drifter)"]
+    RAW[("tb_source_receipts\n(raw JSON snapshot)")]
+    ADAPT["Drifter Adapter\n(pure parser)"]
+    CORE[("Iroha DB\n(items, creators, progress)")]
+  end
+
+  WR -->|"1. Live shelf"| SNAP
+  SQL -->|"2. Identity targets"| SNAP
+  SNAP --> HTTP
+  CONN -->|"3. GET Bearer"| HTTP
+  HTTP -->|"4. ReadingSnapshot JSON"| CONN
+  CONN -->|"5. Store raw"| RAW
+  CONN -->|"6. Parse"| ADAPT
+  ADAPT -->|"7. Upsert"| CORE
+```
+
 The endpoint requires a Bearer credential supplied at runtime:
 
 ```sh
