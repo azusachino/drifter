@@ -258,6 +258,7 @@ func snapshotBook(ctx context.Context, source Source, row ShelfBook) (ReadingSna
 		SourceBookID:   row.ID,
 		Title:          row.Title,
 		Author:         row.Author,
+		CoverURL:       strings.TrimSpace(row.Cover),
 		IsCustom:       custom,
 	}
 	if !custom {
@@ -277,6 +278,9 @@ func snapshotBook(ctx context.Context, source Source, row ShelfBook) (ReadingSna
 			book.Publisher = strings.TrimSpace(metadata.Publisher)
 			book.ISBN = strings.TrimSpace(metadata.ISBN)
 			book.ReaderURL = strings.TrimSpace(metadata.ReaderURL)
+			if cover := strings.TrimSpace(metadata.CoverURL); cover != "" {
+				book.CoverURL = cover
+			}
 		}
 	}
 	progress, err := source.Progress(ctx, row.ID)

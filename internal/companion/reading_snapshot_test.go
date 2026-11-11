@@ -98,11 +98,11 @@ func TestReadingSnapshotPaginatesWithCursorAndEnrichesMetadata(t *testing.T) {
 		shelf: ShelfResult{Complete: true, Books: []ShelfBook{
 			snapshotBookRow("200", "shelf-200", snapshotEpoch(200)),
 			snapshotBookRow("100", "shelf-100", snapshotEpoch(300)),
-			snapshotBookRow("CB_custom_1", "shelf-custom", snapshotEpoch(400)),
+			{ID: "CB_custom_1", Title: "shelf-custom", Author: "作者", Cover: "https://res.weread.qq.com/custom.jpg", LastOpened: snapshotEpoch(400)},
 			snapshotBookRow("300", "shelf-300", nil),
 		}},
 		books: map[string]Book{
-			"100": {ID: "100", Title: "克拉拉与太阳", Author: "石黑一雄", Translator: "赵松", Publisher: "上海译文出版社", ISBN: "9787532786831", ReaderURL: "https://weread.qq.com/web/bookDetail/100"},
+			"100": {ID: "100", Title: "克拉拉与太阳", Author: "石黑一雄", Translator: "赵松", Publisher: "上海译文出版社", ISBN: "9787532786831", ReaderURL: "https://weread.qq.com/web/bookDetail/100", CoverURL: "https://cdn.example.com/cover-100.jpg"},
 			"200": {ID: "200", Title: "Kubernetes权威指南", Author: "龚正"},
 			"300": {ID: "300", Title: "深入理解Kafka", Author: "朱忠华"},
 		},
@@ -130,9 +130,13 @@ func TestReadingSnapshotPaginatesWithCursorAndEnrichesMetadata(t *testing.T) {
 	if !first.HasMore || first.Cursor == "" {
 		t.Fatalf("first page did not report more data: %+v", first)
 	}
+	if custom := first.Books[0]; custom.CoverURL != "https://res.weread.qq.com/custom.jpg" {
+		t.Fatalf("shelf cover url was not exported: %+v", custom)
+	}
 	enriched := first.Books[1]
 	if enriched.SourceProvider != "weread" || enriched.Title != "克拉拉与太阳" || enriched.Author != "石黑一雄" ||
 		enriched.Translator != "赵松" || enriched.Publisher != "上海译文出版社" || enriched.ISBN != "9787532786831" ||
+		enriched.CoverURL != "https://cdn.example.com/cover-100.jpg" ||
 		!strings.HasPrefix(enriched.ReaderURL, "https://weread.qq.com/") {
 		t.Fatalf("metadata was not enriched from catalog facts: %+v", enriched)
 	}

@@ -147,6 +147,7 @@ func (c *Client) Book(ctx context.Context, id string) (companion.Book, error) {
 		ISBN       string  `json:"isbn"`
 		Publisher  string  `json:"publisher"`
 		URL        string  `json:"readerLink"`
+		Cover      string  `json:"cover"`
 	}
 	if err := c.call(ctx, "/book/info", map[string]any{"bookId": id}, &row); err != nil {
 		return companion.Book{}, err
@@ -161,6 +162,7 @@ func (c *Client) Book(ctx context.Context, id string) (companion.Book, error) {
 		ISBN:            row.ISBN,
 		Publisher:       row.Publisher,
 		ReaderURL:       row.URL,
+		CoverURL:        strings.TrimSpace(row.Cover),
 		TranslatorKnown: true,
 	}
 	if row.Translator != nil {

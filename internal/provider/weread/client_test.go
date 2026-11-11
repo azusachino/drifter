@@ -267,4 +267,17 @@ func TestWeReadBookTranslatorHandling(t *testing.T) {
 			t.Fatalf("expected translator '译者名', got %q", book.Translator)
 		}
 	})
+
+	t.Run("deserializes cover url when provided", func(t *testing.T) {
+		w := testClient(t, func(rw http.ResponseWriter, _ *http.Request) {
+			io.WriteString(rw, `{"bookId":"789","title":"带封面的书","author":"作者","cover":"https://cdn.example.com/cover.jpg"}`)
+		})
+		book, err := w.Book(context.Background(), "789")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if book.CoverURL != "https://cdn.example.com/cover.jpg" {
+			t.Fatalf("expected cover url %q, got %q", "https://cdn.example.com/cover.jpg", book.CoverURL)
+		}
+	})
 }

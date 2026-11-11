@@ -16,6 +16,7 @@ type ShelfBook struct {
 	ID            string `json:"bookId"`
 	Title         string `json:"title"`
 	Author        string `json:"author"`
+	Cover         string `json:"cover,omitempty"`
 	LastOpened    *int64 `json:"readUpdateTime"`
 	FinishReading *int   `json:"finishReading"`
 	Secret        *int   `json:"secret"`

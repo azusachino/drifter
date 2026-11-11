@@ -18,6 +18,7 @@ type Book struct {
 	ISBN            string `json:"isbn,omitempty"`
 	Publisher       string `json:"publisher,omitempty"`
 	ReaderURL       string `json:"reader_url,omitempty"`
+	CoverURL        string `json:"cover_url,omitempty"`
 }
 
 type Progress struct {
