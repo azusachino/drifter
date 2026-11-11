@@ -65,12 +65,12 @@ var _ advisor.Advisor = (*Client)(nil)
 
 // LoadConfig resolves advisor configuration from the environment.
 //
-// Endpoint precedence: DRIFTER_ADVISOR_URL, OPENCODE_BASE_URL, then DefaultBaseURL.
+// Endpoint precedence: DRIFTER_ADVISOR_URL, MAGPIE_BASE_URL, MAGPIE_URL, OPENCODE_BASE_URL, then DefaultBaseURL.
 // API key precedence: MAGPIE_GATEWAY_KEY, OPENCODE_API_KEY, DRIFTER_ADVISOR_KEY.
 // Model precedence: DRIFTER_ADVISOR_MODEL, then DefaultModel.
 // Timeout precedence: DRIFTER_ADVISOR_TIMEOUT, then DefaultTimeout.
 func LoadConfig() (Config, error) {
-	baseURL := firstEnv("DRIFTER_ADVISOR_URL", "OPENCODE_BASE_URL")
+	baseURL := firstEnv("DRIFTER_ADVISOR_URL", "MAGPIE_BASE_URL", "MAGPIE_URL", "OPENCODE_BASE_URL")
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}
@@ -111,7 +111,8 @@ func New() (*Client, error) {
 
 // NewWithConfig constructs an advisor client with an explicit configuration.
 func NewWithConfig(cfg Config) (*Client, error) {
-	if strings.TrimSpace(cfg.APIKey) == "" {
+	apiKey := strings.TrimSpace(cfg.APIKey)
+	if apiKey == "" {
 		return nil, ErrNotConfigured
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
@@ -132,7 +133,7 @@ func NewWithConfig(cfg Config) (*Client, error) {
 	}
 	return &Client{
 		baseURL:    baseURL,
-		apiKey:     cfg.APIKey,
+		apiKey:     apiKey,
 		model:      model,
 		httpClient: httpClient,
 	}, nil

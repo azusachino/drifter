@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/azusachino/drifter/internal/advisor"
 )
@@ -30,9 +31,15 @@ func testServer(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Serv
 }
 
 func TestExplainConflictSuccess(t *testing.T) {
-	client, server := testServer(t, func(rw http.ResponseWriter, r *http.Request) {
+	client, _ := testServer(t, func(rw http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Errorf("Content-Type = %q", got)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer test-api-key" {
 			t.Errorf("Authorization = %q", got)
@@ -49,6 +56,9 @@ func TestExplainConflictSuccess(t *testing.T) {
 		}
 		if len(body.Messages) != 2 || body.Messages[0].Role != "system" || body.Messages[1].Role != "user" {
 			t.Errorf("messages = %+v", body.Messages)
+		}
+		if user := body.Messages[len(body.Messages)-1].Content; !strings.Contains(user, "克拉拉与太阳") {
+			t.Errorf("user prompt missing title: %q", user)
 		}
 		io.WriteString(rw, `{"choices":[{"message":{"content":"{\"summary\":\"Source finished the book after target marked it read.\",\"recommended_action\":\"adopt_source\",\"rationale\":\"The source recorded a later finished timestamp.\"}"}}]}`)
 	})
@@ -69,7 +79,6 @@ func TestExplainConflictSuccess(t *testing.T) {
 	if resp.Summary == "" || resp.RecommendedAction != "adopt_source" || resp.Rationale == "" {
 		t.Fatalf("unexpected response: %+v", resp)
 	}
-	_ = server
 }
 
 func TestExplainConflictMalformedJSON(t *testing.T) {
@@ -116,6 +125,9 @@ func TestExplainConflictRateLimited(t *testing.T) {
 	if !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("error = %v, want ErrRateLimited", err)
 	}
+	if !strings.Contains(err.Error(), "HTTP 429") || !strings.Contains(err.Error(), "slow down") {
+		t.Fatalf("error = %v, want status and detail", err)
+	}
 }
 
 func TestExplainConflictServerError(t *testing.T) {
@@ -129,6 +141,9 @@ func TestExplainConflictServerError(t *testing.T) {
 	}
 	if errors.Is(err, ErrRateLimited) {
 		t.Fatalf("500 should not be ErrRateLimited: %v", err)
+	}
+	if !strings.Contains(err.Error(), "HTTP 500") || !strings.Contains(err.Error(), "internal error") {
+		t.Fatalf("error = %v, want status and detail", err)
 	}
 }
 
@@ -209,8 +224,8 @@ func TestResolveOriginalWorkEmptyChoices(t *testing.T) {
 		io.WriteString(rw, `{"choices":[]}`)
 	})
 	_, err := client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{Title: "x", Author: "y"})
-	if err == nil {
-		t.Fatal("expected error for empty choices")
+	if !errors.Is(err, ErrInvalidResponse) {
+		t.Fatalf("error = %v, want ErrInvalidResponse", err)
 	}
 }
 
@@ -226,7 +241,7 @@ func TestResolveOriginalWorkUpstreamError(t *testing.T) {
 
 func TestLoadConfigPrecedence(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {
-		for _, key := range []string{"DRIFTER_ADVISOR_URL", "OPENCODE_BASE_URL", "MAGPIE_GATEWAY_KEY", "OPENCODE_API_KEY", "DRIFTER_ADVISOR_KEY", "DRIFTER_ADVISOR_MODEL", DefaultTimeoutEnv} {
+		for _, key := range []string{"DRIFTER_ADVISOR_URL", "MAGPIE_BASE_URL", "MAGPIE_URL", "OPENCODE_BASE_URL", "MAGPIE_GATEWAY_KEY", "OPENCODE_API_KEY", "DRIFTER_ADVISOR_KEY", "DRIFTER_ADVISOR_MODEL", DefaultTimeoutEnv} {
 			t.Setenv(key, "")
 		}
 		t.Setenv("MAGPIE_GATEWAY_KEY", "k")
@@ -242,6 +257,21 @@ func TestLoadConfigPrecedence(t *testing.T) {
 		}
 		if cfg.Timeout != DefaultTimeout {
 			t.Errorf("timeout = %v, want %v", cfg.Timeout, DefaultTimeout)
+		}
+	})
+
+	t.Run("magpie base url for k3s cluster service", func(t *testing.T) {
+		for _, key := range []string{"DRIFTER_ADVISOR_URL", "MAGPIE_BASE_URL", "MAGPIE_URL", "OPENCODE_BASE_URL"} {
+			t.Setenv(key, "")
+		}
+		t.Setenv("MAGPIE_BASE_URL", "http://magpie.harus-tools:3425/v1")
+		t.Setenv("MAGPIE_GATEWAY_KEY", "k")
+		cfg, err := LoadConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.BaseURL != "http://magpie.harus-tools:3425/v1" {
+			t.Errorf("baseURL = %q, want cluster service URL", cfg.BaseURL)
 		}
 	})
 
@@ -318,6 +348,8 @@ func TestStripMarkdownFence(t *testing.T) {
 		{"json fence", "```json\n{\"a\":1}\n```", `{"a":1}`},
 		{"plain fence", "```\n{\"a\":1}\n```", `{"a":1}`},
 		{"no closing fence", "```json\n{\"a\":1}", `{"a":1}`},
+		{"single line fence", "```json {\"a\":1}```", `{"a":1}`},
+		{"single line bare fence", "``` {\"a\":1} ```", `{"a":1}`},
 		{"empty", "", ""},
 	}
 	for _, tc := range cases {
@@ -332,14 +364,15 @@ func TestStripMarkdownFence(t *testing.T) {
 
 func TestContextCancellation(t *testing.T) {
 	started := make(chan struct{})
+	release := make(chan struct{})
 	client, _ := testServer(t, func(rw http.ResponseWriter, r *http.Request) {
 		close(started)
-		select {
-		case <-r.Context().Done():
-		case <-time.After(500 * time.Millisecond):
-		}
+		<-release
 	})
+	t.Cleanup(func() { close(release) })
+
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
 		_, err := client.ExplainConflict(ctx, advisor.ConflictExplanationRequest{SourceStatus: "read", TargetStatus: "reading"})
@@ -349,8 +382,8 @@ func TestContextCancellation(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if err == nil {
-			t.Fatal("expected cancellation error")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context.Canceled", err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("request did not honor cancellation")
@@ -364,10 +397,224 @@ func TestRequestCount(t *testing.T) {
 		io.WriteString(rw, `{"choices":[{"message":{"content":"{\"recommended_action\":\"keep_separate\"}"}}]}`)
 	})
 	for i := 0; i < 3; i++ {
-		_, _ = client.ExplainConflict(context.Background(), advisor.ConflictExplanationRequest{SourceStatus: "read", TargetStatus: "reading"})
+		if _, err := client.ExplainConflict(context.Background(), advisor.ConflictExplanationRequest{SourceStatus: "read", TargetStatus: "reading"}); err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
 	}
 	if got := count.Load(); got != 3 {
 		t.Fatalf("request count = %d, want 3", got)
+	}
+}
+
+func TestResolveOriginalWorkMarkdownWrappedJSON(t *testing.T) {
+	client, _ := testServer(t, func(rw http.ResponseWriter, r *http.Request) {
+		writeCompletion(t, rw, "```json\n{\"original_title\":\"1984\",\"original_author\":\"George Orwell\",\"language\":\"English\",\"confidence\":0.9,\"abstained\":false,\"rationale\":\"Known English original of a translated edition.\"}\n```")
+	})
+	resp, err := client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{
+		Title:      "一九八四",
+		Author:     "乔治·奥威尔",
+		Translator: "董乐山",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.OriginalTitle != "1984" || resp.Language != "English" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+}
+
+func TestResolveOriginalWorkEmptyContent(t *testing.T) {
+	client, _ := testServer(t, func(rw http.ResponseWriter, r *http.Request) {
+		writeCompletion(t, rw, "   ")
+	})
+	_, err := client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{Title: "x", Author: "y"})
+	if !errors.Is(err, ErrInvalidResponse) {
+		t.Fatalf("error = %v, want ErrInvalidResponse", err)
+	}
+}
+
+func TestExplainConflictEmptyChoices(t *testing.T) {
+	client, _ := testServer(t, func(rw http.ResponseWriter, r *http.Request) {
+		io.WriteString(rw, `{"choices":[]}`)
+	})
+	_, err := client.ExplainConflict(context.Background(), advisor.ConflictExplanationRequest{SourceStatus: "read", TargetStatus: "reading"})
+	if !errors.Is(err, ErrInvalidResponse) {
+		t.Fatalf("error = %v, want ErrInvalidResponse", err)
+	}
+}
+
+func TestResolveOriginalWorkInvalidEnvelope(t *testing.T) {
+	client, _ := testServer(t, func(rw http.ResponseWriter, r *http.Request) {
+		io.WriteString(rw, `not a completion envelope`)
+	})
+	_, err := client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{Title: "x", Author: "y"})
+	if !errors.Is(err, ErrInvalidResponse) {
+		t.Fatalf("error = %v, want ErrInvalidResponse", err)
+	}
+}
+
+func TestSanitizeDetail(t *testing.T) {
+	t.Run("scrubs line breaks and control characters", func(t *testing.T) {
+		got := sanitizeDetail([]byte("bad\nmessage\r\twith\x00control\n"))
+		if want := "bad message  withcontrol"; got != want {
+			t.Fatalf("sanitizeDetail = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("truncates on a rune boundary", func(t *testing.T) {
+		got := sanitizeDetail([]byte(strings.Repeat("界", 300)))
+		if !utf8.ValidString(got) {
+			t.Fatalf("truncated detail is not valid UTF-8: %q", got)
+		}
+		if !strings.HasSuffix(got, "…") {
+			t.Fatalf("truncated detail missing ellipsis: %q", got)
+		}
+		if runes := []rune(got); len(runes) != 171 {
+			t.Fatalf("rune count = %d, want 171", len(runes))
+		}
+	})
+}
+
+func TestNewWithConfigDefaults(t *testing.T) {
+	client, err := NewWithConfig(Config{BaseURL: "https://example.test/v1///", APIKey: " key "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := client.Endpoint(), "https://example.test/v1/chat/completions"; got != want {
+		t.Errorf("Endpoint() = %q, want %q", got, want)
+	}
+	if got := client.Model(); got != DefaultModel {
+		t.Errorf("Model() = %q, want %q", got, DefaultModel)
+	}
+
+	defaulted, err := NewWithConfig(Config{APIKey: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := defaulted.Endpoint(), DefaultBaseURL+"/chat/completions"; got != want {
+		t.Errorf("Endpoint() = %q, want %q", got, want)
+	}
+}
+
+func TestClientTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(200 * time.Millisecond):
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewWithConfig(Config{
+		BaseURL:    server.URL,
+		APIKey:     "k",
+		HTTPClient: &http.Client{Timeout: 25 * time.Millisecond},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ExplainConflict(context.Background(), advisor.ConflictExplanationRequest{SourceStatus: "read", TargetStatus: "reading"}); err == nil {
+		t.Fatal("expected timeout error")
+	}
+}
+
+func TestNilClientReturnsError(t *testing.T) {
+	var client *Client
+	if _, err := client.ExplainConflict(context.Background(), advisor.ConflictExplanationRequest{}); err == nil {
+		t.Fatal("expected error from nil client")
+	}
+	if _, err := client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{}); err == nil {
+		t.Fatal("expected error from nil client")
+	}
+}
+
+func TestConflictPromptIncludesEvidence(t *testing.T) {
+	prompt := conflictPrompt(advisor.ConflictExplanationRequest{
+		SourceTitle:    "克拉拉与太阳",
+		SourceAuthor:   "石黑一雄",
+		SourceStatus:   "read",
+		TargetStatus:   "reading",
+		BaselineStatus: "reading",
+		Reason:         "source reported finished",
+		Message:        "progress 100%",
+		ObservedAt:     time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+	})
+	for _, want := range []string{
+		"克拉拉与太阳",
+		"石黑一雄",
+		"status: read",
+		"status: reading",
+		"Previously recorded baseline status: reading",
+		"source reported finished",
+		"progress 100%",
+		"2026-01-02T03:04:05Z",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+
+	sparse := conflictPrompt(advisor.ConflictExplanationRequest{SourceStatus: "reading", TargetStatus: "read"})
+	for _, absent := range []string{"Previously recorded baseline", "Observed at:", "System message:"} {
+		if strings.Contains(sparse, absent) {
+			t.Errorf("sparse prompt should omit %q:\n%s", absent, sparse)
+		}
+	}
+}
+
+func TestOriginalWorkPromptIncludesEditionEvidence(t *testing.T) {
+	prompt := originalWorkPrompt(advisor.OriginalWorkRequest{
+		Title:               "克拉拉与太阳",
+		Author:              "石黑一雄",
+		Translator:          "宋佥",
+		Publisher:           "上海译文出版社",
+		ISBN:                "9787532786831",
+		DoubanOriginalTitle: "Klara and the Sun",
+	})
+	for _, want := range []string{
+		"克拉拉与太阳",
+		"石黑一雄",
+		"translator: 宋佥",
+		"publisher: 上海译文出版社",
+		"isbn: 9787532786831",
+		"catalog original title: Klara and the Sun",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+
+	sparse := originalWorkPrompt(advisor.OriginalWorkRequest{Title: "Go 程序设计语言", Author: "张三"})
+	if !strings.Contains(sparse, "translator: (not recorded)") {
+		t.Errorf("sparse prompt should mark missing translator:\n%s", sparse)
+	}
+	if strings.Contains(sparse, "publisher:") {
+		t.Errorf("sparse prompt should omit publisher:\n%s", sparse)
+	}
+}
+
+func TestSystemPromptsRequireBoundedOutput(t *testing.T) {
+	if !strings.Contains(conflictSystemPrompt, "keep_separate") {
+		t.Error("conflict system prompt must name keep_separate")
+	}
+	if !strings.Contains(conflictSystemPrompt, "JSON object") {
+		t.Error("conflict system prompt must require JSON")
+	}
+	if !strings.Contains(originalWorkSystemPrompt, "abstained") || !strings.Contains(originalWorkSystemPrompt, "0.0") {
+		t.Error("original work system prompt must require explicit abstention")
+	}
+}
+
+func writeCompletion(t *testing.T, rw http.ResponseWriter, content string) {
+	t.Helper()
+	rw.Header().Set("Content-Type", "application/json")
+	payload := map[string]any{
+		"choices": []map[string]any{
+			{"message": map[string]any{"content": content}},
+		},
+	}
+	if err := json.NewEncoder(rw).Encode(payload); err != nil {
+		t.Errorf("encode completion: %v", err)
 	}
 }
 
