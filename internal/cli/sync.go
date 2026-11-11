@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/azusachino/drifter/internal/companion"
+	"github.com/azusachino/drifter/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -40,6 +41,7 @@ func (app *cliApp) syncCommand() *cobra.Command {
 		adoptSource   bool
 		adoptTarget   bool
 		withAdvisor   bool
+		configPath    string
 	)
 
 	command := &cobra.Command{
@@ -55,6 +57,7 @@ func (app *cliApp) syncCommand() *cobra.Command {
 	flags.StringVar(&provider, "source", companion.DefaultSourceProvider, "source provider name (default: weread)")
 	flags.StringVar(&provider, "provider", companion.DefaultSourceProvider, "alias for --source")
 	flags.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
+	flags.StringVar(&configPath, "config", config.DefaultPath(), "settings-only TOML path (missing file uses defaults; never credentials)")
 	flags.StringVar(&policyVersion, "policy-version", companion.DefaultPolicyVersion, "policy version for three-way evaluation")
 	flags.StringVar(&sourceVID, "source-vid", os.Getenv("WEREAD_VID"), "declared source user VID for account fingerprint binding")
 	flags.BoolVar(&allowPrivate, "allow-private", false, "allow synchronizing private reading status")

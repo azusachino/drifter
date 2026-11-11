@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/azusachino/drifter/internal/advisor"
+	"github.com/azusachino/drifter/internal/config"
 )
 
 const (
@@ -63,14 +64,47 @@ type Client struct {
 
 var _ advisor.Advisor = (*Client)(nil)
 
-// LoadConfig resolves advisor configuration from the environment.
+// Settings holds optional advisor settings from a local configuration file.
+// Credentials (API keys) never belong here.
+type Settings struct {
+	BaseURL string
+	Model   string
+	Timeout time.Duration
+}
+
+// LoadConfig resolves advisor configuration from the environment and settings file.
 //
-// Endpoint precedence: DRIFTER_ADVISOR_URL, MAGPIE_BASE_URL, MAGPIE_URL, OPENCODE_BASE_URL, then DefaultBaseURL.
-// API key precedence: MAGPIE_GATEWAY_KEY, OPENCODE_API_KEY, DRIFTER_ADVISOR_KEY.
-// Model precedence: DRIFTER_ADVISOR_MODEL, then DefaultModel.
-// Timeout precedence: DRIFTER_ADVISOR_TIMEOUT, then DefaultTimeout.
+// Endpoint precedence: DRIFTER_ADVISOR_URL, MAGPIE_BASE_URL, MAGPIE_URL, OPENCODE_BASE_URL, config advisor.base_url, then DefaultBaseURL.
+// API key precedence: MAGPIE_GATEWAY_KEY, OPENCODE_API_KEY, DRIFTER_ADVISOR_KEY (strictly environment).
+// Model precedence: DRIFTER_ADVISOR_MODEL, config advisor.model, then DefaultModel.
+// Timeout precedence: DRIFTER_ADVISOR_TIMEOUT, config advisor.timeout, then DefaultTimeout.
 func LoadConfig() (Config, error) {
+	return LoadConfigPath(config.DefaultPath())
+}
+
+// LoadConfigPath resolves advisor configuration using settings loaded from path.
+func LoadConfigPath(path string) (Config, error) {
+	var s Settings
+	if strings.TrimSpace(path) != "" {
+		if fileCfg, err := config.Load(path); err == nil {
+			s.BaseURL = fileCfg.Advisor.BaseURL
+			s.Model = fileCfg.Advisor.Model
+			if strings.TrimSpace(fileCfg.Advisor.Timeout) != "" {
+				if d, err := time.ParseDuration(strings.TrimSpace(fileCfg.Advisor.Timeout)); err == nil {
+					s.Timeout = d
+				}
+			}
+		}
+	}
+	return LoadConfigWithSettings(s)
+}
+
+// LoadConfigWithSettings resolves advisor configuration using explicit settings fallback.
+func LoadConfigWithSettings(s Settings) (Config, error) {
 	baseURL := firstEnv("DRIFTER_ADVISOR_URL", "MAGPIE_BASE_URL", "MAGPIE_URL", "OPENCODE_BASE_URL")
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(s.BaseURL)
+	}
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}
@@ -79,6 +113,9 @@ func LoadConfig() (Config, error) {
 		return Config{}, ErrNotConfigured
 	}
 	model := firstEnv("DRIFTER_ADVISOR_MODEL")
+	if model == "" {
+		model = strings.TrimSpace(s.Model)
+	}
 	if model == "" {
 		model = DefaultModel
 	}
@@ -89,6 +126,8 @@ func LoadConfig() (Config, error) {
 			return Config{}, fmt.Errorf("invalid %s value %q", DefaultTimeoutEnv, raw)
 		}
 		timeout = time.Duration(seconds) * time.Second
+	} else if s.Timeout > 0 {
+		timeout = s.Timeout
 	}
 	return Config{
 		BaseURL:    baseURL,

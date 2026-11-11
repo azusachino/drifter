@@ -52,3 +52,7 @@ go.work.sum
 *.delivery-pending.json
 .rumdl_cache/
 .pi/
+
+# Local settings
+config.toml
+config.local.toml

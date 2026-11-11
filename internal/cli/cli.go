@@ -250,7 +250,7 @@ func (app *cliApp) matchCommand() *cobra.Command {
 	command := &cobra.Command{Use: "match", Short: "Suggest Hardcover matches for a WeRead book"}
 	command.Flags().StringVar(&bookID, "book-id", "", "WeRead book ID (required)")
 	command.Flags().StringVar(&query, "query", "", "original-language or alternate title search")
-	command.Flags().StringVar(&configPath, "config", "config.toml", "settings-only TOML path (missing file uses defaults; never credentials)")
+	command.Flags().StringVar(&configPath, "config", config.DefaultPath(), "settings-only TOML path (missing file uses defaults; never credentials)")
 	command.Flags().StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
 	command.Flags().BoolVar(&isbnLookup, "isbn-lookup", false, "lookup authoritative metadata for the book's ISBN")
 	markRequiredFlags(command, "book-id")

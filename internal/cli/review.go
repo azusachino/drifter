@@ -34,7 +34,7 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 	f.IntVar(&year, "year", 0, "filter books opened in calendar year (e.g. 2025)")
 	f.BoolVar(&finishedOnly, "finished", false, "filter to finished/completed books only")
 	f.StringVar(&dbPath, "db", "", "private SQLite path (config database.path overrides this; otherwise default)")
-	f.StringVar(&configPath, "config", "config.toml", "settings-only TOML path (missing file uses defaults)")
+	f.StringVar(&configPath, "config", config.DefaultPath(), "settings-only TOML path (missing file uses defaults)")
 	f.BoolVar(&includePrivate, "include-private", false, "explicitly include privacy-marked books")
 	f.BoolVar(&includeImported, "include-imported", false, "inspect imported books (linking unsupported)")
 	return app.command(cmd, func(c *cobra.Command, _ []string) (reviewErr error) {
