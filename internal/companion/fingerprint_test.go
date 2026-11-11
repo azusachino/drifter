@@ -165,8 +165,8 @@ func TestAccountFingerprintMigrationFromVersionTwoPreservesData(t *testing.T) {
 	}
 	defer s.Close()
 
-	if schemaVersion(t, s.db) != 7 {
-		t.Fatalf("schema version not upgraded to 7: got %d", schemaVersion(t, s.db))
+	if schemaVersion(t, s.db) != 8 {
+		t.Fatalf("schema version not upgraded to 8: got %d", schemaVersion(t, s.db))
 	}
 
 	// Verify mappings preserved

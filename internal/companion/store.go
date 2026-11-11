@@ -218,7 +218,7 @@ func openStore(path string, readOnly bool, owner *DatabaseOwnership) (*Store, er
 	return &Store{db: db, path: path, owner: owner, readOnly: readOnly}, nil
 }
 
-const storeVersion = 7
+const storeVersion = 8
 
 func validateStoreSchema(db *sql.DB) error {
 	var version int
@@ -286,6 +286,13 @@ func validateStoreSchema(db *sql.DB) error {
 		return err
 	}
 	rows, err = db.Query(`SELECT id,run_id,provider,source_account,book_id,target_account,work_id,reason,message,evidence,created_at FROM sync_holds LIMIT 0`)
+	if err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	rows, err = db.Query(`SELECT cache_key,prompt_type,model,response_json,created_at FROM advisor_cache LIMIT 0`)
 	if err != nil {
 		return err
 	}
@@ -459,6 +466,21 @@ func migrateStore(db *sql.DB) error {
 			return err
 		}
 		version = 7
+	}
+	if version == 7 {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS advisor_cache (
+			cache_key TEXT PRIMARY KEY,
+			prompt_type TEXT NOT NULL,
+			model TEXT NOT NULL,
+			response_json TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 8"); err != nil {
+			return err
+		}
+		version = 8
 	}
 	return tx.Commit()
 }
@@ -1294,4 +1316,32 @@ func (s *Store) ListStatusBaselines(ctx context.Context) ([]StatusBaseline, erro
 		list = append(list, b)
 	}
 	return list, rows.Err()
+}
+
+// GetAdvisorCache retrieves a cached advisor response by its key.
+// Returns an empty string and nil error if not found.
+func (s *Store) GetAdvisorCache(ctx context.Context, cacheKey string) (string, error) {
+	var responseJSON string
+	err := s.db.QueryRowContext(ctx, "SELECT response_json FROM advisor_cache WHERE cache_key = ?", cacheKey).Scan(&responseJSON)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return responseJSON, err
+}
+
+// PutAdvisorCache stores or updates an advisor response in the cache.
+func (s *Store) PutAdvisorCache(ctx context.Context, cacheKey, promptType, model, responseJSON string, createdAt time.Time) error {
+	release, err := s.writeGuard()
+	if err != nil {
+		return err
+	}
+	defer release()
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO advisor_cache (cache_key, prompt_type, model, response_json, created_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(cache_key) DO UPDATE SET response_json = excluded.response_json, created_at = excluded.created_at`,
+		cacheKey, promptType, model, responseJSON, createdAt.Format(time.RFC3339))
+	return err
 }
