@@ -205,10 +205,12 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 							targetClient, sourceErr := loadTarget()
 							var report companion.MatchReport
 							if sourceErr == nil {
+								adv, _ := app.getAdvisor(nil)
 								report, sourceErr = companion.MatchWithOptions(lookupCtx, source, targetClient, book.ID, query, companion.MatchOptions{
 									CatalogLoader:  loader,
 									ISBNProvider:   isbnProvider,
 									ExpectedAuthor: expectedAuthor,
+									Advisor:        adv,
 								})
 							}
 							cancel()

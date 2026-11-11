@@ -119,6 +119,8 @@ func (app *cliApp) previewCommand() *cobra.Command {
 			return err
 		}
 
+		adv, _ := app.getAdvisor(store)
+
 		proposal, err := companion.PreviewSync(
 			cmd.Context(),
 			store,
@@ -135,6 +137,7 @@ func (app *cliApp) previewCommand() *cobra.Command {
 				AdoptSource:       adoptSource,
 				AdoptTarget:       adoptTarget,
 				Now:               time.Now().UTC(),
+				Advisor:           adv,
 			},
 		)
 		if err != nil {

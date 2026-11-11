@@ -20,6 +20,7 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 		allowPrivate  bool
 		adoptSource   bool
 		adoptTarget   bool
+		withAdvisor   bool
 		dryRun        bool
 	)
 
@@ -40,6 +41,7 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 	flags.BoolVar(&allowPrivate, "allow-private", false, "allow synchronizing private reading status")
 	flags.BoolVar(&adoptSource, "adopt-source", false, "adopt source reading progress advance or read date updates on target")
 	flags.BoolVar(&adoptTarget, "adopt-target", false, "adopt target reading status advancements as accepted baseline")
+	flags.BoolVar(&withAdvisor, "with-advisor", false, "use advisor recommendation to resolve conflicts automatically")
 	flags.BoolVar(&dryRun, "dry-run", false, "preview reconciliation without mutating target")
 
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
@@ -80,6 +82,8 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 			return err
 		}
 
+		adv, _ := app.getAdvisor(store)
+
 		summary, err := companion.ReconcileAccount(
 			cmd.Context(),
 			store,
@@ -96,6 +100,8 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 				AdoptTarget:       adoptTarget,
 				DryRun:            dryRun,
 				Now:               time.Now().UTC(),
+				Advisor:           adv,
+				WithAdvisor:       withAdvisor,
 			},
 		)
 		if err != nil {

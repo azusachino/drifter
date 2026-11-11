@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/azusachino/drifter/internal/advisor"
 	"github.com/azusachino/drifter/internal/catalog"
 	"github.com/azusachino/drifter/internal/isbn"
 )
@@ -72,6 +73,7 @@ type MatchOptions struct {
 	// ExpectedAuthor optionally moves equal contributor names first without
 	// changing candidate membership or confirming identity. Empty preserves order.
 	ExpectedAuthor string
+	Advisor        advisor.Advisor
 }
 
 func Match(ctx context.Context, source Source, target Target, id, query string) (MatchReport, error) {
@@ -104,6 +106,26 @@ func MatchWithOptions(ctx context.Context, source Source, target Target, id, que
 		return MatchReport{}, err
 	}
 	report.ISBNMetadata = isbnMeta
+	if options.Advisor != nil && len(report.ExactEditions) == 0 && len(report.Candidates) == 0 {
+		advResp, advErr := options.Advisor.ResolveOriginalWork(ctx, advisor.OriginalWorkRequest{
+			Title:      book.Title,
+			Author:     book.Author,
+			Translator: book.Translator,
+			Publisher:  book.Publisher,
+			ISBN:       book.ISBN,
+		})
+		if advErr == nil {
+			report.AdvisorResult = &advResp
+			if !advResp.Abstained && advResp.OriginalTitle != "" && advResp.OriginalTitle != effectiveQuery {
+				origReport, origErr := target.Match(ctx, book, advResp.OriginalTitle)
+				if origErr == nil && (len(origReport.ExactEditions) > 0 || len(origReport.Candidates) > 0) {
+					origReport.AdvisorResult = &advResp
+					origReport.ISBNMetadata = isbnMeta
+					report = origReport
+				}
+			}
+		}
+	}
 	if author := strings.Join(strings.Fields(expectedAuthor), " "); author != "" && len(report.Candidates) > 1 {
 		matched := make([]Candidate, 0, len(report.Candidates))
 		var unmatched []Candidate

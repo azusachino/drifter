@@ -39,6 +39,7 @@ func (app *cliApp) syncCommand() *cobra.Command {
 		dryRun        bool
 		adoptSource   bool
 		adoptTarget   bool
+		withAdvisor   bool
 	)
 
 	command := &cobra.Command{
@@ -60,6 +61,7 @@ func (app *cliApp) syncCommand() *cobra.Command {
 	flags.BoolVar(&dryRun, "dry-run", false, "evaluate and preview status sync proposal without mutating target")
 	flags.BoolVar(&adoptSource, "adopt-source", false, "resolve first-sync bootstrap conflict by updating target to match source progress")
 	flags.BoolVar(&adoptTarget, "adopt-target", false, "resolve status conflict by adopting target status as baseline")
+	flags.BoolVar(&withAdvisor, "with-advisor", false, "use advisor recommendation to resolve conflicts automatically")
 
 	markRequiredFlags(command, "book-id")
 
@@ -101,6 +103,7 @@ func (app *cliApp) syncCommand() *cobra.Command {
 		}
 
 		now := time.Now().UTC()
+		adv, _ := app.getAdvisor(store)
 
 		if dryRun {
 			target, err := app.getPreviewTarget()
@@ -123,6 +126,7 @@ func (app *cliApp) syncCommand() *cobra.Command {
 					AdoptSource:       adoptSource,
 					AdoptTarget:       adoptTarget,
 					Now:               now,
+					Advisor:           adv,
 				},
 			)
 			if err != nil {
@@ -152,6 +156,8 @@ func (app *cliApp) syncCommand() *cobra.Command {
 				AdoptSource:       adoptSource,
 				AdoptTarget:       adoptTarget,
 				Now:               now,
+				Advisor:           adv,
+				WithAdvisor:       withAdvisor,
 			},
 		)
 		if err != nil {

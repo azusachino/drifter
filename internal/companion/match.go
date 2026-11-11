@@ -3,6 +3,7 @@ package companion
 import (
 	"net/url"
 
+	"github.com/azusachino/drifter/internal/advisor"
 	"github.com/azusachino/drifter/internal/catalog"
 	"github.com/azusachino/drifter/internal/isbn"
 )
@@ -61,18 +62,19 @@ type CatalogConflict struct {
 }
 
 type MatchReport struct {
-	Book                 Book               `json:"source_book"`
-	ISBNState            string             `json:"isbn_state"`
-	Resolution           string             `json:"resolution"`
-	ExactEditions        []Edition          `json:"exact_editions"`
-	Candidates           []Candidate        `json:"work_candidates"`
-	SearchQuery          string             `json:"search_query,omitempty"`
-	SearchLimit          int                `json:"search_limit"`
-	RequiresConfirmation bool               `json:"requires_confirmation"`
-	CatalogsComplete     *bool              `json:"catalogs_complete,omitempty"`
-	CatalogAssertions    []CatalogAssertion `json:"catalog_assertions,omitempty"`
-	CatalogHints         []CatalogHint      `json:"catalog_hints,omitempty"`
-	CatalogConflicts     []CatalogConflict  `json:"catalog_conflicts,omitempty"`
-	CatalogIssues        []catalog.Issue    `json:"catalog_issues,omitempty"`
-	ISBNMetadata         *isbn.Metadata     `json:"isbn_metadata,omitempty"`
+	Book                 Book                          `json:"source_book"`
+	ISBNState            string                        `json:"isbn_state"`
+	Resolution           string                        `json:"resolution"`
+	ExactEditions        []Edition                     `json:"exact_editions"`
+	Candidates           []Candidate                   `json:"work_candidates"`
+	SearchQuery          string                        `json:"search_query,omitempty"`
+	SearchLimit          int                           `json:"search_limit"`
+	RequiresConfirmation bool                          `json:"requires_confirmation"`
+	CatalogsComplete     *bool                         `json:"catalogs_complete,omitempty"`
+	CatalogAssertions    []CatalogAssertion            `json:"catalog_assertions,omitempty"`
+	CatalogHints         []CatalogHint                 `json:"catalog_hints,omitempty"`
+	CatalogConflicts     []CatalogConflict             `json:"catalog_conflicts,omitempty"`
+	CatalogIssues        []catalog.Issue               `json:"catalog_issues,omitempty"`
+	ISBNMetadata         *isbn.Metadata                `json:"isbn_metadata,omitempty"`
+	AdvisorResult        *advisor.OriginalWorkResponse `json:"advisor_result,omitempty"`
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/azusachino/drifter/internal/advisor"
 )
 
 // ReconcileOptions specifies parameters for multi-book reconciliation.
@@ -19,6 +21,8 @@ type ReconcileOptions struct {
 	AdoptTarget       bool
 	DryRun            bool
 	Now               time.Time
+	Advisor           advisor.Advisor
+	WithAdvisor       bool
 }
 
 // ReconcileSummary captures the full results and statistics of a reconciliation run.
@@ -118,6 +122,7 @@ func ReconcileAccount(
 				AdoptSource:      opts.AdoptSource,
 				AdoptTarget:      opts.AdoptTarget,
 				Now:              startedAt,
+				Advisor:          opts.Advisor,
 			})
 			if err != nil {
 				summary.ErrorCount++
@@ -184,6 +189,8 @@ func ReconcileAccount(
 			AdoptSource:       opts.AdoptSource,
 			AdoptTarget:       opts.AdoptTarget,
 			Now:               startedAt,
+			Advisor:           opts.Advisor,
+			WithAdvisor:       opts.WithAdvisor,
 		})
 		if err != nil {
 			summary.ErrorCount++

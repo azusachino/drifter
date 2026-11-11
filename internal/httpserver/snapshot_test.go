@@ -122,6 +122,7 @@ func snapshotDatabase(t *testing.T) string {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
+	snapshotSetMappingUpdatedAt(t, path, "123", boundAt)
 	return path
 }
 

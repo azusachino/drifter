@@ -23,7 +23,7 @@ const (
 	// DefaultBaseURL is the production OpenAI-compatible gateway endpoint.
 	DefaultBaseURL = "https://magpie.h.azusachino.com/v1"
 	// DefaultModel is the default model identifier used for advisor calls.
-	DefaultModel = "opencode-go/longcat-2.5-free"
+	DefaultModel = "opencode-go/beam-free"
 	// DefaultTimeout is the default per-request timeout.
 	DefaultTimeout = 30 * time.Second
 	// DefaultTimeoutEnv is consulted when no timeout is configured explicitly.
