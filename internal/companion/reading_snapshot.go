@@ -301,6 +301,9 @@ func snapshotBook(ctx context.Context, source Source, row ShelfBook) (ReadingSna
 	if progress.LastReadAt > 0 {
 		lastReadAt := time.Unix(progress.LastReadAt, 0).UTC()
 		book.LastReadAt = &lastReadAt
+	} else if (book.Status == "reading" || book.Status == "completed") && row.LastOpened != nil && *row.LastOpened > 0 {
+		lastReadAt := time.Unix(*row.LastOpened, 0).UTC()
+		book.LastReadAt = &lastReadAt
 	}
 	// WeRead reports no true start instant or start day, so StartedOn stays nil.
 	return book, nil
