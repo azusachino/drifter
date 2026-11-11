@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/azusachino/drifter/internal/advisor"
 )
@@ -29,6 +30,8 @@ const (
 	DefaultTimeoutEnv = "DRIFTER_ADVISOR_TIMEOUT"
 	// ResponseLimit caps the response body read from the completions endpoint (8 MiB).
 	ResponseLimit = 8 << 20
+	// maxErrorDetail caps how much upstream error text is echoed back.
+	maxErrorDetail = 512
 )
 
 // Configuration errors. Callers should match these with errors.Is.
@@ -179,13 +182,16 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
+// responseFormat requests a specific assistant output shape.
+type responseFormat struct {
+	Type string `json:"type"`
+}
+
 // chatRequest is the OpenAI-compatible chat completions request body.
 type chatRequest struct {
-	Model          string        `json:"model"`
-	Messages       []chatMessage `json:"messages"`
-	ResponseFormat *struct {
-		Type string `json:"type"`
-	} `json:"response_format,omitempty"`
+	Model          string         `json:"model"`
+	Messages       []chatMessage  `json:"messages"`
+	ResponseFormat responseFormat `json:"response_format"`
 }
 
 // chatResponse is the OpenAI-compatible chat completions response body.
@@ -210,6 +216,9 @@ func (c *Client) complete(ctx context.Context, systemPrompt, userPrompt string, 
 	if strings.TrimSpace(c.apiKey) == "" {
 		return ErrNotConfigured
 	}
+	if target == nil {
+		return errors.New("advisor response target is nil")
+	}
 
 	payload := chatRequest{
 		Model: c.model,
@@ -217,9 +226,7 @@ func (c *Client) complete(ctx context.Context, systemPrompt, userPrompt string, 
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		ResponseFormat: &struct {
-			Type string `json:"type"`
-		}{Type: "json_object"},
+		ResponseFormat: responseFormat{Type: "json_object"},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -231,6 +238,7 @@ func (c *Client) complete(ctx context.Context, systemPrompt, userPrompt string, 
 		return fmt.Errorf("advisor request creation failed: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	response, err := c.httpClient.Do(req)
@@ -244,14 +252,18 @@ func (c *Client) complete(ctx context.Context, systemPrompt, userPrompt string, 
 
 	switch response.StatusCode {
 	case http.StatusTooManyRequests:
+		// Read a bounded slice so the failure message can be useful without
+		// reflecting an unbounded upstream body.
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorDetail))
+		if message := sanitizeDetail(detail); message != "" {
+			return fmt.Errorf("%w: HTTP 429: %s", ErrRateLimited, message)
+		}
 		return fmt.Errorf("%w: HTTP 429", ErrRateLimited)
 	case http.StatusOK:
 	default:
-		// Read a bounded slice so the failure message can be useful without
-		// leaking an unbounded upstream body.
-		detail, _ := io.ReadAll(io.LimitReader(response.Body, 512))
-		if len(detail) > 0 {
-			return fmt.Errorf("advisor request failed: HTTP %d: %s", response.StatusCode, sanitizeDetail(detail))
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorDetail))
+		if message := sanitizeDetail(detail); message != "" {
+			return fmt.Errorf("advisor request failed: HTTP %d: %s", response.StatusCode, message)
 		}
 		return fmt.Errorf("advisor request failed: HTTP %d", response.StatusCode)
 	}
@@ -261,7 +273,7 @@ func (c *Client) complete(ctx context.Context, systemPrompt, userPrompt string, 
 		return fmt.Errorf("advisor response unreadable: %w", err)
 	}
 	if len(data) > ResponseLimit {
-		return fmt.Errorf("advisor response too large")
+		return fmt.Errorf("advisor response exceeds %d bytes", ResponseLimit)
 	}
 
 	var envelope chatResponse
@@ -269,14 +281,17 @@ func (c *Client) complete(ctx context.Context, systemPrompt, userPrompt string, 
 		return fmt.Errorf("%w: %v", ErrInvalidResponse, err)
 	}
 	if envelope.Error != nil {
-		return fmt.Errorf("advisor request rejected: %s", sanitizeDetail([]byte(envelope.Error.Message)))
+		if message := sanitizeDetail([]byte(envelope.Error.Message)); message != "" {
+			return fmt.Errorf("advisor request rejected: %s", message)
+		}
+		return errors.New("advisor request rejected")
 	}
 	if len(envelope.Choices) == 0 {
-		return fmt.Errorf("advisor response contained no choices")
+		return fmt.Errorf("%w: no choices returned", ErrInvalidResponse)
 	}
 	rawContent := strings.TrimSpace(envelope.Choices[0].Message.Content)
-	if len(rawContent) == 0 {
-		return fmt.Errorf("advisor response contained empty content")
+	if rawContent == "" {
+		return fmt.Errorf("%w: empty message content", ErrInvalidResponse)
 	}
 	content := stripMarkdownFence([]byte(rawContent))
 	if err := json.Unmarshal(content, target); err != nil {
@@ -285,24 +300,31 @@ func (c *Client) complete(ctx context.Context, systemPrompt, userPrompt string, 
 	return nil
 }
 
-// stripMarkdownFence removes a leading/trailing markdown code fence that some
-// models wrap around JSON output (```json ... ``` or ``` ... ```).
+// stripMarkdownFence removes a leading and trailing markdown code fence that
+// some models wrap around JSON output (```json ... ``` or ``` ... ```).
 func stripMarkdownFence(content []byte) []byte {
+	const fence = "```"
 	trimmed := bytes.TrimSpace(content)
-	if !bytes.HasPrefix(trimmed, []byte("```")) {
+	if !bytes.HasPrefix(trimmed, []byte(fence)) {
 		return trimmed
 	}
+	rest := trimmed[len(fence):]
 	// Drop the opening fence line, including an optional language tag.
-	if newline := bytes.IndexByte(trimmed, '\n'); newline >= 0 {
-		trimmed = trimmed[newline+1:]
+	if newline := bytes.IndexByte(rest, '\n'); newline >= 0 {
+		rest = rest[newline+1:]
 	} else {
-		return trimmed
+		// A single-line fence keeps the language tag on the same line:
+		// ```json {"a":1}```. Drop the tag before the JSON payload.
+		rest = bytes.TrimLeft(rest, " \t")
+		if space := bytes.IndexAny(rest, " \t"); space >= 0 && !bytes.HasPrefix(rest, []byte("{")) {
+			rest = bytes.TrimLeft(rest[space:], " \t")
+		}
 	}
 	// Drop the closing fence if present.
-	if idx := bytes.LastIndex(trimmed, []byte("```")); idx >= 0 {
-		trimmed = trimmed[:idx]
+	if idx := bytes.LastIndex(rest, []byte(fence)); idx >= 0 {
+		rest = rest[:idx]
 	}
-	return bytes.TrimSpace(trimmed)
+	return bytes.TrimSpace(rest)
 }
 
 // sanitizeDetail trims an upstream error detail and removes control characters
@@ -318,8 +340,12 @@ func sanitizeDetail(detail []byte) string {
 		}
 		return r
 	}, s)
-	if len(s) > 256 {
-		s = s[:256]
+	if len(s) > maxErrorDetail {
+		cut := maxErrorDetail
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut] + "…"
 	}
 	return s
 }

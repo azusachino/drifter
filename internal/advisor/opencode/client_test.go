@@ -44,7 +44,7 @@ func TestExplainConflictSuccess(t *testing.T) {
 		if body.Model != DefaultModel {
 			t.Errorf("model = %q, want %q", body.Model, DefaultModel)
 		}
-		if body.ResponseFormat == nil || body.ResponseFormat.Type != "json_object" {
+		if body.ResponseFormat.Type != "json_object" {
 			t.Errorf("response_format = %+v, want json_object", body.ResponseFormat)
 		}
 		if len(body.Messages) != 2 || body.Messages[0].Role != "system" || body.Messages[1].Role != "user" {
