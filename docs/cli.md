@@ -121,7 +121,10 @@ health routes, a server-rendered status and mapping interface at `/`, read-only
 `/api/mappings`, `/api/status`, `/api/runs`, `/api/holds`, `/api/pending`
 (account and target labels, optional `days` and continuation `after` query
 parameters), state export (`/api/export`) and import (`/api/import`), and
-explicit local mapping maintenance. There is no `/admin` compatibility route.
+explicit local mapping maintenance. The versioned read route
+`/api/v1/reading/snapshot` serves paginated reading facts and requires a Bearer
+`DRIFTER_API_TOKEN` credential; see [the server guide](server.md). There is no
+`/admin` compatibility route.
 New confirmations use `ConfirmLinkOwned`, including source book lookup and
 target work/edition membership validation. The HTML form and JSON routes
 support separate confirm, replace and scoped unlink actions; neither accepts

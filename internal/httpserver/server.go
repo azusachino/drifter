@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,6 +61,7 @@ type Server struct {
 	database         string
 	ownership        *companion.DatabaseOwnership
 	token            string
+	apiToken         string
 	logger           *slog.Logger
 	now              func() time.Time
 	source           companion.Source
@@ -75,15 +77,18 @@ type Server struct {
 }
 
 type Options struct {
-	Address          string
-	AllowedHosts     []string
-	Database         string
-	Source           companion.Source
-	SourceFactory    func() (companion.Source, error)
-	Target           companion.Target
-	TargetFactory    func() (companion.Target, error)
-	Logger           *slog.Logger
-	Now              func() time.Time
+	Address       string
+	AllowedHosts  []string
+	Database      string
+	Source        companion.Source
+	SourceFactory func() (companion.Source, error)
+	Target        companion.Target
+	TargetFactory func() (companion.Target, error)
+	Logger        *slog.Logger
+	Now           func() time.Time
+	// APIToken protects the versioned /api/v1 read endpoints. Empty falls back
+	// to DRIFTER_API_TOKEN; when neither is set those endpoints reject requests.
+	APIToken         string
 	operationTimeout time.Duration
 }
 
@@ -107,8 +112,16 @@ func New(options Options) (*Server, error) {
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return nil, fmt.Errorf("cannot initialize request protection")
 	}
+	apiToken := strings.TrimSpace(options.APIToken)
+	if apiToken == "" {
+		apiToken = strings.TrimSpace(os.Getenv("DRIFTER_API_TOKEN"))
+	}
+	if strings.ContainsAny(apiToken, "\r\n") {
+		return nil, fmt.Errorf("API token must be a single line")
+	}
 	s := &Server{address: options.Address, allowedHosts: options.AllowedHosts, database: options.Database, token: base64.RawURLEncoding.EncodeToString(tokenBytes),
-		logger: options.Logger, now: options.Now, source: options.Source, sourceFactory: options.SourceFactory,
+		apiToken: apiToken,
+		logger:   options.Logger, now: options.Now, source: options.Source, sourceFactory: options.SourceFactory,
 		target: options.Target, targetFactory: options.TargetFactory,
 		operationSlot: make(chan struct{}, 1), operationTimeout: options.operationTimeout}
 	router := chi.NewRouter()
@@ -147,6 +160,9 @@ func New(options Options) (*Server, error) {
 		api.Get("/export", s.handleExport)
 		api.Head("/export", s.handleExport)
 		api.Post("/import", s.handleImport)
+	})
+	router.Route("/api/v1", func(v1 chi.Router) {
+		v1.Get("/reading/snapshot", s.handleReadingSnapshot)
 	})
 	router.Route("/mappings", func(mappings chi.Router) {
 		mappings.Post("/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, false) })
@@ -531,6 +547,82 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="drifter-export.json"`)
 	writeJSON(w, r, export)
+}
+
+// handleReadingSnapshot serves one page of provider-neutral reading facts to an
+// authenticated account-aware consumer such as the Iroha reading connector.
+func (s *Server) handleReadingSnapshot(w http.ResponseWriter, r *http.Request) {
+	if !readRequestAllowed(w, r) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, "GET")
+		return
+	}
+	if !s.bearerAuthorized(r) {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		apiError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if !noBody(w, r) {
+		return
+	}
+	options, err := snapshotOptions(r.URL.Query(), s.now)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, "invalid_snapshot_query")
+		return
+	}
+	if err := companion.ValidateReadingSnapshotCursor(options.Cursor); err != nil {
+		apiError(w, http.StatusBadRequest, "invalid_cursor")
+		return
+	}
+	ctx, release, admitted := s.admit(r.Context())
+	if !admitted {
+		apiError(w, http.StatusServiceUnavailable, "provider_operation_busy")
+		return
+	}
+	defer release()
+	source, err := s.pendingSource()
+	if err != nil {
+		apiError(w, http.StatusServiceUnavailable, "provider_unavailable")
+		return
+	}
+	snapshot, err := companion.ExportReadingSnapshot(ctx, s.database, source, options)
+	if err != nil {
+		if errors.Is(err, companion.ErrInvalidSnapshotCursor) {
+			apiError(w, http.StatusBadRequest, "invalid_cursor")
+			return
+		}
+		if errors.Is(err, companion.ErrSnapshotStateUnavailable) {
+			apiError(w, http.StatusServiceUnavailable, "mapping_database_unavailable")
+			return
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.Canceled) {
+			apiError(w, http.StatusGatewayTimeout, "operation_timeout")
+			return
+		}
+		apiError(w, http.StatusBadGateway, "snapshot_failed")
+		return
+	}
+	writeJSON(w, r, snapshot)
+}
+
+// bearerAuthorized accepts exactly one well-formed Bearer credential and
+// compares it in constant time. An unconfigured token rejects every request
+// instead of exposing reading facts without authentication.
+func (s *Server) bearerAuthorized(r *http.Request) bool {
+	if s.apiToken == "" {
+		return false
+	}
+	values := r.Header.Values("Authorization")
+	if len(values) != 1 {
+		return false
+	}
+	scheme, credential, ok := strings.Cut(values[0], " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") || credential == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(credential), []byte(s.apiToken)) == 1
 }
 
 func (s *Server) handleImport(w http.ResponseWriter, r *http.Request) {
@@ -1257,6 +1349,50 @@ func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, 
 	if err := companion.ValidatePendingCursor(options); err != nil {
 		return companion.PendingOptions{}, err
 	}
+	return options, nil
+}
+
+func snapshotOptions(query url.Values, now func() time.Time) (companion.ReadingSnapshotOptions, error) {
+	for key, values := range query {
+		switch key {
+		case "account", "target_account", "limit", "cursor":
+		default:
+			return companion.ReadingSnapshotOptions{}, fmt.Errorf("invalid snapshot query")
+		}
+		if len(values) != 1 {
+			return companion.ReadingSnapshotOptions{}, fmt.Errorf("invalid snapshot query")
+		}
+	}
+	options := companion.ReadingSnapshotOptions{
+		SourceAccount: query.Get("account"),
+		TargetAccount: query.Get("target_account"),
+		Cursor:        query.Get("cursor"),
+		Now:           now,
+	}
+	if options.SourceAccount == "" {
+		options.SourceAccount = companion.DefaultSourceAccount
+	}
+	if options.TargetAccount == "" {
+		options.TargetAccount = companion.DefaultTargetAccount
+	}
+	if !companion.ValidLabel(options.SourceAccount) || !companion.ValidLabel(options.TargetAccount) {
+		return companion.ReadingSnapshotOptions{}, fmt.Errorf("invalid snapshot accounts")
+	}
+	limit := companion.DefaultReadingSnapshotLimit
+	if raw := query.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			return companion.ReadingSnapshotOptions{}, fmt.Errorf("invalid snapshot limit")
+		}
+		limit = parsed
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > companion.MaxReadingSnapshotLimit {
+		limit = companion.MaxReadingSnapshotLimit
+	}
+	options.Limit = limit
 	return options, nil
 }
 

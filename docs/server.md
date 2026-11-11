@@ -77,6 +77,57 @@ structured with CSS-only navigation tabs:
 - **Export**: download the current mapping state as JSON (`/api/export`).
 - **Sync**: inspect recent reconciliation runs, baselines, and active holds.
 
+## Reading snapshot API
+
+`GET /api/v1/reading/snapshot` serves one page of provider-neutral reading
+facts for an account pair, so another service can ingest the shelf without
+reading Drifter's SQLite state. It is read-only: it opens the mapping database
+read-only and never writes provider status.
+
+The endpoint requires a Bearer credential supplied at runtime:
+
+```sh
+curl --fail-with-body \
+  -H "Authorization: Bearer $DRIFTER_API_TOKEN" \
+  'http://127.0.0.1:8081/api/v1/reading/snapshot?account=default&limit=50'
+```
+
+`DRIFTER_API_TOKEN` is read from the environment; there is no TOML setting and
+no built-in default. When it is unset, every snapshot request is rejected with
+`401 {"error":"unauthorized"}` rather than serving reading facts without
+authentication. The credential is compared in constant time and is never
+logged.
+
+Query parameters are optional:
+
+| Parameter | Meaning |
+| --- | --- |
+| `account` | Source account label; defaults to `default`. |
+| `target_account` | Target account label whose confirmed mappings are attached; defaults to `default`. |
+| `limit` | Page size, clamped to 1–100; defaults to 50. |
+| `cursor` | Opaque token from the previous page's `cursor` field. |
+
+Unknown or repeated parameters are rejected with `400`.
+
+The response carries `version` (`1.0`), `generated_at`, `source_account`,
+`has_more`, the next `cursor` while `has_more` is true, and `books`. Books are
+ordered by last open time, then source identity. Each book carries identity
+(`source_provider`, `source_book_id`, `title`, `author`), optional catalog
+metadata (`translator`, `publisher`, `isbn`, `cover_url`, `reader_url`),
+progress (`status` of `completed`, `reading` or `planned`, `progress_percent`,
+`reading_time_seconds`, `last_read_at`, `finished_at`), `is_custom` for `CB_...`
+uploads, and `matched_target` when a confirmed mapping exists.
+
+Facts the source does not report stay absent: `started_on` is always omitted
+because WeRead reports no true start instant or start day, and
+`reading_time_seconds`, `last_read_at` and `finished_at` are omitted when the
+source has no such fact. Reading time is cumulative, never a session interval.
+
+Errors use the JSON error shape: `401 unauthorized`, `400
+invalid_snapshot_query`, `400 invalid_cursor`, `503 provider_unavailable`,
+`provider_operation_busy` or `mapping_database_unavailable`, `502
+snapshot_failed`, and `504 operation_timeout`.
+
 ## Rootless runtime verification
 
 Verified with Podman 5.8.7 on the macOS-hosted Linux/arm64 VM (`rootless=true`,

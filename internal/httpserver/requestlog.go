@@ -17,6 +17,9 @@ var safeRoutes = map[string]struct{}{
 	"/api/mappings": {}, "/api/pending": {}, "/api/export": {}, "/api/import": {},
 	"/api/mappings/confirm": {}, "/api/mappings/replace": {}, "/api/mappings/unlink": {},
 	"/mappings/confirm": {}, "/mappings/replace": {}, "/mappings/unlink": {},
+
+	// Versioned read API for an authenticated cross-service consumer.
+	"/api/v1/reading/snapshot": {},
 }
 
 func requestRouteLogAttribute(next http.Handler) http.Handler {
