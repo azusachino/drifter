@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	// DefaultBaseURL is the production OpenAI-compatible gateway endpoint.
-	DefaultBaseURL = "https://magpie.h.azusachino.com/v1"
+	// DefaultBaseURL is the standard fallback OpenAI-compatible gateway endpoint.
+	DefaultBaseURL = "https://api.openai.com/v1"
 	// DefaultModel is the default model identifier used for advisor calls.
 	DefaultModel = "opencode-go/beam-free"
 	// DefaultTimeout is the default per-request timeout.
