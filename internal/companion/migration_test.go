@@ -597,7 +597,7 @@ PRAGMA user_version = 7;
 
 	ctx := context.Background()
 	// Test cache empty
-	got, err := s.GetAdvisorCache(ctx, "nonexistent")
+	got, err := s.GetAdvisorCache(ctx, "nonexistent", time.Time{})
 	if err != nil || got != "" {
 		t.Fatalf("expected empty cache, got %q, err: %v", got, err)
 	}
@@ -606,8 +606,27 @@ PRAGMA user_version = 7;
 	if err := s.PutAdvisorCache(ctx, "k1", "conflict", "model-a", `{"summary":"ok"}`, time.Now().UTC()); err != nil {
 		t.Fatalf("put advisor cache: %v", err)
 	}
-	got, err = s.GetAdvisorCache(ctx, "k1")
+	got, err = s.GetAdvisorCache(ctx, "k1", time.Time{})
 	if err != nil || got != `{"summary":"ok"}` {
 		t.Fatalf("got %q, err %v", got, err)
+	}
+}
+
+func TestAdvisorCacheEntryOlderThanNotBeforeIsAMiss(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "cache.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := s.PutAdvisorCache(ctx, "k", "conflict", "m", `{"a":1}`, created); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetAdvisorCache(ctx, "k", created.Add(-time.Hour)); err != nil || got == "" {
+		t.Fatalf("entry newer than notBefore must hit, got %q, %v", got, err)
+	}
+	if got, err := s.GetAdvisorCache(ctx, "k", created.Add(time.Hour)); err != nil || got != "" {
+		t.Fatalf("entry older than notBefore must miss, got %q, %v", got, err)
 	}
 }

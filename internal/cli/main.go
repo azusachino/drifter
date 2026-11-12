@@ -31,7 +31,7 @@ func Main() {
 				return nil, err
 			}
 			if store != nil {
-				return advisor.NewCachedAdvisor(client, store, cfg.Model), nil
+				return advisor.NewCachedAdvisor(client, store, cfg.Model, opencode.PromptHash()), nil
 			}
 			return client, nil
 		},

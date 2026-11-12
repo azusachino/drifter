@@ -539,6 +539,8 @@ Supported flags on `sync`:
 - `--allow-private`: Consents to syncing private-marked source books (enforcing
   private visibility on Hardcover).
 - `--source-vid VID`: Declares source WeRead user VID for 0-review accounts.
+- `--with-advisor`: Lets the LLM advisor resolve a conflict by choosing an
+  adoption automatically. See [Advisor](#advisor).
 
 ### Continuous account reconciliation
 
@@ -546,7 +548,7 @@ Reconcile reading statuses across all confirmed mappings for an account:
 
 ```sh
 bin/drifter reconcile --account my-weread --target-account my-hardcover \
-  [--adopt-source | --adopt-target] [--allow-private] [--source-vid VID] [--dry-run]
+  [--adopt-source | --adopt-target | --with-advisor] [--allow-private] [--source-vid VID] [--dry-run]
 ```
 
 `reconcile` iterates sequentially through all confirmed mappings, evaluates
@@ -557,6 +559,42 @@ records run metrics in `sync_runs`.
   abort the run; remaining works continue safely.
 - **Conflict Holds**: Works encountering conflicts (e.g. manual edits on
   Hardcover or competing source mappings) are held in `sync_holds`.
+
+### Advisor
+
+The advisor is an optional LLM helper that explains status conflicts and
+resolves the foreign original of a translated work. It is on whenever an API key
+is present in the environment (`MAGPIE_GATEWAY_KEY`, `OPENCODE_API_KEY` or
+`DRIFTER_ADVISOR_KEY`) and a silent no-op otherwise. `match`, `preview`,
+`review` and `sync` call it when it is on.
+
+**Data sent.** Each call sends book metadata to the configured endpoint: title,
+author, translator, publisher, ISBN, reading status and the conflict message.
+The endpoint defaults to `https://api.openai.com/v1`; set `advisor.base_url` or
+`DRIFTER_ADVISOR_URL` to use a private gateway. Text fields are sent as one JSON
+object with control characters removed and lengths capped, and are marked as
+untrusted data in the prompt.
+
+**`--with-advisor`** on `sync` and `reconcile` lets the advisor settle a
+conflict. Its recommendation is one of `adopt_source`, `adopt_target` or
+`keep_separate`; any other value is rejected as an invalid response. For
+`adopt_source` and `adopt_target` the sync runs as if `--adopt-source` or
+`--adopt-target` had been passed, and the apply result carries
+`advisor_adopted` with the action taken. With the flag and no advisor configured,
+the command fails and names the key variables; without it, an unconfigured
+advisor is ignored. An explicit `--adopt-source` or `--adopt-target` wins over
+the advisor.
+
+| Variable | Meaning |
+| --- | --- |
+| `MAGPIE_GATEWAY_KEY`, `OPENCODE_API_KEY`, `DRIFTER_ADVISOR_KEY` | API key, first set wins |
+| `DRIFTER_ADVISOR_URL` (also `MAGPIE_BASE_URL`, `MAGPIE_URL`, `OPENCODE_BASE_URL`) | Endpoint; overrides `advisor.base_url` |
+| `DRIFTER_ADVISOR_MODEL` | Model; overrides `advisor.model` |
+| `DRIFTER_ADVISOR_TIMEOUT` | Per-request timeout as a Go duration (`45s`, `1m`); a bare integer still means seconds. Overrides `advisor.timeout` |
+
+Answers are cached in the local database for 30 days. The cache key covers the
+whole request, the model and the prompt templates, so a different book, model or
+prompt gets a fresh answer.
 
 ## Local state and privacy
 
@@ -575,8 +613,8 @@ key and kind (`skip`, `exclude`, `not-in-catalog`). Audit tables store run logs,
 intents, receipts, and baselines. Raw provider responses, excerpts, and tokens
 are never stored.
 
-The database uses SQLite `PRAGMA user_version` (currently version 7). Upgrades
-from older schemas (v0 through v6) are executed transactionally on startup,
+The database uses SQLite `PRAGMA user_version` (currently version 8). Upgrades
+from older schemas (v0 through v7) are executed transactionally on startup,
 preserving all existing mappings, decisions, and baselines. Unsupported or
 corrupted databases roll back and fail closed.
 

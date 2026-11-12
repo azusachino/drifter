@@ -25,9 +25,9 @@ type ConflictExplanationRequest struct {
 // status conflict. RecommendedAction is one of "adopt_source",
 // "adopt_target", or "keep_separate".
 type ConflictExplanationResponse struct {
-	Summary           string `json:"summary"`            // Single clear sentence explaining what diverged
-	RecommendedAction string `json:"recommended_action"` // "adopt_source", "adopt_target", "keep_separate"
-	Rationale         string `json:"rationale"`          // Detailed reasoning why this action is safe
+	Summary           string `json:"summary"` // Single clear sentence explaining what diverged
+	RecommendedAction Action `json:"recommended_action"`
+	Rationale         string `json:"rationale"` // Detailed reasoning why this action is safe
 }
 
 // OriginalWorkRequest carries the bibliographic evidence for one localized

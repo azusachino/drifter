@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/azusachino/drifter/internal/advisor"
+	"github.com/azusachino/drifter/internal/advisor/opencode"
 	"github.com/azusachino/drifter/internal/catalog"
 	"github.com/azusachino/drifter/internal/companion"
 	"github.com/azusachino/drifter/internal/config"
@@ -57,6 +59,25 @@ func (app *cliApp) getAdvisor(store *companion.Store) (advisor.Advisor, error) {
 		return app.providers.advisor(store)
 	}
 	return nil, nil
+}
+
+// advisorFor returns the advisor for a command. When required (--with-advisor)
+// a missing advisor is a failure; otherwise it stays a silent no-op.
+func (app *cliApp) advisorFor(store *companion.Store, required bool) (advisor.Advisor, error) {
+	adv, err := app.getAdvisor(store)
+	if !required {
+		return adv, nil
+	}
+	if err == nil && adv == nil {
+		err = errors.New("no advisor provider")
+	}
+	if err != nil {
+		if errors.Is(err, opencode.ErrNotConfigured) {
+			return nil, fmt.Errorf("--with-advisor needs an advisor: %w (set MAGPIE_GATEWAY_KEY, OPENCODE_API_KEY or DRIFTER_ADVISOR_KEY)", err)
+		}
+		return nil, fmt.Errorf("--with-advisor needs an advisor: %w", err)
+	}
+	return adv, nil
 }
 
 func run(ctx context.Context, args []string, out, errOut io.Writer, providers clients) error {

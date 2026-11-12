@@ -106,7 +106,10 @@ func (app *cliApp) syncCommand() *cobra.Command {
 		}
 
 		now := time.Now().UTC()
-		adv, _ := app.getAdvisor(store)
+		adv, err := app.advisorFor(store, withAdvisor)
+		if err != nil {
+			return err
+		}
 
 		if dryRun {
 			target, err := app.getPreviewTarget()
