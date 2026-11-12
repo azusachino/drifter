@@ -1,0 +1,41 @@
+{
+  "version": "1.0",
+  "generated_at": "2026-11-11T10:00:00Z",
+  "source_identity": "weread:23849102",
+  "target_identity": "hardcover:4821",
+  "watermark": "2026-11-11T10:00:00Z",
+  "has_more": true,
+  "cursor": "cnVuMToxNzk0MzkxMjAwOjE3MDAwMDAyMDA6Q0JfY3VzdG9tXzE",
+  "books": [
+    {
+      "source_provider": "weread",
+      "source_book_id": "100",
+      "title": "克拉拉与太阳",
+      "author": "石黑一雄",
+      "translator": "赵松",
+      "publisher": "上海译文出版社",
+      "isbn": "9787532786831",
+      "reader_url": "https://weread.qq.com/web/bookDetail/100",
+      "status": "completed",
+      "progress_percent": 100,
+      "reading_time_seconds": 18240,
+      "last_read_at": "2023-11-14T22:13:20Z",
+      "finished_at": "2023-11-14T22:13:20Z",
+      "is_custom": false,
+      "matched_target": {
+        "target_provider": "hardcover",
+        "work_id": 4821,
+        "edition_id": 9001
+      }
+    },
+    {
+      "source_provider": "weread",
+      "source_book_id": "CB_custom_1",
+      "title": "自定义上传",
+      "author": "作者",
+      "status": "planned",
+      "progress_percent": 0,
+      "is_custom": true
+    }
+  ]
+}

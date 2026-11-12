@@ -161,7 +161,7 @@ func TestReadingSnapshotPaginatesWithCursorAndEnrichesMetadata(t *testing.T) {
 	}
 
 	// A cursor past the shelf yields an empty final page rather than an error.
-	beyond, err := ExportReadingSnapshot(ctx, db, source, ReadingSnapshotOptions{Limit: 2, Cursor: encodeSnapshotCursor(10), Now: now})
+	beyond, err := ExportReadingSnapshot(ctx, db, source, ReadingSnapshotOptions{Limit: 2, Cursor: encodeSnapshotCursor(snapshotCursor{pinned: now(), bookID: "zzz"}), Now: now})
 	if err != nil || len(beyond.Books) != 0 || beyond.HasMore || beyond.Cursor != "" {
 		t.Fatalf("cursor beyond the shelf: %+v %v", beyond, err)
 	}
@@ -252,7 +252,7 @@ func TestReadingSnapshotRejectsForeignCursors(t *testing.T) {
 	ctx := context.Background()
 	source := &snapshotSource{shelf: ShelfResult{Complete: true, Books: []ShelfBook{snapshotBookRow("123", "shelf-123", snapshotEpoch(500))}}}
 	db := snapshotDatabase(t)
-	for _, cursor := range []string{"not-a-cursor", "!!!", encodeSnapshotCursor(-1), "b2Zmc2V0Og", strings.Repeat("A", 129), cursorWithPrefix("offset:abc"), cursorWithPrefix("decode:-1")} {
+	for _, cursor := range []string{"not-a-cursor", "!!!", cursorWithPrefix("offset:3"), "b2Zmc2V0Og", strings.Repeat("A", 257), cursorWithPrefix("run1:abc:0:1"), cursorWithPrefix("run1:0:0:1"), cursorWithPrefix("run1:1700000000:-1:1"), cursorWithPrefix("run1:1700000000:0:"), cursorWithPrefix("decode:-1")} {
 		if _, err := ExportReadingSnapshot(ctx, db, source, ReadingSnapshotOptions{Cursor: cursor}); !errors.Is(err, ErrInvalidSnapshotCursor) {
 			t.Fatalf("cursor %q accepted: %v", cursor, err)
 		}
@@ -260,7 +260,7 @@ func TestReadingSnapshotRejectsForeignCursors(t *testing.T) {
 			t.Fatalf("cursor %q passed validation: %v", cursor, err)
 		}
 	}
-	if err := ValidateReadingSnapshotCursor(encodeSnapshotCursor(0)); err != nil {
+	if err := ValidateReadingSnapshotCursor(encodeSnapshotCursor(snapshotCursor{pinned: time.Unix(1700000000, 0), bookID: "1"})); err != nil {
 		t.Fatalf("issued cursor rejected: %v", err)
 	}
 }
