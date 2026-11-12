@@ -26,8 +26,8 @@ build:
 	$(GO) build -o bin/drifter ./cmd/cli
 	$(GO) build -o bin/drifter-server ./cmd/server
 
-image: ## Build drifter-server and import it into the local k3s containerd store (TAG=$(TAG))
-	podman build -t $(IMAGE_NS)/drifter:$(TAG) -f Containerfile .
+image: ## Build drifter-server and import it into the local k3s containerd store (TAG=$(TAG); REFRESH=1 bypasses cache)
+	podman build $(if $(REFRESH),--no-cache,) -t $(IMAGE_NS)/drifter:$(TAG) -f Containerfile .
 	podman save $(IMAGE_NS)/drifter:$(TAG) | sudo k3s ctr images import --all-platforms --digests --skip-digest-for-named -
 
 e2e:
