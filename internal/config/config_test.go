@@ -57,6 +57,20 @@ path = "/var/lib/drifter/mappings.sqlite"
 	}
 }
 
+func TestLoadAcceptsWildcardServerWithAllowedHosts(t *testing.T) {
+	cfg, err := Load(write(t, `
+[server]
+addr = "0.0.0.0:8081"
+allowed_hosts = ["drifter.harus-media", "drifter.harus-media:8081"]
+`))
+	if err != nil {
+		t.Fatalf("wildcard listener with allowed_hosts rejected: %v", err)
+	}
+	if cfg.Server.Addr != "0.0.0.0:8081" || len(cfg.Server.AllowedHosts) != 2 {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
 func TestLoadRejectsInvalidOrUnsafeConfiguration(t *testing.T) {
 	for name, content := range map[string]string{
 		"unknown-key":             "[log]\nlevel = \"info\"\n\n[sync]\nauto_write = true\n",
@@ -66,6 +80,7 @@ func TestLoadRejectsInvalidOrUnsafeConfiguration(t *testing.T) {
 		"wildcard-server":         "[server]\naddr = \":8081\"\n",
 		"star-wildcard-server":    "[server]\naddr = \"*:8081\"\n",
 		"unspecified-server":      "[server]\naddr = \"0.0.0.0:8081\"\n",
+		"wildcard-blank-hosts":    "[server]\naddr = \"0.0.0.0:8081\"\nallowed_hosts = [\"  \"]\n",
 		"ipv6-unspecified-server": "[server]\naddr = \"[::]:8081\"\n",
 		"empty-addr":              "[probes]\naddr = \"\"\n",
 		"relative-db":             "[database]\npath = \"drifter.sqlite\"\n",

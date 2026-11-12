@@ -10,7 +10,7 @@ of TOML files.
 Compose uses host networking so strict Host/Origin checks see the same
 `127.0.0.1:8081` authority as the browser. There is deliberately no `ports`
 mapping: the example config binds only to `127.0.0.1`, and wildcard listening
-is not supported. Host networking gives the container direct access to the
+is not the default; a wildcard listener requires `server.allowed_hosts`. Host networking gives the container direct access to the
 Linux host network namespace; use it only on a trusted local host. Docker
 Desktop's host networking behavior differs and is not the target of this setup.
 
