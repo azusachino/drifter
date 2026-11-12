@@ -172,6 +172,18 @@ progress (`status` of `completed`, `reading` or `planned`, `progress_percent`,
 `reading_time_seconds`, `last_read_at`, `finished_at`), `is_custom` for `CB_...`
 uploads, and `matched_target` when a confirmed mapping exists.
 
+A run is the sequence of pages from a request with no `cursor` until a page
+with `has_more` false. Page 1 pins the run's instant and every page of the run
+reports that instant as `watermark`; the cursor carries it, together with the
+key of the last book served, so a book opened mid-run neither repeats nor
+shifts a page. A page ends at `limit` books or when its time budget (at most
+40 seconds, and half the operation's remaining time) is spent, whichever comes
+first, always serves at least one book while any remain, and then sets
+`has_more` and a `cursor`. A cursor without a pinned instant, such as the
+earlier `offset:` form, is refused as `400 invalid_cursor`. The page shape is
+published as `schemas/reading-snapshot-v1.schema.json` with a golden page at
+`schemas/testdata/reading-snapshot-v1.golden.json`.
+
 Facts the source does not report stay absent: `started_on` is always omitted
 because WeRead reports no true start instant or start day, and
 `reading_time_seconds`, `last_read_at` and `finished_at` are omitted when the
@@ -205,9 +217,11 @@ curl --fail-with-body \
 A book is a change when either the source reports a read instant at or after
 `since`, or its confirmed mapping was created or updated then — so a re-link
 is visible even when nothing was read. The response is the snapshot envelope,
-with `watermark` set to the latest observed change instant and never earlier
-than `generated_at`, plus only the changed books on that page. Send that
-`watermark` back as the next `since`.
+plus only the changed books on that page. Its `watermark` is the run's pinned
+instant: the first page's `generated_at`, or the latest observed change instant
+if that is later. Every page of the run repeats it. Send it back as the next
+`since` once the run's last page (`has_more` false) has been stored; a run that
+stops early must not move `since`.
 
 A watermark may trail by at most 14 days. An older or missing horizon is not
 answered with a partial delta:

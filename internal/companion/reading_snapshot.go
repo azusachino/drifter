@@ -80,6 +80,9 @@ type ReadingSnapshotOptions struct {
 	Limit         int
 	Cursor        string
 	Now           func() time.Time
+	// PageBudget bounds the time spent enriching one page; zero derives it
+	// from the context deadline.
+	PageBudget time.Duration
 }
 
 // readingAccounts is the account pair a snapshot reads, together with the
@@ -170,7 +173,7 @@ func ExportReadingSnapshot(ctx context.Context, dbPath string, source Source, op
 	if options.Now != nil {
 		now = options.Now
 	}
-	offset, err := decodeSnapshotCursor(options.Cursor)
+	after, err := decodeSnapshotCursor(options.Cursor)
 	if err != nil {
 		return nil, err
 	}
@@ -191,43 +194,29 @@ func ExportReadingSnapshot(ctx context.Context, dbPath string, source Source, op
 	if err != nil {
 		return nil, fmt.Errorf("reading snapshot could not read the source shelf")
 	}
-	books := orderSnapshotBooks(shelf.Books)
-	generatedAt := now().UTC()
-	snapshot := &ReadingSnapshot{
-		Version:        ReadingSnapshotVersion,
-		GeneratedAt:    generatedAt,
-		SourceIdentity: accounts.sourceIdentity,
-		TargetIdentity: accounts.targetIdentity,
-		Watermark:      generatedAt.Format(time.RFC3339),
-		Books:          []ReadingSnapshotBook{},
-	}
-	if offset >= len(books) {
-		return snapshot, nil
-	}
-	end := offset + limit
-	if end > len(books) {
-		end = len(books)
-	}
-	if end < len(books) {
-		snapshot.HasMore = true
-		snapshot.Cursor = encodeSnapshotCursor(end)
+	// Page 1 pins the run's instant; every later page repeats it from the cursor.
+	pinned := time.Unix(now().Unix(), 0).UTC()
+	if after != nil {
+		pinned = after.pinned
 	}
 	targets := make(map[string]Mapping, len(mappings))
 	for _, m := range mappings {
 		targets[m.BookID] = m
 	}
-	for _, row := range books[offset:end] {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		mapping, mapped := targets[row.ID]
-		book, err := enrichSnapshotBook(ctx, source, row, mapping, mapped)
-		if err != nil {
-			return nil, err
-		}
-		snapshot.Books = append(snapshot.Books, book)
+	books, cursor, err := servePage(ctx, source, orderSnapshotBooks(shelf.Books), targets, after, pinned, limit, pageBudget(ctx, options.PageBudget))
+	if err != nil {
+		return nil, err
 	}
-	return snapshot, nil
+	return &ReadingSnapshot{
+		Version:        ReadingSnapshotVersion,
+		GeneratedAt:    now().UTC(),
+		SourceIdentity: accounts.sourceIdentity,
+		TargetIdentity: accounts.targetIdentity,
+		Watermark:      pinned.Format(time.RFC3339),
+		HasMore:        cursor != "",
+		Cursor:         cursor,
+		Books:          books,
+	}, nil
 }
 
 // enrichSnapshotBook reads one shelf row and attaches the confirmed target when
@@ -334,10 +323,21 @@ func snapshotLastOpened(book ShelfBook) int64 {
 	return *book.LastOpened
 }
 
-const snapshotCursorPrefix = "offset:"
+// snapshotCursor is the position of one feed run: the instant the run pinned on
+// its first page, and the key of the last book already served. The next page
+// starts strictly after that key, so a book opened mid-run (which moves to the
+// front of the order) neither repeats nor shifts the page boundary.
+type snapshotCursor struct {
+	pinned     time.Time
+	lastOpened int64
+	bookID     string
+}
 
-func encodeSnapshotCursor(offset int) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(snapshotCursorPrefix + strconv.Itoa(offset)))
+const snapshotCursorPrefix = "run1:"
+
+func encodeSnapshotCursor(c snapshotCursor) string {
+	raw := fmt.Sprintf("%s%d:%d:%s", snapshotCursorPrefix, c.pinned.Unix(), c.lastOpened, c.bookID)
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
 // ValidateReadingSnapshotCursor reports whether a cursor was issued by this contract.
@@ -346,24 +346,94 @@ func ValidateReadingSnapshotCursor(raw string) error {
 	return err
 }
 
-func decodeSnapshotCursor(raw string) (int, error) {
+// decodeSnapshotCursor returns nil for an empty cursor (the first page of a
+// run). A cursor without a pinned instant, such as the former offset form, is
+// invalid.
+func decodeSnapshotCursor(raw string) (*snapshotCursor, error) {
 	if raw == "" {
-		return 0, nil
+		return nil, nil
 	}
-	if len(raw) > 128 {
-		return 0, ErrInvalidSnapshotCursor
+	if len(raw) > 256 {
+		return nil, ErrInvalidSnapshotCursor
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
-		return 0, ErrInvalidSnapshotCursor
+		return nil, ErrInvalidSnapshotCursor
 	}
-	suffix, ok := strings.CutPrefix(string(decoded), snapshotCursorPrefix)
+	rest, ok := strings.CutPrefix(string(decoded), snapshotCursorPrefix)
 	if !ok {
-		return 0, ErrInvalidSnapshotCursor
+		return nil, ErrInvalidSnapshotCursor
 	}
-	offset, err := strconv.Atoi(suffix)
-	if err != nil || offset < 0 {
-		return 0, ErrInvalidSnapshotCursor
+	parts := strings.SplitN(rest, ":", 3)
+	if len(parts) != 3 || parts[2] == "" {
+		return nil, ErrInvalidSnapshotCursor
 	}
-	return offset, nil
+	pinned, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || pinned <= 0 {
+		return nil, ErrInvalidSnapshotCursor
+	}
+	lastOpened, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || lastOpened < 0 {
+		return nil, ErrInvalidSnapshotCursor
+	}
+	return &snapshotCursor{pinned: time.Unix(pinned, 0).UTC(), lastOpened: lastOpened, bookID: parts[2]}, nil
+}
+
+// DefaultReadingPageBudget caps the time one page spends enriching books. It
+// sits well under the server's operation timeout and a consumer's client timeout.
+const DefaultReadingPageBudget = 40 * time.Second
+
+// pageBudget returns the enrichment time budget for one page: the explicit
+// option, else half the context's remaining time, never above the default.
+func pageBudget(ctx context.Context, option time.Duration) time.Duration {
+	if option > 0 {
+		return option
+	}
+	budget := DefaultReadingPageBudget
+	if deadline, ok := ctx.Deadline(); ok {
+		if half := time.Until(deadline) / 2; half < budget {
+			budget = half
+		}
+	}
+	return budget
+}
+
+// servePage enriches the books of one page. It starts strictly after the
+// cursor's key, stops at limit books or when the budget is spent (always
+// serving at least one), and returns the cursor of the next page when books
+// remain.
+func servePage(ctx context.Context, source Source, ordered []ShelfBook, targets map[string]Mapping, after *snapshotCursor, pinned time.Time, limit int, budget time.Duration) ([]ReadingSnapshotBook, string, error) {
+	start := time.Now()
+	remaining := ordered
+	if after != nil {
+		for len(remaining) > 0 && !snapshotBefore(after.lastOpened, after.bookID, remaining[0]) {
+			remaining = remaining[1:]
+		}
+	}
+	books := []ReadingSnapshotBook{}
+	for _, row := range remaining {
+		if len(books) >= limit || (len(books) > 0 && time.Since(start) >= budget) {
+			last := remaining[len(books)-1]
+			return books, encodeSnapshotCursor(snapshotCursor{pinned: pinned, lastOpened: snapshotLastOpened(last), bookID: last.ID}), nil
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
+		mapping, mapped := targets[row.ID]
+		book, err := enrichSnapshotBook(ctx, source, row, mapping, mapped)
+		if err != nil {
+			return nil, "", err
+		}
+		books = append(books, book)
+	}
+	return books, "", nil
+}
+
+// snapshotBefore reports whether the key (lastOpened, id) orders before book.
+func snapshotBefore(lastOpened int64, id string, book ShelfBook) bool {
+	opened := snapshotLastOpened(book)
+	if opened != lastOpened {
+		return opened < lastOpened
+	}
+	return book.ID > id
 }

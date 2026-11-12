@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/azusachino/drifter/blob/main/schemas/reading-snapshot-v1.schema.json",
+  "title": "Drifter reading snapshot page v1",
+  "description": "One page of /api/v1/reading/snapshot or /api/v1/reading/changes. All pages of one run carry the same watermark.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "generated_at", "source_identity", "watermark", "has_more", "books"],
+  "properties": {
+    "version": {"const": "1.0"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "source_identity": {"type": "string"},
+    "target_identity": {"type": "string"},
+    "watermark": {"type": "string", "format": "date-time"},
+    "has_more": {"type": "boolean"},
+    "cursor": {"type": "string", "minLength": 1, "maxLength": 256},
+    "books": {"type": "array", "items": {"$ref": "#/$defs/book"}}
+  },
+  "if": {"properties": {"has_more": {"const": true}}},
+  "then": {"required": ["cursor"]},
+  "$defs": {
+    "book": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_provider", "source_book_id", "title", "author", "status", "progress_percent", "is_custom"],
+      "properties": {
+        "source_provider": {"type": "string", "minLength": 1},
+        "source_book_id": {"type": "string", "minLength": 1},
+        "title": {"type": "string"},
+        "author": {"type": "string"},
+        "translator": {"type": "string"},
+        "publisher": {"type": "string"},
+        "isbn": {"type": "string"},
+        "cover_url": {"type": "string"},
+        "reader_url": {"type": "string"},
+        "status": {"enum": ["completed", "reading", "planned"]},
+        "progress_percent": {"type": "integer", "minimum": 0, "maximum": 100},
+        "reading_time_seconds": {"type": "integer", "minimum": 0},
+        "last_read_at": {"type": "string", "format": "date-time"},
+        "finished_at": {"type": "string", "format": "date-time"},
+        "started_on": {"type": "string"},
+        "is_custom": {"type": "boolean"},
+        "matched_target": {"$ref": "#/$defs/matched_target"}
+      }
+    },
+    "matched_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_provider", "work_id"],
+      "properties": {
+        "target_provider": {"type": "string", "minLength": 1},
+        "work_id": {"type": "integer"},
+        "edition_id": {"type": "integer"},
+        "original_title": {"type": "string"},
+        "original_author": {"type": "string"}
+      }
+    }
+  }
+}

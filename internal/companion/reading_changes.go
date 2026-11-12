@@ -31,6 +31,9 @@ type ReadingChangesOptions struct {
 	Limit  int
 	Cursor string
 	Now    func() time.Time
+	// PageBudget bounds the time spent enriching one page; zero derives it
+	// from the context deadline.
+	PageBudget time.Duration
 }
 
 // ExportReadingChanges emits one page of shelf reading facts that changed at or
@@ -61,7 +64,7 @@ func ExportReadingChanges(ctx context.Context, dbPath string, source Source, opt
 	if limit > MaxReadingChangesLimit {
 		limit = MaxReadingChangesLimit
 	}
-	offset, err := decodeSnapshotCursor(options.Cursor)
+	after, err := decodeSnapshotCursor(options.Cursor)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +90,9 @@ func ExportReadingChanges(ctx context.Context, dbPath string, source Source, opt
 		targets[mapping.BookID] = mapping
 	}
 	changed := make([]ShelfBook, 0, len(shelf.Books))
-	watermark := current
+	// Page 1 pins the run's watermark: never earlier than now, and not before
+	// any change it reports. Later pages repeat it from the cursor.
+	watermark := time.Unix(current.Unix(), 0).UTC()
 	for _, row := range orderSnapshotBooks(shelf.Books) {
 		mapping, mapped := targets[row.ID]
 		if !bookChangedSince(row, mapping, mapped, since) {
@@ -98,37 +103,23 @@ func ExportReadingChanges(ctx context.Context, dbPath string, source Source, opt
 			watermark = observed
 		}
 	}
-	snapshot := &ReadingSnapshot{
+	if after != nil {
+		watermark = after.pinned
+	}
+	books, cursor, err := servePage(ctx, source, changed, targets, after, watermark, limit, pageBudget(ctx, options.PageBudget))
+	if err != nil {
+		return nil, err
+	}
+	return &ReadingSnapshot{
 		Version:        ReadingSnapshotVersion,
 		GeneratedAt:    current,
 		SourceIdentity: accounts.sourceIdentity,
 		TargetIdentity: accounts.targetIdentity,
 		Watermark:      watermark.Format(time.RFC3339),
-		Books:          []ReadingSnapshotBook{},
-	}
-	if offset >= len(changed) {
-		return snapshot, nil
-	}
-	end := offset + limit
-	if end > len(changed) {
-		end = len(changed)
-	}
-	if end < len(changed) {
-		snapshot.HasMore = true
-		snapshot.Cursor = encodeSnapshotCursor(end)
-	}
-	for _, row := range changed[offset:end] {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		mapping, mapped := targets[row.ID]
-		book, err := enrichSnapshotBook(ctx, source, row, mapping, mapped)
-		if err != nil {
-			return nil, err
-		}
-		snapshot.Books = append(snapshot.Books, book)
-	}
-	return snapshot, nil
+		HasMore:        cursor != "",
+		Cursor:         cursor,
+		Books:          books,
+	}, nil
 }
 
 // bookChangedSince reports whether either observed change signal lands at or
