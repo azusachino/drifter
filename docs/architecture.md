@@ -161,8 +161,8 @@ To guard against network drops and duplicate remote writes:
 The web interface provided by `drifter-server` is designed with minimal attack
 surface:
 
-- **Loopback Default**: Listens on `127.0.0.1:8081` by default. Wildcard
-  bindings are rejected.
+- **Loopback Default**: Listens on `127.0.0.1:8081` by default. A wildcard
+  binding is accepted only with an explicit `server.allowed_hosts`.
 - **Host & Origin Validation**: Strict Host header validation and Origin
   checking to prevent DNS rebinding and cross-origin attacks.
 - **Zero Client Scripts**: All views are server-rendered with native HTML forms;

@@ -188,8 +188,9 @@ interface and mapping listing do not call providers. Requests are bounded;
 Host is checked against the configured listener, and cross-site browser
 Origin/Fetch Metadata requests are rejected. No CORS is enabled. Keep the
 listener on loopback unless an explicit configuration opts into another
-concrete host; wildcard listeners
-are rejected because they cannot define the Host allowlist. Exposing
+host. A wildcard listener (for example `0.0.0.0`) is accepted only when
+`server.allowed_hosts` is set, because the allowlist is then what Host
+validation checks; without an allowlist it is rejected. Exposing
 unauthenticated HTTP beyond the trusted local host is not an authenticated
 deployment model.
 The server takes exclusive ownership of its SQLite state before initialization
