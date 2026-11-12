@@ -77,6 +77,8 @@ func TestCLIPendingDefaultWindowAndAccountScope(t *testing.T) {
 }
 
 func TestCLIPendingAfterCursorContinuesAndPreservesIncompleteExit(t *testing.T) {
+	// No --db is passed, so the store resolves from XDG_STATE_HOME; keep it in the test temp dir.
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	public := 0
 	now := time.Now().Truncate(time.Second)
 	shelf := &companion.ShelfResult{Complete: true}

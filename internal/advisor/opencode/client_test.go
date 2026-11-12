@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -240,6 +241,10 @@ func TestResolveOriginalWorkUpstreamError(t *testing.T) {
 }
 
 func TestLoadConfigPrecedence(t *testing.T) {
+	// Keep the config file lookup off the machine: DRIFTER_CONFIG points at a
+	// missing file (Load treats that as defaults) and XDG_CONFIG_HOME is empty.
+	t.Setenv("DRIFTER_CONFIG", filepath.Join(t.TempDir(), "absent.toml"))
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Run("defaults", func(t *testing.T) {
 		for _, key := range []string{"DRIFTER_ADVISOR_URL", "MAGPIE_BASE_URL", "MAGPIE_URL", "OPENCODE_BASE_URL", "MAGPIE_GATEWAY_KEY", "OPENCODE_API_KEY", "DRIFTER_ADVISOR_KEY", "DRIFTER_ADVISOR_MODEL", DefaultTimeoutEnv} {
 			t.Setenv(key, "")
