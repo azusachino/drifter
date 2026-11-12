@@ -94,7 +94,20 @@ file = "/tmp/drifter-matching-catalog.json"
 enabled = true
 provider = "default"  # default (Douban + OpenLibrary), douban, openlibrary, custom
 # url = "https://example.com/books/{isbn}"  # required when provider = "custom"
+
+# OpenCode LLM advisor settings (OpenAI-compatible completions gateway).
+# API keys belong strictly in the environment (MAGPIE_GATEWAY_KEY, OPENCODE_API_KEY, DRIFTER_ADVISOR_KEY), never here.
+[advisor]
+# base_url = "https://ai-gateway.example.org/v1"  # default: https://api.openai.com/v1
+# model = "opencode-go/beam-free"                 # default: opencode-go/beam-free
+# timeout = "30s"                                 # default: 30s
 ```
+
+Settings files are discovered in the following order:
+1. Explicit `--config <path>` flag or `DRIFTER_CONFIG` environment variable
+2. `config.toml` in the current working directory
+3. `$XDG_CONFIG_HOME/drifter/config.toml` (or `~/.config/drifter/config.toml`)
+4. Built-in defaults when no configuration file is present
 
 Credential-like keys (`api_key`, `token`, `secret`, `password`, `credential`)
 are rejected outright; unknown keys fail validation so typos cannot silently

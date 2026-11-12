@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/azusachino/drifter/internal/advisor"
 )
 
 // ApplyTarget abstracts target provider capabilities for status mutation and verification.
@@ -21,27 +23,30 @@ type ApplySyncOptions struct {
 	AdoptSource       bool
 	AdoptTarget       bool
 	Now               time.Time
+	Advisor           advisor.Advisor
+	WithAdvisor       bool
 }
 
 // ApplyResult describes the outcome of applying status synchronization.
 type ApplyResult struct {
-	Action           string            `json:"action"` // "applied", "no-op", "conflict", "hold", "uncertain", "failed"
-	Message          string            `json:"message"`
-	IntentID         int64             `json:"intent_id,omitempty"`
-	ReceiptID        int64             `json:"receipt_id,omitempty"`
-	Provider         string            `json:"provider"`
-	SourceAccount    string            `json:"source_account"`
-	BookID           string            `json:"book_id"`
-	TargetAccount    string            `json:"target_account"`
-	WorkID           int64             `json:"work_id"`
-	EditionID        int64             `json:"edition_id,omitempty"`
-	PriorStatusID    int               `json:"prior_status_id,omitempty"`
-	PriorStatus      string            `json:"prior_status,omitempty"`
-	AppliedStatusID  int               `json:"applied_status_id,omitempty"`
-	AppliedStatus    string            `json:"applied_status,omitempty"`
-	ConflictEvidence *ConflictEvidence `json:"conflict_evidence,omitempty"`
-	Reason           string            `json:"reason,omitempty"`
-	Reconciled       bool              `json:"reconciled,omitempty"`
+	Action                string                               `json:"action"` // "applied", "no-op", "conflict", "hold", "uncertain", "failed"
+	Message               string                               `json:"message"`
+	IntentID              int64                                `json:"intent_id,omitempty"`
+	ReceiptID             int64                                `json:"receipt_id,omitempty"`
+	Provider              string                               `json:"provider"`
+	SourceAccount         string                               `json:"source_account"`
+	BookID                string                               `json:"book_id"`
+	TargetAccount         string                               `json:"target_account"`
+	WorkID                int64                                `json:"work_id"`
+	EditionID             int64                                `json:"edition_id,omitempty"`
+	PriorStatusID         int                                  `json:"prior_status_id,omitempty"`
+	PriorStatus           string                               `json:"prior_status,omitempty"`
+	AppliedStatusID       int                                  `json:"applied_status_id,omitempty"`
+	AppliedStatus         string                               `json:"applied_status,omitempty"`
+	ConflictEvidence      *ConflictEvidence                    `json:"conflict_evidence,omitempty"`
+	AdvisorRecommendation *advisor.ConflictExplanationResponse `json:"advisor_recommendation,omitempty"`
+	Reason                string                               `json:"reason,omitempty"`
+	Reconciled            bool                                 `json:"reconciled,omitempty"`
 }
 
 // ApplySync safely applies an evaluated sync proposal to the target provider.
@@ -134,22 +139,57 @@ func ApplySync(
 		AdoptSource:       opts.AdoptSource,
 		AdoptTarget:       opts.AdoptTarget,
 		Now:               now,
+		Advisor:           opts.Advisor,
 	})
 	if err != nil {
 		return ApplyResult{}, err
 	}
 
+	if opts.WithAdvisor && proposal.AdvisorRecommendation != nil && !opts.AdoptSource && !opts.AdoptTarget {
+		switch proposal.AdvisorRecommendation.RecommendedAction {
+		case "adopt_source":
+			opts.AdoptSource = true
+			proposal, err = PreviewSync(ctx, store, source, target, provider, sourceAccount, bookID, targetAccount, PreviewSyncOptions{
+				PolicyVersion:     opts.PolicyVersion,
+				AllowPrivateSync:  opts.AllowPrivateSync,
+				DeclaredSourceVID: opts.DeclaredSourceVID,
+				AdoptSource:       true,
+				AdoptTarget:       false,
+				Now:               now,
+				Advisor:           opts.Advisor,
+			})
+			if err != nil {
+				return ApplyResult{}, err
+			}
+		case "adopt_target":
+			opts.AdoptTarget = true
+			proposal, err = PreviewSync(ctx, store, source, target, provider, sourceAccount, bookID, targetAccount, PreviewSyncOptions{
+				PolicyVersion:     opts.PolicyVersion,
+				AllowPrivateSync:  opts.AllowPrivateSync,
+				DeclaredSourceVID: opts.DeclaredSourceVID,
+				AdoptSource:       false,
+				AdoptTarget:       true,
+				Now:               now,
+				Advisor:           opts.Advisor,
+			})
+			if err != nil {
+				return ApplyResult{}, err
+			}
+		}
+	}
+
 	baseResult := ApplyResult{
-		Provider:      provider,
-		SourceAccount: sourceAccount,
-		BookID:        bookID,
-		TargetAccount: targetAccount,
-		WorkID:        proposal.WorkID,
-		EditionID:     proposal.EditionID,
-		PriorStatusID: proposal.CurrentStatusID,
-		PriorStatus:   proposal.CurrentStatus,
-		Message:       proposal.Message,
-		Reason:        proposal.Reason,
+		Provider:              provider,
+		SourceAccount:         sourceAccount,
+		BookID:                bookID,
+		TargetAccount:         targetAccount,
+		WorkID:                proposal.WorkID,
+		EditionID:             proposal.EditionID,
+		PriorStatusID:         proposal.CurrentStatusID,
+		PriorStatus:           proposal.CurrentStatus,
+		Message:               proposal.Message,
+		Reason:                proposal.Reason,
+		AdvisorRecommendation: proposal.AdvisorRecommendation,
 	}
 
 	// 3. Handle non-mutating proposals

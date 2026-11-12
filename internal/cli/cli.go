@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/azusachino/drifter/internal/advisor"
 	"github.com/azusachino/drifter/internal/catalog"
 	"github.com/azusachino/drifter/internal/companion"
 	"github.com/azusachino/drifter/internal/config"
@@ -26,6 +27,7 @@ type clients struct {
 	previewSource func() (companion.PreviewSource, error)
 	previewTarget func() (companion.PreviewTarget, error)
 	applyTarget   func() (companion.ApplyTarget, error)
+	advisor       func(store *companion.Store) (advisor.Advisor, error)
 }
 
 type cliApp struct {
@@ -48,6 +50,13 @@ func defaultDB() (string, error) {
 		return "", fmt.Errorf("XDG_STATE_HOME must be absolute; use --db")
 	}
 	return filepath.Join(base, "drifter", "mappings.sqlite"), nil
+}
+
+func (app *cliApp) getAdvisor(store *companion.Store) (advisor.Advisor, error) {
+	if app.providers.advisor != nil {
+		return app.providers.advisor(store)
+	}
+	return nil, nil
 }
 
 func run(ctx context.Context, args []string, out, errOut io.Writer, providers clients) error {
@@ -236,12 +245,13 @@ func (app *cliApp) inspectCommand() *cobra.Command {
 }
 
 func (app *cliApp) matchCommand() *cobra.Command {
-	var bookID, query, configPath string
+	var bookID, query, configPath, dbPath string
 	var isbnLookup bool
 	command := &cobra.Command{Use: "match", Short: "Suggest Hardcover matches for a WeRead book"}
 	command.Flags().StringVar(&bookID, "book-id", "", "WeRead book ID (required)")
 	command.Flags().StringVar(&query, "query", "", "original-language or alternate title search")
-	command.Flags().StringVar(&configPath, "config", "config.toml", "settings-only TOML path (missing file uses defaults; never credentials)")
+	command.Flags().StringVar(&configPath, "config", config.DefaultPath(), "settings-only TOML path (missing file uses defaults; never credentials)")
+	command.Flags().StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
 	command.Flags().BoolVar(&isbnLookup, "isbn-lookup", false, "lookup authoritative metadata for the book's ISBN")
 	markRequiredFlags(command, "book-id")
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
@@ -272,9 +282,18 @@ func (app *cliApp) matchCommand() *cobra.Command {
 			}
 		}
 		isbnProvider := isbn.NewProviderFromConfig(isbnCfg)
+		var store *companion.Store
+		if p, err := decisionPath(dbPath); err == nil {
+			if st, err := companion.OpenStore(p); err == nil {
+				store = st
+				defer store.Close()
+			}
+		}
+		adv, _ := app.getAdvisor(store)
 		report, err := companion.MatchWithOptions(cmd.Context(), reader, hardcover, bookID, query, companion.MatchOptions{
 			CatalogLoader: loader,
 			ISBNProvider:  isbnProvider,
+			Advisor:       adv,
 		})
 		if err != nil {
 			return err

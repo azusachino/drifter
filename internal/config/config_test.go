@@ -216,3 +216,90 @@ url = "ftp://isbn.example.com/{isbn}"
 		})
 	}
 }
+
+func TestLoadAdvisorConfiguration(t *testing.T) {
+	t.Run("default-values", func(t *testing.T) {
+		cfg := Defaults()
+		if cfg.Advisor.BaseURL != "" || cfg.Advisor.Model != "" || cfg.Advisor.Timeout != "" {
+			t.Fatalf("unexpected default advisor config: %+v", cfg.Advisor)
+		}
+	})
+
+	t.Run("valid-advisor-config", func(t *testing.T) {
+		content := `[advisor]
+base_url = "https://magpie.example.com/v1"
+model = "opencode-go/beam-free"
+timeout = "45s"
+`
+		cfg, err := Load(write(t, content))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.Advisor.BaseURL != "https://magpie.example.com/v1" || cfg.Advisor.Model != "opencode-go/beam-free" || cfg.Advisor.Timeout != "45s" {
+			t.Fatalf("unexpected advisor config: %+v", cfg.Advisor)
+		}
+	})
+}
+
+func TestLoadRejectsInvalidAdvisorConfiguration(t *testing.T) {
+	cases := map[string]string{
+		"invalid-url": `[advisor]
+base_url = "not-a-valid-url"
+`,
+		"ftp-scheme": `[advisor]
+base_url = "ftp://magpie.example.com/v1"
+`,
+		"invalid-timeout": `[advisor]
+timeout = "forever"
+`,
+		"negative-timeout": `[advisor]
+timeout = "-5s"
+`,
+		"api-key-rejected": `[advisor]
+api_key = "secret-token"
+`,
+	}
+
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(write(t, content)); err == nil {
+				t.Fatalf("invalid advisor config accepted: %s", name)
+			}
+		})
+	}
+}
+
+func TestDefaultPath(t *testing.T) {
+	t.Run("env-override", func(t *testing.T) {
+		custom := filepath.Join(t.TempDir(), "custom.toml")
+		t.Setenv("DRIFTER_CONFIG", custom)
+		if got := DefaultPath(); got != custom {
+			t.Fatalf("DefaultPath() = %q, want %q", got, custom)
+		}
+	})
+
+	t.Run("xdg-config-home", func(t *testing.T) {
+		t.Setenv("DRIFTER_CONFIG", "")
+		tmp := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", tmp)
+		drifterDir := filepath.Join(tmp, "drifter")
+		if err := os.MkdirAll(drifterDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		cfgPath := filepath.Join(drifterDir, "config.toml")
+		if err := os.WriteFile(cfgPath, []byte("[log]\nlevel = \"info\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// If config.toml is not in cwd, it finds xdg path.
+		origDir, _ := os.Getwd()
+		emptyDir := t.TempDir()
+		if err := os.Chdir(emptyDir); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = os.Chdir(origDir) }()
+
+		if got := DefaultPath(); got != cfgPath {
+			t.Fatalf("DefaultPath() = %q, want %q", got, cfgPath)
+		}
+	})
+}

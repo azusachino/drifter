@@ -332,6 +332,59 @@ func TestLoadConfigPrecedence(t *testing.T) {
 			t.Fatal("expected invalid timeout error")
 		}
 	})
+
+	t.Run("settings fallback", func(t *testing.T) {
+		for _, key := range []string{"DRIFTER_ADVISOR_URL", "MAGPIE_BASE_URL", "MAGPIE_URL", "OPENCODE_BASE_URL", "DRIFTER_ADVISOR_MODEL", DefaultTimeoutEnv} {
+			t.Setenv(key, "")
+		}
+		t.Setenv("MAGPIE_GATEWAY_KEY", "k")
+		s := Settings{
+			BaseURL: "https://magpie.custom.org/v1",
+			Model:   "custom/local-model",
+			Timeout: 40 * time.Second,
+		}
+		cfg, err := LoadConfigWithSettings(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.BaseURL != "https://magpie.custom.org/v1" {
+			t.Errorf("baseURL = %q, want custom settings URL", cfg.BaseURL)
+		}
+		if cfg.Model != "custom/local-model" {
+			t.Errorf("model = %q, want custom settings model", cfg.Model)
+		}
+		if cfg.Timeout != 40*time.Second {
+			t.Errorf("timeout = %v, want 40s", cfg.Timeout)
+		}
+	})
+
+	t.Run("load config from file path", func(t *testing.T) {
+		for _, key := range []string{"DRIFTER_ADVISOR_URL", "MAGPIE_BASE_URL", "MAGPIE_URL", "OPENCODE_BASE_URL", "DRIFTER_ADVISOR_MODEL", DefaultTimeoutEnv} {
+			t.Setenv(key, "")
+		}
+		t.Setenv("MAGPIE_GATEWAY_KEY", "k")
+		cfgFile := t.TempDir() + "/config.toml"
+		if err := os.WriteFile(cfgFile, []byte(`[advisor]
+base_url = "https://cfg.example.com/v1"
+model = "opencode-go/kimi-k3.1-pro"
+timeout = "42s"
+`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfigPath(cfgFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.BaseURL != "https://cfg.example.com/v1" {
+			t.Errorf("baseURL = %q, want cfg file URL", cfg.BaseURL)
+		}
+		if cfg.Model != "opencode-go/kimi-k3.1-pro" {
+			t.Errorf("model = %q, want cfg file model", cfg.Model)
+		}
+		if cfg.Timeout != 42*time.Second {
+			t.Errorf("timeout = %v, want 42s", cfg.Timeout)
+		}
+	})
 }
 
 func TestClientImplementsAdvisor(t *testing.T) {

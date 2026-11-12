@@ -21,7 +21,7 @@ func (app *cliApp) isbnCommand() *cobra.Command {
 	flags.StringVar(&isbnFlag, "isbn", "", "ISBN to query")
 	flags.StringVar(&providerName, "provider", "", "Override ISBN provider: default, douban, openlibrary, custom")
 	flags.StringVar(&customURL, "url", "", "Custom provider URL template containing {isbn}")
-	flags.StringVar(&configPath, "config", "config.toml", "settings-only TOML path (missing file uses defaults; never credentials)")
+	flags.StringVar(&configPath, "config", config.DefaultPath(), "settings-only TOML path (missing file uses defaults; never credentials)")
 
 	return app.command(command, func(cmd *cobra.Command, args []string) error {
 		rawISBN := isbnFlag

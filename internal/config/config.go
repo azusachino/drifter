@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/azusachino/drifter/internal/catalog"
@@ -35,6 +36,15 @@ type ISBNConfig struct {
 	Enabled  bool   `toml:"enabled"`
 	Provider string `toml:"provider"`
 	URL      string `toml:"url"`
+}
+
+// AdvisorConfig configures the optional OpenCode LLM advisor.
+// Credentials (API keys) never belong in the configuration file;
+// they come strictly from the environment.
+type AdvisorConfig struct {
+	BaseURL string `toml:"base_url"`
+	Model   string `toml:"model"`
+	Timeout string `toml:"timeout"`
 }
 
 // Config is the complete validated settings file. Zero values become
@@ -59,6 +69,7 @@ type Config struct {
 		Catalogs []catalog.Subscription `toml:"catalogs"`
 		ISBN     ISBNConfig             `toml:"isbn"`
 	} `toml:"matching"`
+	Advisor AdvisorConfig `toml:"advisor"`
 }
 
 // Defaults returns the configuration used when no file is present.
@@ -182,5 +193,46 @@ func (c Config) validate() error {
 			return fmt.Errorf("matching.isbn.url must be a valid http or https URL")
 		}
 	}
+	if strings.TrimSpace(c.Advisor.BaseURL) != "" {
+		u, err := url.Parse(strings.TrimSpace(c.Advisor.BaseURL))
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("advisor.base_url must be a valid http or https URL")
+		}
+	}
+	if strings.TrimSpace(c.Advisor.Timeout) != "" {
+		d, err := time.ParseDuration(strings.TrimSpace(c.Advisor.Timeout))
+		if err != nil || d <= 0 {
+			return fmt.Errorf("advisor.timeout must be a positive duration (e.g. 30s)")
+		}
+	}
 	return nil
+}
+
+// DefaultPath returns the resolved path to Drifter's settings file.
+//
+// Resolution order:
+//  1. DRIFTER_CONFIG environment variable if set and non-empty.
+//  2. "config.toml" in the current working directory if it exists.
+//  3. $XDG_CONFIG_HOME/drifter/config.toml (or ~/.config/drifter/config.toml) if it exists.
+//  4. Fallback to "config.toml" (which Load treats as Defaults when missing).
+func DefaultPath() string {
+	if custom := os.Getenv("DRIFTER_CONFIG"); strings.TrimSpace(custom) != "" {
+		return strings.TrimSpace(custom)
+	}
+	if _, err := os.Stat("config.toml"); err == nil {
+		return "config.toml"
+	}
+	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			base = filepath.Join(home, ".config")
+		}
+	}
+	if base != "" {
+		xdgPath := filepath.Join(base, "drifter", "config.toml")
+		if _, err := os.Stat(xdgPath); err == nil {
+			return xdgPath
+		}
+	}
+	return "config.toml"
 }

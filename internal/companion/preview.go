@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/azusachino/drifter/internal/advisor"
 )
 
 // ProposalAction represents the evaluated dry-run action for a mapping.
@@ -164,28 +166,29 @@ type ConflictEvidence struct {
 
 // SyncProposal is the read-only output of status evaluation.
 type SyncProposal struct {
-	Action            ProposalAction    `json:"action"`
-	Reason            string            `json:"reason"`
-	Message           string            `json:"message"`
-	PolicyVersion     string            `json:"policy_version"`
-	Provider          string            `json:"provider"`
-	SourceAccount     string            `json:"source_account"`
-	SourceFingerprint string            `json:"source_fingerprint"`
-	BookID            string            `json:"book_id"`
-	SourceTitle       string            `json:"source_title,omitempty"`
-	SourceStatus      string            `json:"source_status"`
-	TargetAccount     string            `json:"target_account"`
-	TargetFingerprint string            `json:"target_fingerprint"`
-	WorkID            int64             `json:"work_id"`
-	EditionID         int64             `json:"edition_id,omitempty"`
-	CurrentStatusID   int               `json:"current_status_id,omitempty"`
-	CurrentStatus     string            `json:"current_status,omitempty"`
-	ProposedStatusID  int               `json:"proposed_status_id,omitempty"`
-	ProposedStatus    string            `json:"proposed_status,omitempty"`
-	PrivacySettingID  int               `json:"privacy_setting_id,omitempty"`
-	LastReadDate      *string           `json:"last_read_date,omitempty"`
-	AuthorityStatus   string            `json:"authority_status"`
-	ConflictEvidence  *ConflictEvidence `json:"conflict_evidence,omitempty"`
+	Action                ProposalAction                       `json:"action"`
+	Reason                string                               `json:"reason"`
+	Message               string                               `json:"message"`
+	PolicyVersion         string                               `json:"policy_version"`
+	Provider              string                               `json:"provider"`
+	SourceAccount         string                               `json:"source_account"`
+	SourceFingerprint     string                               `json:"source_fingerprint"`
+	BookID                string                               `json:"book_id"`
+	SourceTitle           string                               `json:"source_title,omitempty"`
+	SourceStatus          string                               `json:"source_status"`
+	TargetAccount         string                               `json:"target_account"`
+	TargetFingerprint     string                               `json:"target_fingerprint"`
+	WorkID                int64                                `json:"work_id"`
+	EditionID             int64                                `json:"edition_id,omitempty"`
+	CurrentStatusID       int                                  `json:"current_status_id,omitempty"`
+	CurrentStatus         string                               `json:"current_status,omitempty"`
+	ProposedStatusID      int                                  `json:"proposed_status_id,omitempty"`
+	ProposedStatus        string                               `json:"proposed_status,omitempty"`
+	PrivacySettingID      int                                  `json:"privacy_setting_id,omitempty"`
+	LastReadDate          *string                              `json:"last_read_date,omitempty"`
+	AuthorityStatus       string                               `json:"authority_status"`
+	ConflictEvidence      *ConflictEvidence                    `json:"conflict_evidence,omitempty"`
+	AdvisorRecommendation *advisor.ConflictExplanationResponse `json:"advisor_recommendation,omitempty"`
 }
 
 // StatusEvaluationParams bundles the complete observation and state inputs for three-way evaluation.
@@ -520,6 +523,7 @@ type PreviewSyncOptions struct {
 	AdoptSource       bool
 	AdoptTarget       bool
 	Now               time.Time
+	Advisor           advisor.Advisor
 }
 
 // PreviewSync orchestrates read-only three-way status evaluation for a mapped book.
@@ -620,5 +624,25 @@ func PreviewSync(
 		Now:                  now,
 	}
 
-	return EvaluateStatus(params), nil
+	prop := EvaluateStatus(params)
+	if opts.Advisor != nil && prop.ConflictEvidence != nil {
+		var baselineStr string
+		if prop.ConflictEvidence.Baseline != nil {
+			baselineStr = HardcoverStatusName(prop.ConflictEvidence.Baseline.TargetStatusID)
+		}
+		advReq := advisor.ConflictExplanationRequest{
+			SourceTitle:    prop.SourceTitle,
+			SourceAuthor:   book.Author,
+			SourceStatus:   prop.SourceStatus,
+			TargetStatus:   prop.CurrentStatus,
+			BaselineStatus: baselineStr,
+			Reason:         prop.Reason,
+			Message:        prop.Message,
+			ObservedAt:     now,
+		}
+		if advResp, err := opts.Advisor.ExplainConflict(ctx, advReq); err == nil {
+			prop.AdvisorRecommendation = &advResp
+		}
+	}
+	return prop, nil
 }
