@@ -109,4 +109,39 @@ func TestApplySyncWithAdvisorAutoResolvesAdoptSource(t *testing.T) {
 	if len(tgt.mutations) != 1 || tgt.mutations[0].StatusID != HardcoverStatusRead {
 		t.Fatalf("expected 1 mutation with status Read, got %+v", tgt.mutations)
 	}
+	if res.AdvisorAdopted != advisor.ActionAdoptSource {
+		t.Fatalf("apply result must record the advisor-driven adoption, got %q", res.AdvisorAdopted)
+	}
+}
+
+func TestApplySyncKeepSeparateIsNotAnAdoption(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	store, _ := setupTestStoreWithMapping(t, Mapping{
+		Provider: "weread", SourceAccount: "mine", BookID: "123456", TargetAccount: "default", WorkID: 777, EditionID: 888,
+	})
+	defer store.Close()
+
+	src := &mockPreviewSource{
+		book:        Book{ID: "123456", Title: "Conflict Book", Author: "Author A"},
+		progress:    Progress{Status: "read", FinishedAt: now.Unix()},
+		fingerprint: "weread:mine",
+	}
+	tgt := &mockApplyTarget{
+		status:      &UserBookStatus{ID: 1, BookID: 777, StatusID: HardcoverStatusCurrentlyReading},
+		fingerprint: "hardcover:default",
+	}
+	adv := &mockAdvisor{
+		explainFunc: func(ctx context.Context, req advisor.ConflictExplanationRequest) (advisor.ConflictExplanationResponse, error) {
+			return advisor.ConflictExplanationResponse{RecommendedAction: advisor.ActionKeepSeparate}, nil
+		},
+	}
+
+	res, err := ApplySync(ctx, store, src, tgt, "weread", "mine", "123456", "default", ApplySyncOptions{Advisor: adv, WithAdvisor: true, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Action == "applied" || res.AdvisorAdopted != "" || len(tgt.mutations) != 0 {
+		t.Fatalf("keep_separate must not adopt or write: %+v, mutations %+v", res, tgt.mutations)
+	}
 }

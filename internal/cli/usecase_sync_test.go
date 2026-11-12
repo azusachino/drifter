@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/azusachino/drifter/internal/advisor"
+	"github.com/azusachino/drifter/internal/advisor/opencode"
 	"github.com/azusachino/drifter/internal/companion"
 )
 
@@ -512,5 +515,45 @@ func TestUseCaseCompanionNeverCallsIroha(t *testing.T) {
 
 	if receipt.TargetStatusID != companion.HardcoverStatusCurrentlyReading {
 		t.Fatalf("unexpected receipt status: %d", receipt.TargetStatusID)
+	}
+}
+
+// --with-advisor with no usable advisor is a failure; without the flag the same
+// state stays a silent no-op.
+func TestWithAdvisorFailsWhenAdvisorUnavailable(t *testing.T) {
+	notConfigured := func(*companion.Store) (advisor.Advisor, error) { return nil, opencode.ErrNotConfigured }
+	for name, provider := range map[string]func(*companion.Store) (advisor.Advisor, error){
+		"not configured": notConfigured,
+		"no provider":    nil,
+	} {
+		for _, cmd := range []string{"sync", "reconcile"} {
+			t.Run(name+"/"+cmd, func(t *testing.T) {
+				dbPath := filepath.Join(t.TempDir(), "adv.sqlite")
+				src := &cliMockPreviewSource{book: companion.Book{ID: "1001", Title: "T"}, fingerprint: "weread:1"}
+				tgt := &cliMockApplyTarget{cliMockPreviewTarget: cliMockPreviewTarget{fingerprint: "hardcover:2"}}
+				c := clients{
+					previewSource: func() (companion.PreviewSource, error) { return src, nil },
+					previewTarget: func() (companion.PreviewTarget, error) { return tgt, nil },
+					applyTarget:   func() (companion.ApplyTarget, error) { return tgt, nil },
+					advisor:       provider,
+				}
+				args := []string{cmd, "--account", "mine", "--target-account", "default", "--db", dbPath}
+				if cmd == "sync" {
+					args = append(args, "--book-id", "1001")
+				}
+				err := run(context.Background(), append(args, "--with-advisor"), io.Discard, io.Discard, c)
+				if err == nil || !strings.Contains(err.Error(), "--with-advisor needs an advisor") {
+					t.Fatalf("expected --with-advisor failure, got %v", err)
+				}
+				if provider != nil && !strings.Contains(err.Error(), "DRIFTER_ADVISOR_KEY") {
+					t.Fatalf("error should name the key variables: %v", err)
+				}
+				// Without the flag the unconfigured advisor must not be the failure.
+				err = run(context.Background(), args, io.Discard, io.Discard, c)
+				if err != nil && strings.Contains(err.Error(), "advisor") {
+					t.Fatalf("unconfigured advisor must stay a no-op without the flag, got %v", err)
+				}
+			})
+		}
 	}
 }

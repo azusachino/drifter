@@ -243,7 +243,21 @@ bin/drifter sync --account my-weread --target-account my-hardcover --work-id 109
 
 # Reconcile status across all confirmed mappings in an account
 bin/drifter reconcile --account my-weread --target-account my-hardcover
+
+# Let the LLM advisor settle conflicts (needs an advisor API key; see below)
+bin/drifter reconcile --account my-weread --target-account my-hardcover --with-advisor
 ```
+
+**Advisor and metadata egress.** `--with-advisor` on `sync` and `reconcile` lets
+the LLM advisor choose `adopt_source` or `adopt_target` for a conflict instead of
+holding it; the apply result records this as `advisor_adopted`. The advisor is
+enabled whenever `MAGPIE_GATEWAY_KEY`, `OPENCODE_API_KEY` or `DRIFTER_ADVISOR_KEY`
+is set, and then book metadata (title, author, publisher, ISBN, reading status)
+is sent to the configured endpoint, `https://api.openai.com/v1` unless
+`DRIFTER_ADVISOR_URL` or `advisor.base_url` says otherwise. Without a key the
+advisor does nothing; with `--with-advisor` and no key the command fails. See
+[docs/cli.md](docs/cli.md#advisor) for the variables, including
+`DRIFTER_ADVISOR_TIMEOUT` (a Go duration; a bare integer means seconds).
 
 ### 4. Community Catalog Export & Merge
 

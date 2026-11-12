@@ -1319,10 +1319,11 @@ func (s *Store) ListStatusBaselines(ctx context.Context) ([]StatusBaseline, erro
 }
 
 // GetAdvisorCache retrieves a cached advisor response by its key.
-// Returns an empty string and nil error if not found.
-func (s *Store) GetAdvisorCache(ctx context.Context, cacheKey string) (string, error) {
+// Returns an empty string and nil error if not found or created before notBefore.
+func (s *Store) GetAdvisorCache(ctx context.Context, cacheKey string, notBefore time.Time) (string, error) {
 	var responseJSON string
-	err := s.db.QueryRowContext(ctx, "SELECT response_json FROM advisor_cache WHERE cache_key = ?", cacheKey).Scan(&responseJSON)
+	err := s.db.QueryRowContext(ctx, "SELECT response_json FROM advisor_cache WHERE cache_key = ? AND created_at >= ?",
+		cacheKey, notBefore.UTC().Format(time.RFC3339)).Scan(&responseJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

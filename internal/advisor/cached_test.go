@@ -9,15 +9,23 @@ import (
 )
 
 type memoryStore struct {
-	data map[string]string
+	data    map[string]string
+	created map[string]time.Time
 }
 
-func (m *memoryStore) GetAdvisorCache(ctx context.Context, key string) (string, error) {
+func (m *memoryStore) GetAdvisorCache(ctx context.Context, key string, notBefore time.Time) (string, error) {
+	if created, ok := m.created[key]; ok && created.Before(notBefore) {
+		return "", nil
+	}
 	return m.data[key], nil
 }
 
 func (m *memoryStore) PutAdvisorCache(ctx context.Context, key, promptType, model, responseJSON string, createdAt time.Time) error {
 	m.data[key] = responseJSON
+	if m.created == nil {
+		m.created = map[string]time.Time{}
+	}
+	m.created[key] = createdAt
 	return nil
 }
 
@@ -46,7 +54,7 @@ func (c *countingAdvisor) ResolveOriginalWork(ctx context.Context, req OriginalW
 func TestCachedAdvisorConflict(t *testing.T) {
 	mock := &countingAdvisor{}
 	store := &memoryStore{data: make(map[string]string)}
-	cached := NewCachedAdvisor(mock, store, "test-model")
+	cached := NewCachedAdvisor(mock, store, "test-model", "prompt-1")
 
 	req := ConflictExplanationRequest{
 		SourceTitle:  "Book 1",
@@ -82,7 +90,7 @@ func TestCachedAdvisorConflict(t *testing.T) {
 func TestCachedAdvisorOriginalWork(t *testing.T) {
 	mock := &countingAdvisor{}
 	store := &memoryStore{data: make(map[string]string)}
-	cached := NewCachedAdvisor(mock, store, "test-model")
+	cached := NewCachedAdvisor(mock, store, "test-model", "prompt-1")
 
 	req := OriginalWorkRequest{
 		Title:  "Book 2",
@@ -127,7 +135,7 @@ func (e *errAdvisor) ResolveOriginalWork(ctx context.Context, req OriginalWorkRe
 func TestCachedAdvisorErrorsNotCached(t *testing.T) {
 	mock := &errAdvisor{}
 	store := &memoryStore{data: make(map[string]string)}
-	cached := NewCachedAdvisor(mock, store, "test-model")
+	cached := NewCachedAdvisor(mock, store, "test-model", "prompt-1")
 
 	_, err := cached.ExplainConflict(context.Background(), ConflictExplanationRequest{SourceTitle: "X"})
 	if err == nil {
@@ -135,5 +143,82 @@ func TestCachedAdvisorErrorsNotCached(t *testing.T) {
 	}
 	if len(store.data) != 0 {
 		t.Fatalf("expected nothing cached on error, got %v", store.data)
+	}
+}
+
+func TestCachedAdvisorKeyCoversWholeRequest(t *testing.T) {
+	mock := &countingAdvisor{}
+	store := &memoryStore{data: make(map[string]string)}
+	cached := NewCachedAdvisor(mock, store, "test-model", "prompt-1")
+	ctx := context.Background()
+
+	base := ConflictExplanationRequest{SourceTitle: "Same Title", SourceAuthor: "Author A", SourceStatus: "read", TargetStatus: "reading"}
+	other := base
+	other.SourceAuthor = "Author B"
+	for _, req := range []ConflictExplanationRequest{base, other} {
+		if _, err := cached.ExplainConflict(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := mock.conflictCalls.Load(); got != 2 {
+		t.Fatalf("requests differing only in author shared a cache entry: %d inner calls", got)
+	}
+
+	msg := base
+	msg.Message = "different evidence"
+	if _, err := cached.ExplainConflict(ctx, msg); err != nil {
+		t.Fatal(err)
+	}
+	if got := mock.conflictCalls.Load(); got != 3 {
+		t.Fatalf("message must be part of the key: %d inner calls", got)
+	}
+}
+
+func TestCachedAdvisorMissesOnModelOrPromptChange(t *testing.T) {
+	mock := &countingAdvisor{}
+	store := &memoryStore{data: make(map[string]string)}
+	ctx := context.Background()
+	req := ConflictExplanationRequest{SourceTitle: "T", SourceStatus: "read", TargetStatus: "reading"}
+
+	for _, c := range []*CachedAdvisor{
+		NewCachedAdvisor(mock, store, "model-a", "prompt-1"),
+		NewCachedAdvisor(mock, store, "model-b", "prompt-1"),
+		NewCachedAdvisor(mock, store, "model-b", "prompt-2"),
+		NewCachedAdvisor(mock, store, "model-b", "prompt-2"),
+	} {
+		if _, err := c.ExplainConflict(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := mock.conflictCalls.Load(); got != 3 {
+		t.Fatalf("expected a miss for a new model and a new prompt hash and a hit for a repeat, got %d inner calls", got)
+	}
+}
+
+func TestCachedAdvisorEntriesExpire(t *testing.T) {
+	mock := &countingAdvisor{}
+	store := &memoryStore{data: make(map[string]string)}
+	cached := NewCachedAdvisor(mock, store, "test-model", "prompt-1")
+	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	cached.now = func() time.Time { return now }
+	ctx := context.Background()
+	req := ConflictExplanationRequest{SourceTitle: "T", SourceStatus: "read", TargetStatus: "reading"}
+
+	if _, err := cached.ExplainConflict(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(CacheTTL - time.Hour)
+	if _, err := cached.ExplainConflict(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if got := mock.conflictCalls.Load(); got != 1 {
+		t.Fatalf("entry inside the TTL must hit, got %d inner calls", got)
+	}
+	now = now.Add(2 * time.Hour)
+	if _, err := cached.ExplainConflict(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if got := mock.conflictCalls.Load(); got != 2 {
+		t.Fatalf("entry past the TTL must miss, got %d inner calls", got)
 	}
 }

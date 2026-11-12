@@ -77,7 +77,7 @@ type Settings struct {
 // Endpoint precedence: DRIFTER_ADVISOR_URL, MAGPIE_BASE_URL, MAGPIE_URL, OPENCODE_BASE_URL, config advisor.base_url, then DefaultBaseURL.
 // API key precedence: MAGPIE_GATEWAY_KEY, OPENCODE_API_KEY, DRIFTER_ADVISOR_KEY (strictly environment).
 // Model precedence: DRIFTER_ADVISOR_MODEL, config advisor.model, then DefaultModel.
-// Timeout precedence: DRIFTER_ADVISOR_TIMEOUT, config advisor.timeout, then DefaultTimeout.
+// Timeout precedence: DRIFTER_ADVISOR_TIMEOUT (Go duration; a bare integer means seconds), config advisor.timeout, then DefaultTimeout.
 func LoadConfig() (Config, error) {
 	return LoadConfigPath(config.DefaultPath())
 }
@@ -121,11 +121,11 @@ func LoadConfigWithSettings(s Settings) (Config, error) {
 	}
 	timeout := DefaultTimeout
 	if raw := strings.TrimSpace(os.Getenv(DefaultTimeoutEnv)); raw != "" {
-		seconds, err := strconv.Atoi(raw)
-		if err != nil || seconds <= 0 {
-			return Config{}, fmt.Errorf("invalid %s value %q", DefaultTimeoutEnv, raw)
+		d, err := parseTimeout(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid %s value %q: want a Go duration such as 45s, or whole seconds", DefaultTimeoutEnv, raw)
 		}
-		timeout = time.Duration(seconds) * time.Second
+		timeout = d
 	} else if s.Timeout > 0 {
 		timeout = s.Timeout
 	}
@@ -201,6 +201,9 @@ func (c *Client) ExplainConflict(ctx context.Context, req advisor.ConflictExplan
 	err := c.complete(ctx, conflictSystemPrompt, conflictPrompt(req), &response)
 	if err != nil {
 		return advisor.ConflictExplanationResponse{}, err
+	}
+	if response.RecommendedAction == "" {
+		return advisor.ConflictExplanationResponse{}, fmt.Errorf("%w: missing recommended_action", ErrInvalidResponse)
 	}
 	return response, nil
 }
@@ -398,4 +401,21 @@ func firstEnv(keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// parseTimeout accepts a Go duration ("45s", "1m"). A bare integer is read as
+// seconds, which is what the variable accepted before durations were allowed.
+func parseTimeout(raw string) (time.Duration, error) {
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		seconds, convErr := strconv.Atoi(raw)
+		if convErr != nil {
+			return 0, err
+		}
+		d = time.Duration(seconds) * time.Second
+	}
+	if d <= 0 {
+		return 0, errors.New("timeout must be positive")
+	}
+	return d, nil
 }

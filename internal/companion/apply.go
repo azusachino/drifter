@@ -47,6 +47,9 @@ type ApplyResult struct {
 	AdvisorRecommendation *advisor.ConflictExplanationResponse `json:"advisor_recommendation,omitempty"`
 	Reason                string                               `json:"reason,omitempty"`
 	Reconciled            bool                                 `json:"reconciled,omitempty"`
+	// AdvisorAdopted is set when --with-advisor chose the adoption that was
+	// previewed, rather than an explicit --adopt-source or --adopt-target.
+	AdvisorAdopted advisor.Action `json:"advisor_adopted,omitempty"`
 }
 
 // ApplySync safely applies an evaluated sync proposal to the target provider.
@@ -145,30 +148,21 @@ func ApplySync(
 		return ApplyResult{}, err
 	}
 
+	// --with-advisor lets the advisor pick an adoption the operator did not
+	// name. The action is already typed, so only the two adopt values act.
+	var advisorAdopted advisor.Action
 	if opts.WithAdvisor && proposal.AdvisorRecommendation != nil && !opts.AdoptSource && !opts.AdoptTarget {
-		switch proposal.AdvisorRecommendation.RecommendedAction {
-		case "adopt_source":
-			opts.AdoptSource = true
+		switch action := proposal.AdvisorRecommendation.RecommendedAction; action {
+		case advisor.ActionAdoptSource, advisor.ActionAdoptTarget:
+			advisorAdopted = action
+			opts.AdoptSource = action == advisor.ActionAdoptSource
+			opts.AdoptTarget = action == advisor.ActionAdoptTarget
 			proposal, err = PreviewSync(ctx, store, source, target, provider, sourceAccount, bookID, targetAccount, PreviewSyncOptions{
 				PolicyVersion:     opts.PolicyVersion,
 				AllowPrivateSync:  opts.AllowPrivateSync,
 				DeclaredSourceVID: opts.DeclaredSourceVID,
-				AdoptSource:       true,
-				AdoptTarget:       false,
-				Now:               now,
-				Advisor:           opts.Advisor,
-			})
-			if err != nil {
-				return ApplyResult{}, err
-			}
-		case "adopt_target":
-			opts.AdoptTarget = true
-			proposal, err = PreviewSync(ctx, store, source, target, provider, sourceAccount, bookID, targetAccount, PreviewSyncOptions{
-				PolicyVersion:     opts.PolicyVersion,
-				AllowPrivateSync:  opts.AllowPrivateSync,
-				DeclaredSourceVID: opts.DeclaredSourceVID,
-				AdoptSource:       false,
-				AdoptTarget:       true,
+				AdoptSource:       opts.AdoptSource,
+				AdoptTarget:       opts.AdoptTarget,
 				Now:               now,
 				Advisor:           opts.Advisor,
 			})
@@ -190,6 +184,7 @@ func ApplySync(
 		Message:               proposal.Message,
 		Reason:                proposal.Reason,
 		AdvisorRecommendation: proposal.AdvisorRecommendation,
+		AdvisorAdopted:        advisorAdopted,
 	}
 
 	// 3. Handle non-mutating proposals

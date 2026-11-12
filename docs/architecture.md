@@ -175,7 +175,7 @@ surface:
 
 ## Database schema & storage
 
-Drifter stores local state in SQLite (schema version 7):
+Drifter stores local state in SQLite (schema version 8):
 
 - `mappings`: Confirmed source-to-target links with creation and
   update instants, so a consumer can read only what changed.
