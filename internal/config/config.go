@@ -151,6 +151,15 @@ func validateAddress(name, address string) error {
 	return nil
 }
 
+func hasAllowedHost(hosts []string) bool {
+	for _, h := range hosts {
+		if strings.TrimSpace(h) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (c Config) validate() error {
 	switch c.Log.Level {
 	case LevelDebug, LevelInfo, LevelWarn, LevelError:
@@ -165,8 +174,11 @@ func (c Config) validate() error {
 	}
 	serverHost, _, _ := net.SplitHostPort(c.Server.Addr)
 	serverIP := net.ParseIP(serverHost)
-	if serverHost == "" || serverHost == "*" || (serverIP != nil && serverIP.IsUnspecified()) {
-		return fmt.Errorf("server.addr must name a concrete listener host for Host validation")
+	wildcard := serverHost == "" || serverHost == "*" || (serverIP != nil && serverIP.IsUnspecified())
+	// A wildcard listener is allowed only with an explicit Host allowlist, which
+	// is what Host validation checks; without one there is nothing to validate against.
+	if wildcard && !hasAllowedHost(c.Server.AllowedHosts) {
+		return fmt.Errorf("server.addr must name a concrete listener host, or set server.allowed_hosts for a wildcard listener")
 	}
 	for _, h := range c.Server.AllowedHosts {
 		if strings.TrimSpace(h) == "" || strings.ContainsAny(h, "/\\@?#") {
