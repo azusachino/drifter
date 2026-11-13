@@ -13,7 +13,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/drifter
 # in harus-workstation): Debian-based, floating patch levels, refreshed via
 # REFRESH=1 rebuilds. media-base already carries ca-certificates and the
 # glibc/libgcc the CGO binary links against.
-FROM azusachino.com/media-base:py3.14-trixie-r1 AS runtime
+FROM azusachino.com/media-base:py3.14-trixie-r2 AS runtime
 RUN groupadd --gid 10001 drifter \
     && useradd --uid 10001 --gid drifter --no-create-home --home-dir /var/lib/drifter --shell /usr/sbin/nologin drifter \
     && install -d --owner=drifter --group=drifter --mode=0700 /var/lib/drifter
