@@ -164,8 +164,24 @@ func TestJSONJobsAPI_CRUDAndCancellation(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&cancelledJob); err != nil {
 		t.Fatalf("failed to decode cancelled job: %v", err)
 	}
-	if cancelledJob.Status != companion.SyncJobStatusCancelled || !cancelledJob.CancelRequested {
-		t.Fatalf("expected cancelled job, got: %+v", cancelledJob)
+	if !cancelledJob.CancelRequested || (cancelledJob.Status != companion.SyncJobStatusCancelled && cancelledJob.Status != companion.SyncJobStatusRunning) {
+		t.Fatalf("expected cancel_requested=true and cancelled/running status, got: %+v", cancelledJob)
+	}
+	if cancelledJob.Status == companion.SyncJobStatusRunning {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			res = request(t, base, http.MethodGet, getURL, bearerHeaders, nil)
+			if res.StatusCode == http.StatusOK {
+				_ = json.NewDecoder(res.Body).Decode(&cancelledJob)
+				if cancelledJob.Status == companion.SyncJobStatusCancelled {
+					break
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if cancelledJob.Status != companion.SyncJobStatusCancelled {
+			t.Fatalf("expected running job to transition to cancelled, got: %+v", cancelledJob)
+		}
 	}
 
 	// 8. GET /api/status surfaces latest_job
