@@ -47,6 +47,7 @@ type PendingOptions struct {
 	SourceAccount   string
 	TargetAccount   string
 	Days            int
+	Limit           int
 	Year            int  // optional calendar year filter, e.g. 2025
 	FinishedOnly    bool // filter to completed/finished books only
 	IncludePrivate  bool
@@ -209,9 +210,13 @@ func PendingWithDecisions(ctx context.Context, reader worklistSource, mappings [
 		}
 		return eligible[i].ID < eligible[j].ID
 	})
-	more := len(eligible) > pendingLimit
+	limit := pendingLimit
+	if options.Limit > 0 && options.Limit < limit {
+		limit = options.Limit
+	}
+	more := len(eligible) > limit
 	if more {
-		eligible = eligible[:pendingLimit]
+		eligible = eligible[:limit]
 	}
 	if more {
 		report.Complete = false

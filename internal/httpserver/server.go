@@ -25,6 +25,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/azusachino/drifter/internal/advisor"
+	"github.com/azusachino/drifter/internal/advisor/opencode"
 	"github.com/azusachino/drifter/internal/companion"
 	"github.com/azusachino/drifter/internal/probes"
 	"github.com/go-chi/chi/v5"
@@ -49,6 +51,7 @@ type pageData struct {
 	LatestRun    *companion.SyncRun
 	Holds        []companion.SyncHold
 	Fingerprints []companion.AccountFingerprint
+	Jobs         []companion.SyncJob
 }
 
 var page = template.Must(template.ParseFS(htmlTemplates, "templates/index.html"))
@@ -74,6 +77,10 @@ type Server struct {
 	targetErr        error
 	operationSlot    chan struct{}
 	operationTimeout time.Duration
+	jobNotifyCh      chan struct{}
+	activeJobMu      sync.Mutex
+	activeJobID      int64
+	activeJobCancel  context.CancelFunc
 }
 
 type Options struct {
@@ -123,7 +130,8 @@ func New(options Options) (*Server, error) {
 		apiToken: apiToken,
 		logger:   options.Logger, now: options.Now, source: options.Source, sourceFactory: options.SourceFactory,
 		target: options.Target, targetFactory: options.TargetFactory,
-		operationSlot: make(chan struct{}, 1), operationTimeout: options.operationTimeout}
+		operationSlot: make(chan struct{}, 1), operationTimeout: options.operationTimeout,
+		jobNotifyCh: make(chan struct{}, 1)}
 	router := chi.NewRouter()
 	router.Use(requestRouteLogAttribute)
 	ready := []probes.Readiness{{Name: "mapping_database", Check: func(r *http.Request) error {
@@ -154,21 +162,44 @@ func New(options Options) (*Server, error) {
 		api.Get("/mappings", s.handleMappings)
 		api.Head("/mappings", s.handleMappings)
 		api.Get("/pending", s.handlePending)
+		api.Post("/auto-match", s.handleAutoMatch)
 		api.Post("/mappings/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, false) })
 		api.Post("/mappings/replace", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, true) })
 		api.Delete("/mappings/unlink", s.handleJSONUnlink)
 		api.Get("/export", s.handleExport)
 		api.Head("/export", s.handleExport)
 		api.Post("/import", s.handleImport)
+		api.Post("/reconcile", s.handleReconcile)
+		api.Get("/jobs", s.handleAPISyncJobList)
+		api.Head("/jobs", s.handleAPISyncJobList)
+		api.Post("/jobs/sync", s.handleAPISyncJobCreate)
+		api.Get("/jobs/{id}", s.handleAPISyncJobGet)
+		api.Head("/jobs/{id}", s.handleAPISyncJobGet)
+		api.Post("/jobs/{id}/cancel", s.handleAPISyncJobCancel)
 	})
 	router.Route("/api/v1", func(v1 chi.Router) {
 		v1.Get("/reading/snapshot", s.handleReadingSnapshot)
 		v1.Get("/reading/changes", s.handleReadingChanges)
+		v1.Post("/auto-match", s.handleAutoMatch)
+		v1.Post("/mappings/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, false) })
+		v1.Post("/mappings/replace", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, true) })
+		v1.Delete("/mappings/unlink", s.handleJSONUnlink)
+		v1.Post("/reconcile", s.handleReconcile)
+		v1.Get("/jobs", s.handleAPISyncJobList)
+		v1.Head("/jobs", s.handleAPISyncJobList)
+		v1.Post("/jobs/sync", s.handleAPISyncJobCreate)
+		v1.Get("/jobs/{id}", s.handleAPISyncJobGet)
+		v1.Head("/jobs/{id}", s.handleAPISyncJobGet)
+		v1.Post("/jobs/{id}/cancel", s.handleAPISyncJobCancel)
 	})
 	router.Route("/mappings", func(mappings chi.Router) {
 		mappings.Post("/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, false) })
 		mappings.Post("/replace", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, true) })
 		mappings.Post("/unlink", s.handleFormUnlink)
+	})
+	router.Route("/jobs", func(jobs chi.Router) {
+		jobs.Post("/sync", s.handleFormJobSync)
+		jobs.Post("/cancel", s.handleFormJobCancel)
 	})
 	s.http = &http.Server{
 		Addr: options.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second,
@@ -243,7 +274,14 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if !noBody(w, r) {
 		return
 	}
-	notices := map[string]string{"confirmed": "Mapping confirmed.", "replaced": "Mapping replaced.", "unlinked": "Mapping unlinked."}
+	notices := map[string]string{
+		"confirmed":     "Mapping confirmed.",
+		"replaced":      "Mapping replaced.",
+		"unlinked":      "Mapping unlinked.",
+		"job_started":   "Background sync job started.",
+		"job_coalesced": "Matching sync job already queued or running.",
+		"job_cancelled": "Sync job cancelled.",
+	}
 	notice := notices[r.URL.Query().Get("notice")]
 	if r.URL.Query().Get("notice") != "" && notice == "" {
 		http.Error(w, "invalid page query", http.StatusBadRequest)
@@ -263,6 +301,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	latestRun, _ := store.GetLatestSyncRun(r.Context(), "", "")
 	holds, _ := store.ListSyncHolds(r.Context(), "", "")
 	fingerprints, _ := store.ListAccountFingerprints(r.Context())
+	jobs, _ := store.ListSyncJobs(r.Context(), 20)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodGet {
@@ -273,6 +312,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			LatestRun:    latestRun,
 			Holds:        holds,
 			Fingerprints: fingerprints,
+			Jobs:         jobs,
 		})
 	}
 }
@@ -376,6 +416,7 @@ type daemonStatusResponse struct {
 	Fingerprints     []companion.AccountFingerprint `json:"fingerprints"`
 	LatestRun        *companion.SyncRun             `json:"latest_run,omitempty"`
 	ActiveHoldsCount int                            `json:"active_holds_count"`
+	LatestJob        *companion.SyncJob             `json:"latest_job,omitempty"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -421,12 +462,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	latestJob, err := store.GetLatestSyncJob(r.Context())
+	if err != nil {
+		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	writeJSON(w, r, daemonStatusResponse{
 		Ready:            true,
 		MappingsCount:    len(mappings),
 		Fingerprints:     fingerprints,
 		LatestRun:        latestRun,
 		ActiveHoldsCount: len(holds),
+		LatestJob:        latestJob,
 	})
 }
 
@@ -577,12 +624,8 @@ func (s *Server) handleReadingSnapshot(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, "invalid_cursor")
 		return
 	}
-	ctx, release, admitted := s.admit(r.Context())
-	if !admitted {
-		apiError(w, http.StatusServiceUnavailable, "provider_operation_busy")
-		return
-	}
-	defer release()
+	ctx, cancel := context.WithTimeout(r.Context(), s.operationTimeout)
+	defer cancel()
 	source, err := s.pendingSource()
 	if err != nil {
 		apiError(w, http.StatusServiceUnavailable, "provider_unavailable")
@@ -630,12 +673,8 @@ func (s *Server) handleReadingChanges(w http.ResponseWriter, r *http.Request) {
 		writeHorizonExceeded(w, r)
 		return
 	}
-	ctx, release, admitted := s.admit(r.Context())
-	if !admitted {
-		apiError(w, http.StatusServiceUnavailable, "provider_operation_busy")
-		return
-	}
-	defer release()
+	ctx, cancel := context.WithTimeout(r.Context(), s.operationTimeout)
+	defer cancel()
 	source, err := s.pendingSource()
 	if err != nil {
 		apiError(w, http.StatusServiceUnavailable, "provider_unavailable")
@@ -677,6 +716,301 @@ func writeSnapshotFailure(w http.ResponseWriter, ctx context.Context, err error)
 	default:
 		apiError(w, http.StatusBadGateway, "snapshot_failed")
 	}
+}
+
+// handleReconcile executes continuous reconciliation across all confirmed mappings
+// for an account pair and records a sync run.
+func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
+	if !readRequestAllowed(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, "POST")
+		return
+	}
+	if !s.bearerAuthorized(r) {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		apiError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	query := r.URL.Query()
+	account := query.Get("account")
+	if account == "" {
+		account = "default"
+	}
+	targetAccount := query.Get("target_account")
+	if targetAccount == "" {
+		targetAccount = "default"
+	}
+	provider := query.Get("provider")
+	if provider == "" {
+		provider = "weread"
+	}
+	policyVersion := query.Get("policy_version")
+	if policyVersion == "" {
+		policyVersion = companion.DefaultPolicyVersion
+	}
+	sourceVID := query.Get("source_vid")
+	allowPrivate := query.Get("allow_private") == "true" || query.Get("allow_private") == "1"
+	adoptSource := query.Get("adopt_source") == "true" || query.Get("adopt_source") == "1"
+	adoptTarget := query.Get("adopt_target") == "true" || query.Get("adopt_target") == "1"
+	dryRun := query.Get("dry_run") == "true" || query.Get("dry_run") == "1"
+	withAdvisor := query.Get("with_advisor") == "true" || query.Get("with_advisor") == "1"
+	autoMatch := query.Get("auto_match") == "true" || query.Get("auto_match") == "1"
+
+	if adoptSource && adoptTarget {
+		apiError(w, http.StatusBadRequest, "cannot_specify_both_adopt_source_and_adopt_target")
+		return
+	}
+	if !companion.ValidLabel(provider) || !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
+		apiError(w, http.StatusBadRequest, "invalid_mapping_key")
+		return
+	}
+
+	ctx, release, admitted := s.admit(r.Context())
+	if !admitted {
+		apiError(w, http.StatusServiceUnavailable, "provider_operation_busy")
+		return
+	}
+	defer release()
+
+	src, err := s.pendingSource()
+	if err != nil {
+		apiError(w, http.StatusServiceUnavailable, "source_provider_unavailable")
+		return
+	}
+	previewSource, ok := src.(companion.PreviewSource)
+	if !ok {
+		apiError(w, http.StatusInternalServerError, "source_provider_invalid")
+		return
+	}
+
+	tgt, err := s.confirmationTarget()
+	if err != nil {
+		apiError(w, http.StatusServiceUnavailable, "target_provider_unavailable")
+		return
+	}
+	applyTarget, ok := tgt.(companion.ApplyTarget)
+	if !ok {
+		apiError(w, http.StatusInternalServerError, "target_provider_invalid")
+		return
+	}
+
+	store, err := companion.OpenOwnedStore(s.database, s.ownership)
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, "database_unavailable")
+		return
+	}
+	defer store.Close()
+
+	account, targetAccount, err = store.ResolveAccounts(ctx, account, targetAccount)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, "invalid_account")
+		return
+	}
+
+	var adv advisor.Advisor
+	if withAdvisor || autoMatch {
+		cfg, err := opencode.LoadConfig()
+		if err == nil {
+			client, err := opencode.NewWithConfig(cfg)
+			if err == nil {
+				adv = advisor.NewCachedAdvisor(client, store, cfg.Model, opencode.PromptHash())
+			}
+		}
+	}
+
+	if autoMatch {
+		minConf := 0.80
+		if raw := query.Get("min_confidence"); raw != "" {
+			if parsed, err := strconv.ParseFloat(raw, 64); err == nil && parsed > 0 && parsed <= 1.0 {
+				minConf = parsed
+			}
+		}
+		days := 90
+		if raw := query.Get("days"); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 1 && parsed <= 36500 {
+				days = parsed
+			}
+		}
+		_, _ = companion.AutoMatchOwned(ctx, store, src, tgt, s.database, s.ownership, adv, companion.AutoMatchOptions{
+			Provider:      provider,
+			SourceAccount: account,
+			TargetAccount: targetAccount,
+			Days:          days,
+			MinConfidence: minConf,
+			Limit:         20,
+			Now:           s.now(),
+		})
+	}
+
+	summary, err := companion.ReconcileAccount(
+		ctx,
+		store,
+		previewSource,
+		applyTarget,
+		companion.ReconcileOptions{
+			Provider:          provider,
+			SourceAccount:     account,
+			TargetAccount:     targetAccount,
+			PolicyVersion:     policyVersion,
+			AllowPrivateSync:  allowPrivate,
+			DeclaredSourceVID: sourceVID,
+			AdoptSource:       adoptSource,
+			AdoptTarget:       adoptTarget,
+			DryRun:            dryRun,
+			Now:               s.now().UTC(),
+			Advisor:           adv,
+			WithAdvisor:       adv != nil,
+		},
+	)
+	if err != nil {
+		writeJSONStatus(w, r, http.StatusBadGateway, map[string]any{
+			"error":   err.Error(),
+			"summary": summary,
+		})
+		return
+	}
+
+	writeJSON(w, r, summary)
+}
+
+// handleAutoMatch inspects pending source books and automatically confirms high-confidence
+// matches (either by exact ISBN or LLM advisor resolution meeting min_confidence).
+func (s *Server) handleAutoMatch(w http.ResponseWriter, r *http.Request) {
+	if !readRequestAllowed(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, "POST")
+		return
+	}
+	if !s.bearerAuthorized(r) {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		apiError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	query := r.URL.Query()
+	account := query.Get("account")
+	if account == "" {
+		account = "default"
+	}
+	targetAccount := query.Get("target_account")
+	if targetAccount == "" {
+		targetAccount = "default"
+	}
+	provider := query.Get("provider")
+	if provider == "" {
+		provider = "weread"
+	}
+	if !companion.ValidLabel(provider) || !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
+		apiError(w, http.StatusBadRequest, "invalid_mapping_key")
+		return
+	}
+
+	minConf := 0.80
+	if raw := query.Get("min_confidence"); raw != "" {
+		parsed, err := strconv.ParseFloat(raw, 64)
+		if err != nil || parsed <= 0 || parsed > 1.0 {
+			apiError(w, http.StatusBadRequest, "invalid_min_confidence")
+			return
+		}
+		minConf = parsed
+	}
+
+	days := 90
+	if raw := query.Get("days"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 36500 {
+			apiError(w, http.StatusBadRequest, "invalid_days")
+			return
+		}
+		days = parsed
+	}
+
+	limit := 20
+	if raw := query.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			apiError(w, http.StatusBadRequest, "invalid_limit")
+			return
+		}
+		limit = parsed
+	}
+
+	bookID := query.Get("book_id")
+	if bookID != "" && !companion.ValidBookID(bookID) {
+		apiError(w, http.StatusBadRequest, "invalid_book_id")
+		return
+	}
+	dryRun := query.Get("dry_run") == "true" || query.Get("dry_run") == "1"
+	finishedOnly := query.Get("finished_only") == "true" || query.Get("finished_only") == "1" || query.Get("finished") == "true" || query.Get("finished") == "1"
+	after := query.Get("after")
+
+	ctx, release, admitted := s.admit(r.Context())
+	if !admitted {
+		apiError(w, http.StatusServiceUnavailable, "provider_operation_busy")
+		return
+	}
+	defer release()
+
+	src, err := s.pendingSource()
+	if err != nil {
+		apiError(w, http.StatusServiceUnavailable, "source_provider_unavailable")
+		return
+	}
+	target, err := s.confirmationTarget()
+	if err != nil {
+		apiError(w, http.StatusServiceUnavailable, "target_provider_unavailable")
+		return
+	}
+
+	store, err := companion.OpenOwnedStore(s.database, s.ownership)
+	if err != nil {
+		apiError(w, http.StatusServiceUnavailable, "mapping_database_unavailable")
+		return
+	}
+	defer store.Close()
+
+	account, targetAccount, err = store.ResolveAccounts(ctx, account, targetAccount)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, "invalid_account")
+		return
+	}
+
+	var adv advisor.Advisor
+	cfg, err := opencode.LoadConfig()
+	if err == nil {
+		client, err := opencode.NewWithConfig(cfg)
+		if err == nil {
+			adv = advisor.NewCachedAdvisor(client, store, cfg.Model, opencode.PromptHash())
+		}
+	}
+
+	report, err := companion.AutoMatchOwned(ctx, store, src, target, s.database, s.ownership, adv, companion.AutoMatchOptions{
+		Provider:      provider,
+		SourceAccount: account,
+		TargetAccount: targetAccount,
+		Days:          days,
+		MinConfidence: minConf,
+		Limit:         limit,
+		BookID:        bookID,
+		FinishedOnly:  finishedOnly,
+		DryRun:        dryRun,
+		Now:           s.now(),
+		After:         after,
+	})
+	if err != nil {
+		writeJSONStatus(w, r, http.StatusInternalServerError, map[string]any{
+			"error":  err.Error(),
+			"report": report,
+		})
+		return
+	}
+
+	writeJSON(w, r, report)
 }
 
 // bearerAuthorized accepts exactly one well-formed Bearer credential and
@@ -801,14 +1135,15 @@ func (s *Server) handleJSONMapping(w http.ResponseWriter, r *http.Request, repla
 		apiError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
-	if !mutationOriginAllowed(w, r) {
+	isBearer := s.bearerAuthorized(r)
+	if !isBearer && !mutationOriginAllowed(w, r) {
 		return
 	}
 	if r.URL.RawQuery != "" {
 		apiError(w, http.StatusBadRequest, "unexpected_query")
 		return
 	}
-	if !validHeaderToken(r, s.token) {
+	if !isBearer && !validHeaderToken(r, s.token) {
 		apiError(w, http.StatusForbidden, "request_rejected")
 		return
 	}
@@ -853,14 +1188,15 @@ func (s *Server) handleJSONUnlink(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
-	if !mutationOriginAllowed(w, r) {
+	isBearer := s.bearerAuthorized(r)
+	if !isBearer && !mutationOriginAllowed(w, r) {
 		return
 	}
 	if r.URL.RawQuery != "" {
 		apiError(w, http.StatusBadRequest, "unexpected_query")
 		return
 	}
-	if !validHeaderToken(r, s.token) {
+	if !isBearer && !validHeaderToken(r, s.token) {
 		apiError(w, http.StatusForbidden, "request_rejected")
 		return
 	}
@@ -1401,7 +1737,7 @@ func setSecurityHeaders(w http.ResponseWriter) {
 
 func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, error) {
 	for key, values := range query {
-		if key != "account" && key != "target_account" && key != "days" && key != "after" || len(values) != 1 {
+		if key != "account" && key != "target_account" && key != "days" && key != "limit" && key != "finished" && key != "after" || len(values) != 1 {
 			return companion.PendingOptions{}, fmt.Errorf("invalid query")
 		}
 	}
@@ -1414,10 +1750,19 @@ func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, 
 		}
 		days = parsed
 	}
+	limit := 0
+	if raw := query.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			return companion.PendingOptions{}, fmt.Errorf("invalid limit")
+		}
+		limit = parsed
+	}
+	finishedOnly := query.Get("finished") == "true" || query.Get("finished") == "1"
 	if !companion.ValidLabel(account) || !companion.ValidLabel(target) || days < 1 || days > 36500 {
 		return companion.PendingOptions{}, fmt.Errorf("invalid options")
 	}
-	options := companion.PendingOptions{SourceAccount: account, TargetAccount: target, Days: days, After: query.Get("after"), Now: now}
+	options := companion.PendingOptions{SourceAccount: account, TargetAccount: target, Days: days, Limit: limit, FinishedOnly: finishedOnly, After: query.Get("after"), Now: now}
 	if err := companion.ValidatePendingCursor(options); err != nil {
 		return companion.PendingOptions{}, err
 	}
@@ -1560,6 +1905,8 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	}
 	s.ownership = owner
 	defer owner.Close()
+	stopWorker := s.startJobWorker(ctx)
+	defer stopWorker()
 	store, err := companion.OpenOwnedStore(s.database, owner)
 	if err != nil {
 		return err

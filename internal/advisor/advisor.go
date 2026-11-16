@@ -5,8 +5,34 @@ package advisor
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 )
+
+// ErrRateLimited indicates the advisor endpoint returned HTTP 429.
+var ErrRateLimited = errors.New("advisor endpoint rate limited")
+
+// RateLimitError carries an HTTP 429 rate-limit signal along with any parsed
+// Retry-After delay and sanitized upstream error detail.
+type RateLimitError struct {
+	RetryAfter time.Duration
+	Detail     string
+}
+
+func (e *RateLimitError) Error() string {
+	if e == nil {
+		return ErrRateLimited.Error()
+	}
+	if e.Detail != "" {
+		return fmt.Sprintf("%s: HTTP 429: %s", ErrRateLimited.Error(), e.Detail)
+	}
+	return fmt.Sprintf("%s: HTTP 429", ErrRateLimited.Error())
+}
+
+func (e *RateLimitError) Unwrap() error {
+	return ErrRateLimited
+}
 
 // ConflictExplanationRequest carries the two diverging reading states and the
 // evidence that triggered the divergence.
