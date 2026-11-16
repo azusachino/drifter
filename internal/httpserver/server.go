@@ -25,6 +25,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/azusachino/drifter/internal/advisor"
+	"github.com/azusachino/drifter/internal/advisor/opencode"
 	"github.com/azusachino/drifter/internal/companion"
 	"github.com/azusachino/drifter/internal/probes"
 	"github.com/go-chi/chi/v5"
@@ -160,10 +162,12 @@ func New(options Options) (*Server, error) {
 		api.Get("/export", s.handleExport)
 		api.Head("/export", s.handleExport)
 		api.Post("/import", s.handleImport)
+		api.Post("/reconcile", s.handleReconcile)
 	})
 	router.Route("/api/v1", func(v1 chi.Router) {
 		v1.Get("/reading/snapshot", s.handleReadingSnapshot)
 		v1.Get("/reading/changes", s.handleReadingChanges)
+		v1.Post("/reconcile", s.handleReconcile)
 	})
 	router.Route("/mappings", func(mappings chi.Router) {
 		mappings.Post("/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, false) })
@@ -677,6 +681,139 @@ func writeSnapshotFailure(w http.ResponseWriter, ctx context.Context, err error)
 	default:
 		apiError(w, http.StatusBadGateway, "snapshot_failed")
 	}
+}
+
+// handleReconcile executes continuous reconciliation across all confirmed mappings
+// for an account pair and records a sync run.
+func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
+	if !readRequestAllowed(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, "POST")
+		return
+	}
+	if !s.bearerAuthorized(r) {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		apiError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	query := r.URL.Query()
+	account := query.Get("account")
+	if account == "" {
+		account = "default"
+	}
+	targetAccount := query.Get("target_account")
+	if targetAccount == "" {
+		targetAccount = "default"
+	}
+	provider := query.Get("provider")
+	if provider == "" {
+		provider = "weread"
+	}
+	policyVersion := query.Get("policy_version")
+	if policyVersion == "" {
+		policyVersion = companion.DefaultPolicyVersion
+	}
+	sourceVID := query.Get("source_vid")
+	allowPrivate := query.Get("allow_private") == "true" || query.Get("allow_private") == "1"
+	adoptSource := query.Get("adopt_source") == "true" || query.Get("adopt_source") == "1"
+	adoptTarget := query.Get("adopt_target") == "true" || query.Get("adopt_target") == "1"
+	dryRun := query.Get("dry_run") == "true" || query.Get("dry_run") == "1"
+	withAdvisor := query.Get("with_advisor") == "true" || query.Get("with_advisor") == "1"
+
+	if adoptSource && adoptTarget {
+		apiError(w, http.StatusBadRequest, "cannot_specify_both_adopt_source_and_adopt_target")
+		return
+	}
+	if !companion.ValidLabel(provider) || !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
+		apiError(w, http.StatusBadRequest, "invalid_mapping_key")
+		return
+	}
+
+	ctx, release, admitted := s.admit(r.Context())
+	if !admitted {
+		apiError(w, http.StatusServiceUnavailable, "provider_operation_busy")
+		return
+	}
+	defer release()
+
+	src, err := s.pendingSource()
+	if err != nil {
+		apiError(w, http.StatusServiceUnavailable, "source_provider_unavailable")
+		return
+	}
+	previewSource, ok := src.(companion.PreviewSource)
+	if !ok {
+		apiError(w, http.StatusInternalServerError, "source_provider_invalid")
+		return
+	}
+
+	tgt, err := s.confirmationTarget()
+	if err != nil {
+		apiError(w, http.StatusServiceUnavailable, "target_provider_unavailable")
+		return
+	}
+	applyTarget, ok := tgt.(companion.ApplyTarget)
+	if !ok {
+		apiError(w, http.StatusInternalServerError, "target_provider_invalid")
+		return
+	}
+
+	store, err := companion.OpenOwnedStore(s.database, s.ownership)
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, "database_unavailable")
+		return
+	}
+	defer store.Close()
+
+	account, targetAccount, err = store.ResolveAccounts(ctx, account, targetAccount)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, "invalid_account")
+		return
+	}
+
+	var adv advisor.Advisor
+	if withAdvisor {
+		cfg, err := opencode.LoadConfig()
+		if err == nil {
+			client, err := opencode.NewWithConfig(cfg)
+			if err == nil {
+				adv = advisor.NewCachedAdvisor(client, store, cfg.Model, opencode.PromptHash())
+			}
+		}
+	}
+
+	summary, err := companion.ReconcileAccount(
+		ctx,
+		store,
+		previewSource,
+		applyTarget,
+		companion.ReconcileOptions{
+			Provider:          provider,
+			SourceAccount:     account,
+			TargetAccount:     targetAccount,
+			PolicyVersion:     policyVersion,
+			AllowPrivateSync:  allowPrivate,
+			DeclaredSourceVID: sourceVID,
+			AdoptSource:       adoptSource,
+			AdoptTarget:       adoptTarget,
+			DryRun:            dryRun,
+			Now:               s.now().UTC(),
+			Advisor:           adv,
+			WithAdvisor:       adv != nil,
+		},
+	)
+	if err != nil {
+		writeJSONStatus(w, r, http.StatusBadGateway, map[string]any{
+			"error":   err.Error(),
+			"summary": summary,
+		})
+		return
+	}
+
+	writeJSON(w, r, summary)
 }
 
 // bearerAuthorized accepts exactly one well-formed Bearer credential and
