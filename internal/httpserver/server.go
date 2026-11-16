@@ -917,6 +917,7 @@ func (s *Server) handleAutoMatch(w http.ResponseWriter, r *http.Request) {
 	}
 	dryRun := query.Get("dry_run") == "true" || query.Get("dry_run") == "1"
 	finishedOnly := query.Get("finished_only") == "true" || query.Get("finished_only") == "1" || query.Get("finished") == "true" || query.Get("finished") == "1"
+	after := query.Get("after")
 
 	ctx, release, admitted := s.admit(r.Context())
 	if !admitted {
@@ -969,6 +970,7 @@ func (s *Server) handleAutoMatch(w http.ResponseWriter, r *http.Request) {
 		FinishedOnly:  finishedOnly,
 		DryRun:        dryRun,
 		Now:           s.now(),
+		After:         after,
 	})
 	if err != nil {
 		writeJSONStatus(w, r, http.StatusInternalServerError, map[string]any{

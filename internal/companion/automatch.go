@@ -21,14 +21,16 @@ type AutoMatchOptions struct {
 	FinishedOnly  bool
 	DryRun        bool
 	Now           time.Time
+	After         string
 }
 
 // AutoMatchReport summarizes the outcome of an automated matching batch.
 type AutoMatchReport struct {
-	Attempted int             `json:"attempted"`
-	Confirmed int             `json:"confirmed"`
-	Skipped   int             `json:"skipped"`
-	Matches   []AutoMatchItem `json:"matches"`
+	Attempted  int             `json:"attempted"`
+	Confirmed  int             `json:"confirmed"`
+	Skipped    int             `json:"skipped"`
+	Matches    []AutoMatchItem `json:"matches"`
+	NextCursor string          `json:"next_cursor,omitempty"`
 }
 
 // AutoMatchItem represents the result for a single inspected source book.
@@ -110,11 +112,13 @@ func AutoMatchOwned(
 			Now:            opts.Now,
 			FinishedOnly:   opts.FinishedOnly,
 			IncludePrivate: false,
+			After:          opts.After,
 		}
 		pendingReport, err := PendingWorklistOwned(ctx, source, dbPath, pendingOpts, owner)
 		if err != nil {
 			return report, fmt.Errorf("pending worklist failed: %w", err)
 		}
+		report.NextCursor = pendingReport.NextCursor
 		for _, pb := range pendingReport.Books {
 			if strings.HasPrefix(pb.ID, "CB_") {
 				continue // skip imported books
