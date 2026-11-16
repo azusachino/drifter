@@ -115,6 +115,10 @@ func ReconcileAccount(
 
 	// 4. Process each mapping with partial failure isolation (US10)
 	for _, m := range mappings {
+		if ctx.Err() != nil {
+			summary.ErrorCount++
+			break
+		}
 		if opts.DryRun {
 			proposal, err := PreviewSync(ctx, store, source, target, m.Provider, m.SourceAccount, m.BookID, m.TargetAccount, PreviewSyncOptions{
 				PolicyVersion:    opts.PolicyVersion,
@@ -278,8 +282,12 @@ func ReconcileAccount(
 	}
 
 	if !opts.DryRun {
+		// Use a bounded background context so an expired/cancelled reconcile context
+		// never leaves sync_runs stuck in 'in_progress'.
+		finCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		_ = store.UpdateSyncRun(
-			ctx,
+			finCtx,
 			runID,
 			summary.Status,
 			summary.TotalMappings,
@@ -290,6 +298,10 @@ func ReconcileAccount(
 			summary.ErrorCount,
 			finishedAt,
 		)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return summary, err
 	}
 
 	return summary, nil

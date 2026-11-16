@@ -16,7 +16,7 @@ const (
 	jobWorkerFallbackPollInterval = 5 * time.Second
 	jobAutoMatchBatchSize         = 5
 	jobBookStepTimeout            = 75 * time.Second
-	jobReconcileTimeout           = 90 * time.Second
+	jobReconcileTimeout           = 15 * time.Minute
 	jobRecoveryReason             = "interrupted by server restart"
 
 	defaultJobCooldownBase      = 15 * time.Second
@@ -147,7 +147,9 @@ func (s *Server) startJobWorker(serverCtx context.Context) func() {
 	notifyCh := s.ensureJobNotifyCh()
 
 	if store, err := companion.OpenOwnedStore(s.database, s.ownership); err == nil {
-		_, _ = store.RecoverStaleRunningJobs(serverCtx, jobRecoveryReason, s.now().UTC())
+		now := s.now().UTC()
+		_, _ = store.RecoverStaleRunningJobs(serverCtx, jobRecoveryReason, now)
+		_, _ = store.RecoverStaleInProgressSyncRuns(serverCtx, now)
 		_ = store.Close()
 	}
 

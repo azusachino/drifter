@@ -537,6 +537,30 @@ func (s *Store) RecoverStaleRunningJobs(ctx context.Context, reason string, now 
 	return res.RowsAffected()
 }
 
+// RecoverStaleInProgressSyncRuns marks any sync_runs left in status = 'in_progress' as 'failed'
+// (for startup recovery after an interrupted reconcile).
+func (s *Store) RecoverStaleInProgressSyncRuns(ctx context.Context, now time.Time) (int64, error) {
+	release, err := s.writeGuard()
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE sync_runs SET
+		status = 'failed', finished_at = ?
+		WHERE status = 'in_progress'`,
+		now.Format(time.RFC3339),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // RecordAutoMatchAttempt persists a deterministic non-match ('abstained', 'low_confidence',
 // 'no_candidate', 'ambiguous') into auto_match_attempts. Non-deterministic statuses (such as
 // 'error', 'confirmed', 'dry_run') are ignored without error if passed, or rejected if invalid keys.
