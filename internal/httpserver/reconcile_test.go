@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -182,5 +183,56 @@ func TestReconcileSuccessEmptyMappings(t *testing.T) {
 		if summary.ErrorCount != 0 {
 			t.Fatalf("expected 0 errors, got %d", summary.ErrorCount)
 		}
+	}
+}
+
+func TestAutoMatchEndpoint(t *testing.T) {
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	db := reconcileTestDB(t)
+	base := newReconcileTestServer(t, &reconcileMockSource{}, &reconcileMockTarget{}, db, now, "secret-token")
+	auth := map[string]string{"Authorization": "Bearer secret-token"}
+
+	// Unauthorized without bearer
+	res := request(t, base, http.MethodPost, "/api/v1/auto-match", nil, http.NoBody)
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without bearer, got %d", res.StatusCode)
+	}
+
+	// Method not allowed
+	res = request(t, base, http.MethodGet, "/api/v1/auto-match", auth, http.NoBody)
+	if res.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405 for GET, got %d", res.StatusCode)
+	}
+
+	// Invalid min_confidence
+	res = request(t, base, http.MethodPost, "/api/v1/auto-match?min_confidence=1.5", auth, http.NoBody)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for min_confidence > 1, got %d", res.StatusCode)
+	}
+
+	// Successful run with dry_run=true
+	res = request(t, base, http.MethodPost, "/api/v1/auto-match?dry_run=true", auth, http.NoBody)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", res.StatusCode)
+	}
+	var report companion.AutoMatchReport
+	if err := json.NewDecoder(res.Body).Decode(&report); err != nil {
+		t.Fatalf("decode report error: %v", err)
+	}
+}
+
+func TestBearerAuthorizedMappingConfirm(t *testing.T) {
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	db := reconcileTestDB(t)
+	base := newReconcileTestServer(t, &reconcileMockSource{}, &reconcileMockTarget{}, db, now, "secret-token")
+	auth := map[string]string{
+		"Authorization": "Bearer secret-token",
+		"Content-Type":  "application/json",
+	}
+
+	body := []byte(`{"source_account":"default","book_id":"3300189649","target_account":"default","work_id":1011275,"edition_id":0}`)
+	res := request(t, base, http.MethodPost, "/api/v1/mappings/confirm", auth, bytes.NewReader(body))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for bearer authorized mapping confirm, got %d", res.StatusCode)
 	}
 }

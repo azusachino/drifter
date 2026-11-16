@@ -156,6 +156,7 @@ func New(options Options) (*Server, error) {
 		api.Get("/mappings", s.handleMappings)
 		api.Head("/mappings", s.handleMappings)
 		api.Get("/pending", s.handlePending)
+		api.Post("/auto-match", s.handleAutoMatch)
 		api.Post("/mappings/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, false) })
 		api.Post("/mappings/replace", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, true) })
 		api.Delete("/mappings/unlink", s.handleJSONUnlink)
@@ -167,6 +168,10 @@ func New(options Options) (*Server, error) {
 	router.Route("/api/v1", func(v1 chi.Router) {
 		v1.Get("/reading/snapshot", s.handleReadingSnapshot)
 		v1.Get("/reading/changes", s.handleReadingChanges)
+		v1.Post("/auto-match", s.handleAutoMatch)
+		v1.Post("/mappings/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, false) })
+		v1.Post("/mappings/replace", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, true) })
+		v1.Delete("/mappings/unlink", s.handleJSONUnlink)
 		v1.Post("/reconcile", s.handleReconcile)
 	})
 	router.Route("/mappings", func(mappings chi.Router) {
@@ -722,6 +727,7 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 	adoptTarget := query.Get("adopt_target") == "true" || query.Get("adopt_target") == "1"
 	dryRun := query.Get("dry_run") == "true" || query.Get("dry_run") == "1"
 	withAdvisor := query.Get("with_advisor") == "true" || query.Get("with_advisor") == "1"
+	autoMatch := query.Get("auto_match") == "true" || query.Get("auto_match") == "1"
 
 	if adoptSource && adoptTarget {
 		apiError(w, http.StatusBadRequest, "cannot_specify_both_adopt_source_and_adopt_target")
@@ -775,7 +781,7 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var adv advisor.Advisor
-	if withAdvisor {
+	if withAdvisor || autoMatch {
 		cfg, err := opencode.LoadConfig()
 		if err == nil {
 			client, err := opencode.NewWithConfig(cfg)
@@ -783,6 +789,30 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 				adv = advisor.NewCachedAdvisor(client, store, cfg.Model, opencode.PromptHash())
 			}
 		}
+	}
+
+	if autoMatch {
+		minConf := 0.80
+		if raw := query.Get("min_confidence"); raw != "" {
+			if parsed, err := strconv.ParseFloat(raw, 64); err == nil && parsed > 0 && parsed <= 1.0 {
+				minConf = parsed
+			}
+		}
+		days := 90
+		if raw := query.Get("days"); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 1 && parsed <= 36500 {
+				days = parsed
+			}
+		}
+		_, _ = companion.AutoMatchOwned(ctx, store, src, tgt, s.database, s.ownership, adv, companion.AutoMatchOptions{
+			Provider:      provider,
+			SourceAccount: account,
+			TargetAccount: targetAccount,
+			Days:          days,
+			MinConfidence: minConf,
+			Limit:         20,
+			Now:           s.now(),
+		})
 	}
 
 	summary, err := companion.ReconcileAccount(
@@ -814,6 +844,139 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, r, summary)
+}
+
+// handleAutoMatch inspects pending source books and automatically confirms high-confidence
+// matches (either by exact ISBN or LLM advisor resolution meeting min_confidence).
+func (s *Server) handleAutoMatch(w http.ResponseWriter, r *http.Request) {
+	if !readRequestAllowed(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, "POST")
+		return
+	}
+	if !s.bearerAuthorized(r) {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		apiError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	query := r.URL.Query()
+	account := query.Get("account")
+	if account == "" {
+		account = "default"
+	}
+	targetAccount := query.Get("target_account")
+	if targetAccount == "" {
+		targetAccount = "default"
+	}
+	provider := query.Get("provider")
+	if provider == "" {
+		provider = "weread"
+	}
+	if !companion.ValidLabel(provider) || !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
+		apiError(w, http.StatusBadRequest, "invalid_mapping_key")
+		return
+	}
+
+	minConf := 0.80
+	if raw := query.Get("min_confidence"); raw != "" {
+		parsed, err := strconv.ParseFloat(raw, 64)
+		if err != nil || parsed <= 0 || parsed > 1.0 {
+			apiError(w, http.StatusBadRequest, "invalid_min_confidence")
+			return
+		}
+		minConf = parsed
+	}
+
+	days := 90
+	if raw := query.Get("days"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 36500 {
+			apiError(w, http.StatusBadRequest, "invalid_days")
+			return
+		}
+		days = parsed
+	}
+
+	limit := 20
+	if raw := query.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			apiError(w, http.StatusBadRequest, "invalid_limit")
+			return
+		}
+		limit = parsed
+	}
+
+	bookID := query.Get("book_id")
+	if bookID != "" && !companion.ValidBookID(bookID) {
+		apiError(w, http.StatusBadRequest, "invalid_book_id")
+		return
+	}
+	dryRun := query.Get("dry_run") == "true" || query.Get("dry_run") == "1"
+
+	ctx, release, admitted := s.admit(r.Context())
+	if !admitted {
+		apiError(w, http.StatusServiceUnavailable, "provider_operation_busy")
+		return
+	}
+	defer release()
+
+	src, err := s.pendingSource()
+	if err != nil {
+		apiError(w, http.StatusServiceUnavailable, "source_provider_unavailable")
+		return
+	}
+	target, err := s.confirmationTarget()
+	if err != nil {
+		apiError(w, http.StatusServiceUnavailable, "target_provider_unavailable")
+		return
+	}
+
+	store, err := companion.OpenOwnedStore(s.database, s.ownership)
+	if err != nil {
+		apiError(w, http.StatusServiceUnavailable, "mapping_database_unavailable")
+		return
+	}
+	defer store.Close()
+
+	account, targetAccount, err = store.ResolveAccounts(ctx, account, targetAccount)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, "invalid_account")
+		return
+	}
+
+	var adv advisor.Advisor
+	cfg, err := opencode.LoadConfig()
+	if err == nil {
+		client, err := opencode.NewWithConfig(cfg)
+		if err == nil {
+			adv = advisor.NewCachedAdvisor(client, store, cfg.Model, opencode.PromptHash())
+		}
+	}
+
+	report, err := companion.AutoMatchOwned(ctx, store, src, target, s.database, s.ownership, adv, companion.AutoMatchOptions{
+		Provider:      provider,
+		SourceAccount: account,
+		TargetAccount: targetAccount,
+		Days:          days,
+		MinConfidence: minConf,
+		Limit:         limit,
+		BookID:        bookID,
+		DryRun:        dryRun,
+		Now:           s.now(),
+	})
+	if err != nil {
+		writeJSONStatus(w, r, http.StatusInternalServerError, map[string]any{
+			"error":  err.Error(),
+			"report": report,
+		})
+		return
+	}
+
+	writeJSON(w, r, report)
 }
 
 // bearerAuthorized accepts exactly one well-formed Bearer credential and
@@ -938,14 +1101,15 @@ func (s *Server) handleJSONMapping(w http.ResponseWriter, r *http.Request, repla
 		apiError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
-	if !mutationOriginAllowed(w, r) {
+	isBearer := s.bearerAuthorized(r)
+	if !isBearer && !mutationOriginAllowed(w, r) {
 		return
 	}
 	if r.URL.RawQuery != "" {
 		apiError(w, http.StatusBadRequest, "unexpected_query")
 		return
 	}
-	if !validHeaderToken(r, s.token) {
+	if !isBearer && !validHeaderToken(r, s.token) {
 		apiError(w, http.StatusForbidden, "request_rejected")
 		return
 	}
@@ -990,14 +1154,15 @@ func (s *Server) handleJSONUnlink(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
-	if !mutationOriginAllowed(w, r) {
+	isBearer := s.bearerAuthorized(r)
+	if !isBearer && !mutationOriginAllowed(w, r) {
 		return
 	}
 	if r.URL.RawQuery != "" {
 		apiError(w, http.StatusBadRequest, "unexpected_query")
 		return
 	}
-	if !validHeaderToken(r, s.token) {
+	if !isBearer && !validHeaderToken(r, s.token) {
 		apiError(w, http.StatusForbidden, "request_rejected")
 		return
 	}
