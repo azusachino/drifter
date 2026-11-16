@@ -18,6 +18,7 @@ type AutoMatchOptions struct {
 	MinConfidence float64
 	Limit         int
 	BookID        string
+	FinishedOnly  bool
 	DryRun        bool
 	Now           time.Time
 }
@@ -105,8 +106,9 @@ func AutoMatchOwned(
 			SourceAccount:  opts.SourceAccount,
 			TargetAccount:  opts.TargetAccount,
 			Days:           opts.Days,
+			Limit:          opts.Limit,
 			Now:            opts.Now,
-			FinishedOnly:   false,
+			FinishedOnly:   opts.FinishedOnly,
 			IncludePrivate: false,
 		}
 		pendingReport, err := PendingWorklistOwned(ctx, source, dbPath, pendingOpts, owner)

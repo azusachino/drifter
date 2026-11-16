@@ -916,6 +916,7 @@ func (s *Server) handleAutoMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dryRun := query.Get("dry_run") == "true" || query.Get("dry_run") == "1"
+	finishedOnly := query.Get("finished_only") == "true" || query.Get("finished_only") == "1" || query.Get("finished") == "true" || query.Get("finished") == "1"
 
 	ctx, release, admitted := s.admit(r.Context())
 	if !admitted {
@@ -965,6 +966,7 @@ func (s *Server) handleAutoMatch(w http.ResponseWriter, r *http.Request) {
 		MinConfidence: minConf,
 		Limit:         limit,
 		BookID:        bookID,
+		FinishedOnly:  finishedOnly,
 		DryRun:        dryRun,
 		Now:           s.now(),
 	})
@@ -1703,7 +1705,7 @@ func setSecurityHeaders(w http.ResponseWriter) {
 
 func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, error) {
 	for key, values := range query {
-		if key != "account" && key != "target_account" && key != "days" && key != "after" || len(values) != 1 {
+		if key != "account" && key != "target_account" && key != "days" && key != "limit" && key != "finished" && key != "after" || len(values) != 1 {
 			return companion.PendingOptions{}, fmt.Errorf("invalid query")
 		}
 	}
@@ -1716,10 +1718,19 @@ func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, 
 		}
 		days = parsed
 	}
+	limit := 0
+	if raw := query.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			return companion.PendingOptions{}, fmt.Errorf("invalid limit")
+		}
+		limit = parsed
+	}
+	finishedOnly := query.Get("finished") == "true" || query.Get("finished") == "1"
 	if !companion.ValidLabel(account) || !companion.ValidLabel(target) || days < 1 || days > 36500 {
 		return companion.PendingOptions{}, fmt.Errorf("invalid options")
 	}
-	options := companion.PendingOptions{SourceAccount: account, TargetAccount: target, Days: days, After: query.Get("after"), Now: now}
+	options := companion.PendingOptions{SourceAccount: account, TargetAccount: target, Days: days, Limit: limit, FinishedOnly: finishedOnly, After: query.Get("after"), Now: now}
 	if err := companion.ValidatePendingCursor(options); err != nil {
 		return companion.PendingOptions{}, err
 	}
