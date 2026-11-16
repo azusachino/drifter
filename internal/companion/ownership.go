@@ -31,7 +31,9 @@ type DatabaseOwnership struct {
 
 	// Active scopes hold a read lock. Close rejects new scopes, then waits for
 	// existing scopes to finish before releasing the OS lock.
+	// Concurrent in-process writes are serialized by writeMu.
 	mu        sync.RWMutex
+	writeMu   sync.Mutex
 	closing   atomic.Bool
 	closed    bool
 	closeOnce sync.Once
@@ -182,19 +184,31 @@ func (owner *DatabaseOwnership) acquire(path string) (func(), error) {
 		owner.mu.RUnlock()
 		return nil, fmt.Errorf("database ownership capability is no longer active")
 	}
-	return owner.mu.RUnlock, nil
+	owner.writeMu.Lock()
+	if owner.closing.Load() || owner.closed {
+		owner.writeMu.Unlock()
+		owner.mu.RUnlock()
+		return nil, fmt.Errorf("database ownership capability is no longer active")
+	}
+	return func() {
+		owner.writeMu.Unlock()
+		owner.mu.RUnlock()
+	}, nil
 }
 
 func (owner *DatabaseOwnership) owns(path string) bool {
+	if owner == nil {
+		return false
+	}
 	canonical, err := canonicalDatabasePath(path, false)
 	if err != nil {
 		return false
 	}
-	release, err := owner.acquire(canonical)
-	if err != nil {
+	owner.mu.RLock()
+	defer owner.mu.RUnlock()
+	if owner.closing.Load() || owner.closed || canonical != owner.path {
 		return false
 	}
-	release()
 	return true
 }
 

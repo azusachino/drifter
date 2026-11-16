@@ -114,3 +114,76 @@ test('mapping interface remains usable at a narrow viewport', async ({ page }) =
   const width = await page.locator('html').evaluate((element) => element.scrollWidth);
   expect(width).toBe(390);
 });
+
+test('sync jobs panel submits sync recent and lifetime forms and cancels active jobs', async ({ page, request }) => {
+  const scriptRequests: string[] = [];
+  page.on('request', (requestEvent) => {
+    if (requestEvent.resourceType() === 'script') scriptRequests.push(requestEvent.url());
+  });
+
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Drifter mapping interface' })).toBeVisible();
+
+  // Navigate to Sync & Health tab
+  await page.getByText('Sync & Health').click();
+  await expect(page.getByRole('heading', { name: 'Trigger background sync' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Sync jobs' })).toBeVisible();
+
+  // Form 1: Trigger Sync Recent (7 days)
+  const recentForm = page.getByRole('form', { name: 'Sync Recent' });
+  await expect(recentForm).toBeVisible();
+  const [recentResponse] = await Promise.all([
+    page.waitForResponse((res) => res.request().method() === 'POST' && res.url().includes('/jobs/sync')),
+    recentForm.getByRole('button', { name: 'Sync Recent (7 days)' }).click(),
+  ]);
+  expect(recentResponse.status()).toBe(303);
+  expect(recentResponse.request().headers().origin).toBe(new URL(process.env.E2E_BASE_URL!).origin);
+  await expect(page.getByRole('status')).toHaveText(/Background sync job started|Matching sync job already queued/);
+
+  // Switch back to Sync & Health view to inspect the job table
+  await page.getByText('Sync & Health').click();
+  const jobsTable = page.getByRole('table');
+  await expect(jobsTable).toBeVisible();
+  const firstRow = page.getByRole('listitem', { name: 'Sync job 1' });
+  await expect(firstRow).toBeVisible();
+  await expect(firstRow).toContainText('recent');
+  await expect(firstRow).toContainText('match_and_reconcile');
+
+  // Verify zero scripts executed
+  expect(scriptRequests).toEqual([]);
+
+  // Form 2: Trigger Sync Lifetime with finished checkbox
+  const lifetimeForm = page.getByRole('form', { name: 'Sync Lifetime' });
+  await expect(lifetimeForm).toBeVisible();
+  await lifetimeForm.getByLabel('Finished only').check();
+  const [lifetimeResponse] = await Promise.all([
+    page.waitForResponse((res) => res.request().method() === 'POST' && res.url().includes('/jobs/sync')),
+    lifetimeForm.getByRole('button', { name: 'Sync Lifetime' }).click(),
+  ]);
+  expect(lifetimeResponse.status()).toBe(303);
+  await expect(page.getByRole('status')).toHaveText(/Background sync job started|Matching sync job already queued/);
+
+  // Switch back to Sync & Health view
+  await page.getByText('Sync & Health').click();
+  const secondRow = page.getByRole('listitem', { name: 'Sync job 2' });
+  await expect(secondRow).toBeVisible();
+  await expect(secondRow).toContainText('lifetime');
+
+  // Cancel form: Cancel an active or queued job if cancel button is present
+  const cancelBtn = page.getByRole('button', { name: 'Cancel' }).first();
+  if (await cancelBtn.isVisible()) {
+    const [cancelResponse] = await Promise.all([
+      page.waitForResponse((res) => res.request().method() === 'POST' && res.url().includes('/jobs/cancel')),
+      cancelBtn.click(),
+    ]);
+    expect(cancelResponse.status()).toBe(303);
+    await expect(page.getByRole('status')).toHaveText('Sync job cancelled.');
+  }
+
+  // Double check status JSON reflects the latest sync job
+  const statusRes = await request.get(`${process.env.E2E_BASE_URL}/api/status`);
+  expect(statusRes.ok()).toBeTruthy();
+  const statusData = await statusRes.json();
+  expect(statusData.latest_job).not.toBeNull();
+  expect(statusData.latest_job.scope).toBe('lifetime');
+});

@@ -18,6 +18,21 @@ import (
 	"github.com/azusachino/drifter/internal/advisor"
 )
 
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type responseFormat struct {
+	Type string `json:"type"`
+}
+
+type chatRequest struct {
+	Model          string         `json:"model"`
+	Messages       []chatMessage  `json:"messages"`
+	ResponseFormat responseFormat `json:"response_format"`
+}
+
 // testServer spins up an httptest server that responds with the given handler
 // and returns a client pointed at it.
 func testServer(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Server) {
@@ -129,6 +144,61 @@ func TestExplainConflictRateLimited(t *testing.T) {
 	if !strings.Contains(err.Error(), "HTTP 429") || !strings.Contains(err.Error(), "slow down") {
 		t.Fatalf("error = %v, want status and detail", err)
 	}
+}
+
+func TestRateLimitedRetryAfterParsing(t *testing.T) {
+	t.Run("integer seconds header extracted via RateLimitError", func(t *testing.T) {
+		client, _ := testServer(t, func(rw http.ResponseWriter, r *http.Request) {
+			rw.Header().Set("Retry-After", "45")
+			rw.WriteHeader(http.StatusTooManyRequests)
+			io.WriteString(rw, "quota exceeded")
+		})
+		_, err := client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{Title: "T", Author: "A"})
+		if !errors.Is(err, advisor.ErrRateLimited) || !errors.Is(err, ErrRateLimited) {
+			t.Fatalf("error = %v, want advisor.ErrRateLimited", err)
+		}
+		var rle *advisor.RateLimitError
+		if !errors.As(err, &rle) {
+			t.Fatalf("expected *advisor.RateLimitError, got %T (%v)", err, err)
+		}
+		if rle.RetryAfter != 45*time.Second {
+			t.Fatalf("RetryAfter = %v, want 45s", rle.RetryAfter)
+		}
+		if rle.Detail != "quota exceeded" {
+			t.Fatalf("Detail = %q, want %q", rle.Detail, "quota exceeded")
+		}
+	})
+
+	t.Run("parseRetryAfter integer, HTTP date, and cap", func(t *testing.T) {
+		now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+		if got := parseRetryAfter("", now); got != 0 {
+			t.Fatalf("empty = %v, want 0", got)
+		}
+		if got := parseRetryAfter("-5", now); got != 0 {
+			t.Fatalf("negative = %v, want 0", got)
+		}
+		if got := parseRetryAfter("30", now); got != 30*time.Second {
+			t.Fatalf("30 = %v, want 30s", got)
+		}
+		if got := parseRetryAfter("14400", now); got != 4*time.Hour {
+			t.Fatalf("14400 = %v, want 4h", got)
+		}
+		if got := parseRetryAfter("99999", now); got != maxRetryAfter {
+			t.Fatalf("99999 = %v, want capped %v", got, maxRetryAfter)
+		}
+		futureDate := now.Add(90 * time.Second).Format(http.TimeFormat)
+		if got := parseRetryAfter(futureDate, now); got != 90*time.Second {
+			t.Fatalf("HTTP date = %v, want 90s", got)
+		}
+		farFutureDate := now.Add(8 * time.Hour).Format(http.TimeFormat)
+		if got := parseRetryAfter(farFutureDate, now); got != maxRetryAfter {
+			t.Fatalf("far HTTP date = %v, want capped %v", got, maxRetryAfter)
+		}
+		pastDate := now.Add(-10 * time.Second).Format(http.TimeFormat)
+		if got := parseRetryAfter(pastDate, now); got != 0 {
+			t.Fatalf("past HTTP date = %v, want 0", got)
+		}
+	})
 }
 
 func TestExplainConflictServerError(t *testing.T) {
@@ -246,7 +316,7 @@ func TestLoadConfigPrecedence(t *testing.T) {
 	t.Setenv("DRIFTER_CONFIG", filepath.Join(t.TempDir(), "absent.toml"))
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Run("defaults", func(t *testing.T) {
-		for _, key := range []string{"DRIFTER_ADVISOR_URL", "MAGPIE_BASE_URL", "MAGPIE_URL", "OPENCODE_BASE_URL", "MAGPIE_GATEWAY_KEY", "OPENCODE_API_KEY", "DRIFTER_ADVISOR_KEY", "DRIFTER_ADVISOR_MODEL", DefaultTimeoutEnv} {
+		for _, key := range []string{"DRIFTER_ADVISOR_URL", "MAGPIE_BASE_URL", "MAGPIE_URL", "OPENCODE_BASE_URL", "MAGPIE_GATEWAY_KEY", "OPENCODE_API_KEY", "DRIFTER_ADVISOR_KEY", "DRIFTER_ADVISOR_MODELS", "DRIFTER_ADVISOR_MODEL", DefaultTimeoutEnv} {
 			t.Setenv(key, "")
 		}
 		t.Setenv("MAGPIE_GATEWAY_KEY", "k")
@@ -308,6 +378,7 @@ func TestLoadConfigPrecedence(t *testing.T) {
 
 	t.Run("model override", func(t *testing.T) {
 		t.Setenv("MAGPIE_GATEWAY_KEY", "k")
+		t.Setenv("DRIFTER_ADVISOR_MODELS", "")
 		t.Setenv("DRIFTER_ADVISOR_MODEL", "custom/model")
 		cfg, err := LoadConfig()
 		if err != nil {
@@ -315,6 +386,41 @@ func TestLoadConfigPrecedence(t *testing.T) {
 		}
 		if cfg.Model != "custom/model" {
 			t.Errorf("model = %q", cfg.Model)
+		}
+		if len(cfg.Models) != 1 || cfg.Models[0] != "custom/model" {
+			t.Errorf("models = %v, want [custom/model]", cfg.Models)
+		}
+	})
+
+	t.Run("comma-separated models and precedence", func(t *testing.T) {
+		t.Setenv("MAGPIE_GATEWAY_KEY", "k")
+		t.Setenv("DRIFTER_ADVISOR_MODELS", " model-a , model-b , model-a ")
+		t.Setenv("DRIFTER_ADVISOR_MODEL", "model-b, model-c")
+		cfg, err := LoadConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Model != "model-a" {
+			t.Errorf("primary Model = %q, want model-a", cfg.Model)
+		}
+		want := []string{"model-a", "model-b", "model-c"}
+		if len(cfg.Models) != len(want) {
+			t.Fatalf("Models = %v, want %v", cfg.Models, want)
+		}
+		for i := range want {
+			if cfg.Models[i] != want[i] {
+				t.Errorf("Models[%d] = %q, want %q", i, cfg.Models[i], want[i])
+			}
+		}
+
+		t.Setenv("DRIFTER_ADVISOR_MODELS", "")
+		t.Setenv("DRIFTER_ADVISOR_MODEL", "primary/m, fallback/m")
+		cfg2, err := LoadConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg2.Model != "primary/m" || len(cfg2.Models) != 2 || cfg2.Models[1] != "fallback/m" {
+			t.Errorf("comma-separated DRIFTER_ADVISOR_MODEL: Model=%q Models=%v", cfg2.Model, cfg2.Models)
 		}
 	})
 
@@ -354,7 +460,7 @@ func TestLoadConfigPrecedence(t *testing.T) {
 	})
 
 	t.Run("settings fallback", func(t *testing.T) {
-		for _, key := range []string{"DRIFTER_ADVISOR_URL", "MAGPIE_BASE_URL", "MAGPIE_URL", "OPENCODE_BASE_URL", "DRIFTER_ADVISOR_MODEL", DefaultTimeoutEnv} {
+		for _, key := range []string{"DRIFTER_ADVISOR_URL", "MAGPIE_BASE_URL", "MAGPIE_URL", "OPENCODE_BASE_URL", "DRIFTER_ADVISOR_MODELS", "DRIFTER_ADVISOR_MODEL", DefaultTimeoutEnv} {
 			t.Setenv(key, "")
 		}
 		t.Setenv("MAGPIE_GATEWAY_KEY", "k")
@@ -379,7 +485,7 @@ func TestLoadConfigPrecedence(t *testing.T) {
 	})
 
 	t.Run("load config from file path", func(t *testing.T) {
-		for _, key := range []string{"DRIFTER_ADVISOR_URL", "MAGPIE_BASE_URL", "MAGPIE_URL", "OPENCODE_BASE_URL", "DRIFTER_ADVISOR_MODEL", DefaultTimeoutEnv} {
+		for _, key := range []string{"DRIFTER_ADVISOR_URL", "MAGPIE_BASE_URL", "MAGPIE_URL", "OPENCODE_BASE_URL", "DRIFTER_ADVISOR_MODELS", "DRIFTER_ADVISOR_MODEL", DefaultTimeoutEnv} {
 			t.Setenv(key, "")
 		}
 		t.Setenv("MAGPIE_GATEWAY_KEY", "k")
@@ -423,6 +529,9 @@ func TestStripMarkdownFence(t *testing.T) {
 		{"no closing fence", "```json\n{\"a\":1}", `{"a":1}`},
 		{"single line fence", "```json {\"a\":1}```", `{"a":1}`},
 		{"single line bare fence", "``` {\"a\":1} ```", `{"a":1}`},
+		{"trailing im_end", "{\"a\":1}<|im_end|>", `{"a":1}`},
+		{"trailing im_end with whitespace", "{\"a\":1}\n<|im_end|>\n", `{"a":1}`},
+		{"fence with trailing im_end", "```json\n{\"a\":1}\n```<|im_end|>", `{"a":1}`},
 		{"empty", "", ""},
 	}
 	for _, tc := range cases {
@@ -432,6 +541,23 @@ func TestStripMarkdownFence(t *testing.T) {
 				t.Errorf("stripMarkdownFence(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestResolveOriginalWorkTrailingImEnd(t *testing.T) {
+	client, _ := testServer(t, func(rw http.ResponseWriter, r *http.Request) {
+		writeCompletion(t, rw, `{"original_title":"Klara and the Sun","original_author":"Kazuo Ishiguro","language":"English","confidence":0.95,"abstained":false,"rationale":"Matched English original."}<|im_end|>`)
+	})
+	resp, err := client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{
+		Title:      "克拉拉与太阳",
+		Author:     "石黑一雄",
+		Translator: "宋佥",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error parsing JSON with trailing <|im_end|>: %v", err)
+	}
+	if resp.OriginalTitle != "Klara and the Sun" || resp.OriginalAuthor != "Kazuo Ishiguro" {
+		t.Fatalf("unexpected response: %+v", resp)
 	}
 }
 
@@ -754,6 +880,237 @@ func writeCompletion(t *testing.T, rw http.ResponseWriter, content string) {
 	if err := json.NewEncoder(rw).Encode(payload); err != nil {
 		t.Errorf("encode completion: %v", err)
 	}
+}
+
+func TestModelFallbackChainAndCooldown(t *testing.T) {
+	t.Run("immediate fallback from 429 model A to model B and subsequent call skips cooled-down model A", func(t *testing.T) {
+		now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+		var requestedModels []string
+
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			var body chatRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode: %v", err)
+			}
+			requestedModels = append(requestedModels, body.Model)
+
+			if body.Model == "model-a" {
+				rw.Header().Set("Retry-After", "45")
+				rw.WriteHeader(http.StatusTooManyRequests)
+				io.WriteString(rw, "model-a quota exceeded")
+				return
+			}
+			writeCompletion(t, rw, `{"original_title":"Klara and the Sun","original_author":"Kazuo Ishiguro","language":"English","confidence":0.95,"abstained":false,"rationale":"Matched via fallback model B."}`)
+		}))
+		t.Cleanup(server.Close)
+
+		client, err := NewWithConfig(Config{
+			BaseURL: server.URL + "/v1",
+			APIKey:  "test-key",
+			Models:  []string{"model-a", "model-b"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.now = func() time.Time { return now }
+
+		// Call 1: model-a returns 429 -> immediately falls back to model-b in the same call
+		resp1, err := client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{
+			Title:  "克拉拉与太阳",
+			Author: "石黑一雄",
+		})
+		if err != nil {
+			t.Fatalf("Call 1 unexpected error: %v", err)
+		}
+		if resp1.OriginalTitle != "Klara and the Sun" {
+			t.Fatalf("Call 1 unexpected response: %+v", resp1)
+		}
+		if len(requestedModels) != 2 || requestedModels[0] != "model-a" || requestedModels[1] != "model-b" {
+			t.Fatalf("Call 1 requestedModels = %v, want [model-a model-b]", requestedModels)
+		}
+
+		// Call 2 (10s later, still within 45s cooldown of model-a): skips model-a and goes straight to model-b
+		now = now.Add(10 * time.Second)
+		requestedModels = nil
+		resp2, err := client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{
+			Title:  "克拉拉与太阳",
+			Author: "石黑一雄",
+		})
+		if err != nil {
+			t.Fatalf("Call 2 unexpected error: %v", err)
+		}
+		if resp2.OriginalTitle != "Klara and the Sun" {
+			t.Fatalf("Call 2 unexpected response: %+v", resp2)
+		}
+		if len(requestedModels) != 1 || requestedModels[0] != "model-b" {
+			t.Fatalf("Call 2 requestedModels = %v, want [model-b] (model-a skipped while in cooldown)", requestedModels)
+		}
+
+		// Call 3 (after 45s cooldown expires): tries model-a again first
+		now = now.Add(40 * time.Second)
+		requestedModels = nil
+		_, err = client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{
+			Title:  "克拉拉与太阳",
+			Author: "石黑一雄",
+		})
+		if err != nil {
+			t.Fatalf("Call 3 unexpected error: %v", err)
+		}
+		if len(requestedModels) != 2 || requestedModels[0] != "model-a" || requestedModels[1] != "model-b" {
+			t.Fatalf("Call 3 requestedModels = %v, want [model-a model-b] after cooldown expiry", requestedModels)
+		}
+	})
+
+	t.Run("all models 429 or overloaded returns RateLimitError with earliest remaining RetryAfter", func(t *testing.T) {
+		now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+		var requestedModels []string
+
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			var body chatRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode: %v", err)
+			}
+			requestedModels = append(requestedModels, body.Model)
+
+			switch body.Model {
+			case "model-a":
+				rw.Header().Set("Retry-After", "90")
+				rw.WriteHeader(http.StatusTooManyRequests)
+				io.WriteString(rw, "model-a rate limited 90s")
+			case "model-b":
+				rw.Header().Set("Retry-After", "25")
+				rw.WriteHeader(http.StatusServiceUnavailable)
+				io.WriteString(rw, "model-b overloaded 25s")
+			case "model-c":
+				// No Retry-After header -> defaults to 60s cooldown
+				rw.WriteHeader(529)
+				io.WriteString(rw, "model-c site overloaded")
+			}
+		}))
+		t.Cleanup(server.Close)
+
+		client, err := NewWithConfig(Config{
+			BaseURL: server.URL + "/v1",
+			APIKey:  "test-key",
+			Models:  []string{"model-a", "model-b", "model-c"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.now = func() time.Time { return now }
+
+		_, err = client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{
+			Title:  "Title",
+			Author: "Author",
+		})
+		if !errors.Is(err, ErrRateLimited) {
+			t.Fatalf("error = %v, want ErrRateLimited", err)
+		}
+		var rle *advisor.RateLimitError
+		if !errors.As(err, &rle) {
+			t.Fatalf("expected *advisor.RateLimitError, got %T (%v)", err, err)
+		}
+		if rle.RetryAfter != 25*time.Second {
+			t.Fatalf("RetryAfter = %v, want earliest remaining 25s", rle.RetryAfter)
+		}
+		if rle.Detail != "model-c site overloaded" {
+			t.Fatalf("Detail = %q, want last detail %q", rle.Detail, "model-c site overloaded")
+		}
+		if len(requestedModels) != 3 {
+			t.Fatalf("requestedModels = %v, want all 3 tried", requestedModels)
+		}
+
+		// Subsequent call 5s later while all 3 models are still in cooldown:
+		// makes 0 HTTP requests and returns earliest remaining (25s - 5s = 20s)
+		now = now.Add(5 * time.Second)
+		requestedModels = nil
+		_, err = client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{
+			Title:  "Title",
+			Author: "Author",
+		})
+		if !errors.As(err, &rle) {
+			t.Fatalf("expected *advisor.RateLimitError, got %T (%v)", err, err)
+		}
+		if len(requestedModels) != 0 {
+			t.Fatalf("expected 0 HTTP requests while all models in cooldown, got %v", requestedModels)
+		}
+		if rle.RetryAfter != 20*time.Second {
+			t.Fatalf("RetryAfter = %v, want 20s remaining", rle.RetryAfter)
+		}
+	})
+
+	t.Run("consecutive 429 without Retry-After escalates 1m -> 5m -> 15m -> 1h -> 5h and resets on 200 OK", func(t *testing.T) {
+		now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+		shouldSucceed := false
+
+		server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			if shouldSucceed {
+				writeCompletion(t, rw, `{"original_title":"Klara and the Sun","original_author":"Kazuo Ishiguro","language":"English","confidence":0.95,"abstained":false,"rationale":"Recovered."}`)
+				return
+			}
+			rw.WriteHeader(http.StatusTooManyRequests)
+			io.WriteString(rw, "rolling window quota")
+		}))
+		t.Cleanup(server.Close)
+
+		client, err := NewWithConfig(Config{
+			BaseURL: server.URL + "/v1",
+			APIKey:  "test-key",
+			Models:  []string{"model-a"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.now = func() time.Time { return now }
+
+		wantSchedule := []time.Duration{
+			1 * time.Minute,
+			5 * time.Minute,
+			15 * time.Minute,
+			1 * time.Hour,
+			5 * time.Hour,
+			5 * time.Hour, // capped at 5h on further strikes
+		}
+
+		for i, wantCooldown := range wantSchedule {
+			_, err := client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{
+				Title:  "Title",
+				Author: "Author",
+			})
+			var rle *advisor.RateLimitError
+			if !errors.As(err, &rle) {
+				t.Fatalf("strike %d: expected *advisor.RateLimitError, got %T (%v)", i+1, err, err)
+			}
+			if rle.RetryAfter != wantCooldown {
+				t.Fatalf("strike %d: RetryAfter = %v, want %v", i+1, rle.RetryAfter, wantCooldown)
+			}
+			// Advance past the cooldown so the next call hits the upstream again.
+			now = now.Add(wantCooldown + time.Second)
+		}
+
+		// Now let model-a succeed (200 OK) -> resets strike counter.
+		shouldSucceed = true
+		if _, err := client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{
+			Title:  "Title",
+			Author: "Author",
+		}); err != nil {
+			t.Fatalf("expected 200 OK recovery, got: %v", err)
+		}
+
+		// Next 429 without Retry-After must start back at 1m (strike 1).
+		shouldSucceed = false
+		_, err = client.ResolveOriginalWork(context.Background(), advisor.OriginalWorkRequest{
+			Title:  "Title",
+			Author: "Author",
+		})
+		var rle *advisor.RateLimitError
+		if !errors.As(err, &rle) {
+			t.Fatalf("post-reset strike: expected *advisor.RateLimitError, got %T (%v)", err, err)
+		}
+		if rle.RetryAfter != 1*time.Minute {
+			t.Fatalf("post-reset strike: RetryAfter = %v, want 1m", rle.RetryAfter)
+		}
+	})
 }
 
 func TestLiveAdvisorFreeModel(t *testing.T) {

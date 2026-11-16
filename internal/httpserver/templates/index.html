@@ -662,6 +662,63 @@ button.danger:hover {
   border: 1px solid var(--success-border);
 }
 
+.badge-danger {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  border: 1px solid var(--danger-border);
+}
+
+.badge-neutral {
+  background: var(--bg-surface-elevated);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.sync-job-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.sync-form-card {
+  flex: 1;
+  min-width: 260px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+}
+
+.sync-form-card h3 {
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.sync-form-card p {
+  margin: 0 0 0.85rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.checkbox-label {
+  display: flex;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+  margin-bottom: 0.75rem;
+  user-select: none;
+}
+
+.checkbox-label input[type="checkbox"] {
+  margin: 0;
+  width: auto;
+  cursor: pointer;
+}
+
 /* Mobile Responsiveness */
 @media (max-width: 768px) {
   .nav-tab-bar {
@@ -1003,6 +1060,109 @@ button.danger:hover {
     </div>
   </section>
   {{end}}
+
+  <section class="panel">
+    <div class="panel-header">
+      <h2>Trigger background sync</h2>
+    </div>
+    <div class="panel-body">
+      <div class="sync-job-actions">
+        <div class="sync-form-card">
+          <h3>Recent Reading Status</h3>
+          <p>Scan books opened within the past 7 days and reconcile status to Hardcover.</p>
+          <form aria-label="Sync Recent" action="/jobs/sync" method="post">
+            <input type="hidden" name="csrf_token" value="{{.Token}}">
+            <input type="hidden" name="scope" value="recent">
+            <button class="primary" type="submit">Sync Recent (7 days)</button>
+          </form>
+        </div>
+        <div class="sync-form-card">
+          <h3>Lifetime Library Sync</h3>
+          <p>Scan full reading history across your entire WeRead shelf and match against Hardcover.</p>
+          <form aria-label="Sync Lifetime" action="/jobs/sync" method="post">
+            <input type="hidden" name="csrf_token" value="{{.Token}}">
+            <input type="hidden" name="scope" value="lifetime">
+            <label class="checkbox-label">
+              <input type="checkbox" name="finished" value="true">
+              <span>Finished only</span>
+            </label>
+            <button class="primary" type="submit">Sync Lifetime</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-header">
+      <h2>Sync jobs</h2>
+      <span class="badge badge-primary">{{len .Jobs}} jobs</span>
+    </div>
+    <div class="panel-body table-panel-body">
+    {{if .Jobs}}
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th style="width: 8%;">ID</th>
+            <th style="width: 14%;">Scope</th>
+            <th style="width: 18%;">Mode</th>
+            <th style="width: 14%;">Status</th>
+            <th style="width: 22%;">Progress</th>
+            <th style="width: 14%;">Time</th>
+            <th style="width: 10%; text-align: right;">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+        {{range .Jobs}}
+          <tr role="listitem" aria-label="Sync job {{.ID}}">
+            <td><strong>#{{.ID}}</strong></td>
+            <td><code>{{.Scope}}</code></td>
+            <td><code>{{.Mode}}</code></td>
+            <td>
+              {{if or (eq .Status "completed") (eq .Status "completed_with_errors")}}
+                <span class="badge badge-success">{{.Status}}</span>
+              {{else if or (eq .Status "running") (eq .Status "queued")}}
+                <span class="badge badge-primary">{{.Status}}</span>
+              {{else if eq .Status "failed"}}
+                <span class="badge badge-danger">{{.Status}}</span>
+              {{else}}
+                <span class="badge badge-neutral">{{.Status}}</span>
+              {{end}}
+            </td>
+            <td>
+              <div>{{.ProcessedCount}} / {{.TotalEstimated}}</div>
+              <div style="font-size:0.75rem; color:var(--text-muted);">
+                {{.ConfirmedCount}} confirmed, {{.SkippedCount}} skipped{{if gt .ErrorCount 0}}, {{.ErrorCount}} errors{{end}}
+              </div>
+            </td>
+            <td>
+              <div style="font-size:0.75rem; color:var(--text-muted);">
+                Created: {{.CreatedAt.Format "15:04:05"}}
+                {{if .FinishedAt}}<br>Finished: {{.FinishedAt.Format "15:04:05"}}{{end}}
+              </div>
+            </td>
+            <td style="text-align: right;">
+              {{if or (eq .Status "queued") (eq .Status "running")}}
+                <form aria-label="Cancel job {{.ID}}" action="/jobs/cancel" method="post" style="display:inline-block; margin:0;">
+                  <input type="hidden" name="csrf_token" value="{{$.Token}}">
+                  <input type="hidden" name="job_id" value="{{.ID}}">
+                  <button class="danger action-btn" type="submit">Cancel</button>
+                </form>
+              {{else}}
+                &mdash;
+              {{end}}
+            </td>
+          </tr>
+        {{end}}
+        </tbody>
+      </table>
+    {{else}}
+      <div class="empty-state">
+        <p>No sync jobs recorded yet.</p>
+      </div>
+    {{end}}
+    </div>
+  </section>
 </div>
 
 </main>

@@ -76,8 +76,8 @@ func TestStoreVersionsNewAndLegacyDatabases(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if schemaVersion(t, s.db) != 8 {
-					t.Fatal("database not upgraded to version 8")
+				if schemaVersion(t, s.db) != 9 {
+					t.Fatal("database not upgraded to version 9")
 				}
 				rows, err := s.List(context.Background())
 				if err != nil || !reflect.DeepEqual(mappingIdentities(rows), want) {
@@ -92,7 +92,7 @@ func TestStoreVersionsNewAndLegacyDatabases(t *testing.T) {
 }
 
 func TestStoreRefusesUnsupportedVersionsWithoutCreatingSchema(t *testing.T) {
-	for _, version := range []int{9, -1} {
+	for _, version := range []int{10, -1} {
 		path := filepath.Join(t.TempDir(), "mappings.sqlite")
 		db := fixtureDB(t, path)
 		if _, err := db.Exec("PRAGMA user_version = " + strconv.Itoa(version)); err != nil {
@@ -199,8 +199,8 @@ PRAGMA user_version = 3;
 	}
 	defer s.Close()
 
-	if schemaVersion(t, s.db) != 8 {
-		t.Fatalf("expected version 8, got %d", schemaVersion(t, s.db))
+	if schemaVersion(t, s.db) != 9 {
+		t.Fatalf("expected version 9, got %d", schemaVersion(t, s.db))
 	}
 
 	// Verify existing data preserved
@@ -320,8 +320,8 @@ PRAGMA user_version = 4;
 	}
 	defer s.Close()
 
-	if schemaVersion(t, s.db) != 8 {
-		t.Fatalf("expected version 8, got %d", schemaVersion(t, s.db))
+	if schemaVersion(t, s.db) != 9 {
+		t.Fatalf("expected version 9, got %d", schemaVersion(t, s.db))
 	}
 
 	// Verify v4 baseline is preserved
@@ -467,8 +467,8 @@ PRAGMA user_version = 5;
 	}
 	defer s.Close()
 
-	if schemaVersion(t, s.db) != 8 {
-		t.Fatalf("expected version 8, got %d", schemaVersion(t, s.db))
+	if schemaVersion(t, s.db) != 9 {
+		t.Fatalf("expected version 9, got %d", schemaVersion(t, s.db))
 	}
 
 	// Verify v6 sync_runs and sync_holds work
@@ -540,8 +540,8 @@ PRAGMA user_version = 6;
 		t.Fatalf("failed to open store from v6: %v", err)
 	}
 	defer s.Close()
-	if schemaVersion(t, s.db) != 8 {
-		t.Fatalf("expected version 8, got %d", schemaVersion(t, s.db))
+	if schemaVersion(t, s.db) != 9 {
+		t.Fatalf("expected version 9, got %d", schemaVersion(t, s.db))
 	}
 	rows, err := s.List(context.Background())
 	if err != nil || len(rows) != 1 || mappingIdentity(rows[0]) != mapping {
@@ -591,8 +591,8 @@ PRAGMA user_version = 7;
 		t.Fatalf("failed to open store from v7: %v", err)
 	}
 	defer s.Close()
-	if schemaVersion(t, s.db) != 8 {
-		t.Fatalf("expected version 8, got %d", schemaVersion(t, s.db))
+	if schemaVersion(t, s.db) != 9 {
+		t.Fatalf("expected version 9, got %d", schemaVersion(t, s.db))
 	}
 
 	ctx := context.Background()
@@ -629,4 +629,51 @@ func TestAdvisorCacheEntryOlderThanNotBeforeIsAMiss(t *testing.T) {
 	if got, err := s.GetAdvisorCache(ctx, "k", created.Add(time.Hour)); err != nil || got != "" {
 		t.Fatalf("entry older than notBefore must miss, got %q, %v", got, err)
 	}
+}
+
+func TestSyncJobsAndAutoMatchAttemptsMigrateFromVersionEight(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mappings.sqlite")
+	db := fixtureDB(t, path)
+	v8Schema := `
+CREATE TABLE mappings (
+	provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL,
+	target_account TEXT NOT NULL, work_id INTEGER NOT NULL CHECK(work_id > 0),
+	edition_id INTEGER NOT NULL CHECK(edition_id >= 0), source_title TEXT NOT NULL, source_isbn TEXT NOT NULL,
+	created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY(provider, source_account, book_id, target_account));
+CREATE TABLE decisions (provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL, target_account TEXT NOT NULL, kind TEXT NOT NULL, PRIMARY KEY(provider, source_account, book_id, target_account));
+CREATE TABLE account_fingerprints (provider TEXT NOT NULL, account TEXT NOT NULL, fingerprint TEXT NOT NULL, created_at TEXT NOT NULL, last_verified_at TEXT NOT NULL, PRIMARY KEY(provider, account));
+CREATE TABLE status_baselines (provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL, target_account TEXT NOT NULL, work_id INTEGER NOT NULL, edition_id INTEGER NOT NULL, source_status_id INTEGER NOT NULL, target_status_id INTEGER NOT NULL, policy_version TEXT NOT NULL, source_fingerprint TEXT NOT NULL, target_fingerprint TEXT NOT NULL, last_synced_at TEXT NOT NULL, PRIMARY KEY(provider, source_account, book_id, target_account));
+CREATE TABLE target_authorities (target_account TEXT NOT NULL, work_id INTEGER NOT NULL, authorized_provider TEXT NOT NULL, authorized_account TEXT NOT NULL, authorized_book_id TEXT NOT NULL, policy_version TEXT NOT NULL, privacy_mode TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(target_account, work_id));
+CREATE TABLE sync_intents (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL, target_account TEXT NOT NULL, work_id INTEGER NOT NULL, edition_id INTEGER NOT NULL, proposed_status_id INTEGER NOT NULL, policy_version TEXT NOT NULL, source_fingerprint TEXT NOT NULL, target_fingerprint TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE sync_receipts (id INTEGER PRIMARY KEY AUTOINCREMENT, intent_id INTEGER NOT NULL UNIQUE, provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL, target_account TEXT NOT NULL, work_id INTEGER NOT NULL, edition_id INTEGER NOT NULL, target_status_id INTEGER NOT NULL, applied_at TEXT NOT NULL);
+CREATE TABLE sync_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, source_account TEXT NOT NULL, target_account TEXT NOT NULL, policy_version TEXT NOT NULL, status TEXT NOT NULL, total_count INTEGER NOT NULL, applied_count INTEGER NOT NULL, noop_count INTEGER NOT NULL, conflict_count INTEGER NOT NULL, hold_count INTEGER NOT NULL, error_count INTEGER NOT NULL, started_at TEXT NOT NULL, finished_at TEXT NOT NULL);
+CREATE TABLE sync_holds (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, provider TEXT NOT NULL, source_account TEXT NOT NULL, book_id TEXT NOT NULL, target_account TEXT NOT NULL, work_id INTEGER NOT NULL, reason TEXT NOT NULL, message TEXT NOT NULL, evidence TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE TABLE advisor_cache (cache_key TEXT PRIMARY KEY, prompt_type TEXT NOT NULL, model TEXT NOT NULL, response_json TEXT NOT NULL, created_at TEXT NOT NULL);
+PRAGMA user_version = 8;
+`
+	if _, err := db.Exec(v8Schema); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("failed to open store from v8: %v", err)
+	}
+	defer s.Close()
+	if schemaVersion(t, s.db) != 9 {
+		t.Fatalf("expected version 9, got %d", schemaVersion(t, s.db))
+	}
+
+	var journalMode string
+	if err := s.db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil || journalMode != "wal" {
+		t.Fatalf("expected WAL journal_mode, got %q (err: %v)", journalMode, err)
+	}
+
+	ro, err := OpenStoreReadOnly(path)
+	if err != nil {
+		t.Fatalf("failed to open read-only store on v9 schema: %v", err)
+	}
+	defer ro.Close()
 }

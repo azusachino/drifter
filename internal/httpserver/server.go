@@ -51,6 +51,7 @@ type pageData struct {
 	LatestRun    *companion.SyncRun
 	Holds        []companion.SyncHold
 	Fingerprints []companion.AccountFingerprint
+	Jobs         []companion.SyncJob
 }
 
 var page = template.Must(template.ParseFS(htmlTemplates, "templates/index.html"))
@@ -76,6 +77,10 @@ type Server struct {
 	targetErr        error
 	operationSlot    chan struct{}
 	operationTimeout time.Duration
+	jobNotifyCh      chan struct{}
+	activeJobMu      sync.Mutex
+	activeJobID      int64
+	activeJobCancel  context.CancelFunc
 }
 
 type Options struct {
@@ -125,7 +130,8 @@ func New(options Options) (*Server, error) {
 		apiToken: apiToken,
 		logger:   options.Logger, now: options.Now, source: options.Source, sourceFactory: options.SourceFactory,
 		target: options.Target, targetFactory: options.TargetFactory,
-		operationSlot: make(chan struct{}, 1), operationTimeout: options.operationTimeout}
+		operationSlot: make(chan struct{}, 1), operationTimeout: options.operationTimeout,
+		jobNotifyCh: make(chan struct{}, 1)}
 	router := chi.NewRouter()
 	router.Use(requestRouteLogAttribute)
 	ready := []probes.Readiness{{Name: "mapping_database", Check: func(r *http.Request) error {
@@ -164,6 +170,12 @@ func New(options Options) (*Server, error) {
 		api.Head("/export", s.handleExport)
 		api.Post("/import", s.handleImport)
 		api.Post("/reconcile", s.handleReconcile)
+		api.Get("/jobs", s.handleAPISyncJobList)
+		api.Head("/jobs", s.handleAPISyncJobList)
+		api.Post("/jobs/sync", s.handleAPISyncJobCreate)
+		api.Get("/jobs/{id}", s.handleAPISyncJobGet)
+		api.Head("/jobs/{id}", s.handleAPISyncJobGet)
+		api.Post("/jobs/{id}/cancel", s.handleAPISyncJobCancel)
 	})
 	router.Route("/api/v1", func(v1 chi.Router) {
 		v1.Get("/reading/snapshot", s.handleReadingSnapshot)
@@ -173,11 +185,21 @@ func New(options Options) (*Server, error) {
 		v1.Post("/mappings/replace", func(w http.ResponseWriter, r *http.Request) { s.handleJSONMapping(w, r, true) })
 		v1.Delete("/mappings/unlink", s.handleJSONUnlink)
 		v1.Post("/reconcile", s.handleReconcile)
+		v1.Get("/jobs", s.handleAPISyncJobList)
+		v1.Head("/jobs", s.handleAPISyncJobList)
+		v1.Post("/jobs/sync", s.handleAPISyncJobCreate)
+		v1.Get("/jobs/{id}", s.handleAPISyncJobGet)
+		v1.Head("/jobs/{id}", s.handleAPISyncJobGet)
+		v1.Post("/jobs/{id}/cancel", s.handleAPISyncJobCancel)
 	})
 	router.Route("/mappings", func(mappings chi.Router) {
 		mappings.Post("/confirm", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, false) })
 		mappings.Post("/replace", func(w http.ResponseWriter, r *http.Request) { s.handleFormMapping(w, r, true) })
 		mappings.Post("/unlink", s.handleFormUnlink)
+	})
+	router.Route("/jobs", func(jobs chi.Router) {
+		jobs.Post("/sync", s.handleFormJobSync)
+		jobs.Post("/cancel", s.handleFormJobCancel)
 	})
 	s.http = &http.Server{
 		Addr: options.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second,
@@ -252,7 +274,14 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if !noBody(w, r) {
 		return
 	}
-	notices := map[string]string{"confirmed": "Mapping confirmed.", "replaced": "Mapping replaced.", "unlinked": "Mapping unlinked."}
+	notices := map[string]string{
+		"confirmed":     "Mapping confirmed.",
+		"replaced":      "Mapping replaced.",
+		"unlinked":      "Mapping unlinked.",
+		"job_started":   "Background sync job started.",
+		"job_coalesced": "Matching sync job already queued or running.",
+		"job_cancelled": "Sync job cancelled.",
+	}
 	notice := notices[r.URL.Query().Get("notice")]
 	if r.URL.Query().Get("notice") != "" && notice == "" {
 		http.Error(w, "invalid page query", http.StatusBadRequest)
@@ -272,6 +301,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	latestRun, _ := store.GetLatestSyncRun(r.Context(), "", "")
 	holds, _ := store.ListSyncHolds(r.Context(), "", "")
 	fingerprints, _ := store.ListAccountFingerprints(r.Context())
+	jobs, _ := store.ListSyncJobs(r.Context(), 20)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodGet {
@@ -282,6 +312,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			LatestRun:    latestRun,
 			Holds:        holds,
 			Fingerprints: fingerprints,
+			Jobs:         jobs,
 		})
 	}
 }
@@ -385,6 +416,7 @@ type daemonStatusResponse struct {
 	Fingerprints     []companion.AccountFingerprint `json:"fingerprints"`
 	LatestRun        *companion.SyncRun             `json:"latest_run,omitempty"`
 	ActiveHoldsCount int                            `json:"active_holds_count"`
+	LatestJob        *companion.SyncJob             `json:"latest_job,omitempty"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -430,12 +462,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	latestJob, err := store.GetLatestSyncJob(r.Context())
+	if err != nil {
+		http.Error(w, "mapping database unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	writeJSON(w, r, daemonStatusResponse{
 		Ready:            true,
 		MappingsCount:    len(mappings),
 		Fingerprints:     fingerprints,
 		LatestRun:        latestRun,
 		ActiveHoldsCount: len(holds),
+		LatestJob:        latestJob,
 	})
 }
 
@@ -586,12 +624,8 @@ func (s *Server) handleReadingSnapshot(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, "invalid_cursor")
 		return
 	}
-	ctx, release, admitted := s.admit(r.Context())
-	if !admitted {
-		apiError(w, http.StatusServiceUnavailable, "provider_operation_busy")
-		return
-	}
-	defer release()
+	ctx, cancel := context.WithTimeout(r.Context(), s.operationTimeout)
+	defer cancel()
 	source, err := s.pendingSource()
 	if err != nil {
 		apiError(w, http.StatusServiceUnavailable, "provider_unavailable")
@@ -639,12 +673,8 @@ func (s *Server) handleReadingChanges(w http.ResponseWriter, r *http.Request) {
 		writeHorizonExceeded(w, r)
 		return
 	}
-	ctx, release, admitted := s.admit(r.Context())
-	if !admitted {
-		apiError(w, http.StatusServiceUnavailable, "provider_operation_busy")
-		return
-	}
-	defer release()
+	ctx, cancel := context.WithTimeout(r.Context(), s.operationTimeout)
+	defer cancel()
 	source, err := s.pendingSource()
 	if err != nil {
 		apiError(w, http.StatusServiceUnavailable, "provider_unavailable")
@@ -1875,6 +1905,8 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	}
 	s.ownership = owner
 	defer owner.Close()
+	stopWorker := s.startJobWorker(ctx)
+	defer stopWorker()
 	store, err := companion.OpenOwnedStore(s.database, owner)
 	if err != nil {
 		return err

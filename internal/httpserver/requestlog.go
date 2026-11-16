@@ -18,6 +18,11 @@ var safeRoutes = map[string]struct{}{
 	"/api/mappings/confirm": {}, "/api/mappings/replace": {}, "/api/mappings/unlink": {},
 	"/mappings/confirm": {}, "/mappings/replace": {}, "/mappings/unlink": {},
 
+	// Sync jobs routes (browser form + JSON APIs)
+	"/jobs/sync": {}, "/jobs/cancel": {},
+	"/api/jobs": {}, "/api/jobs/sync": {}, "/api/jobs/{id}": {}, "/api/jobs/{id}/cancel": {},
+	"/api/v1/jobs": {}, "/api/v1/jobs/sync": {}, "/api/v1/jobs/{id}": {}, "/api/v1/jobs/{id}/cancel": {},
+
 	// Versioned read API for an authenticated cross-service consumer.
 	"/api/v1/reading/snapshot": {}, "/api/v1/reading/changes": {},
 }

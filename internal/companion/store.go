@@ -193,7 +193,7 @@ func openStore(path string, readOnly bool, owner *DatabaseOwnership) (*Store, er
 	if err := requireSingleLink(info); err != nil {
 		return nil, err
 	}
-	query := "_busy_timeout=5000&_foreign_keys=on&_journal_mode=DELETE&_secure_delete=on"
+	query := "_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL&_secure_delete=on"
 	if readOnly {
 		query = "mode=ro&_busy_timeout=5000"
 	}
@@ -218,7 +218,7 @@ func openStore(path string, readOnly bool, owner *DatabaseOwnership) (*Store, er
 	return &Store{db: db, path: path, owner: owner, readOnly: readOnly}, nil
 }
 
-const storeVersion = 8
+const storeVersion = 9
 
 func validateStoreSchema(db *sql.DB) error {
 	var version int
@@ -293,6 +293,20 @@ func validateStoreSchema(db *sql.DB) error {
 		return err
 	}
 	rows, err = db.Query(`SELECT cache_key,prompt_type,model,response_json,created_at FROM advisor_cache LIMIT 0`)
+	if err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	rows, err = db.Query(`SELECT id,provider,source_account,target_account,scope,mode,days,finished_only,min_confidence,dry_run,force,status,cancel_requested,total_estimated,processed_count,confirmed_count,skipped_count,error_count,sync_run_id,error_message,created_at,started_at,finished_at FROM sync_jobs LIMIT 0`)
+	if err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	rows, err = db.Query(`SELECT provider,source_account,book_id,target_account,last_status,last_confidence,last_reason,attempted_at FROM auto_match_attempts LIMIT 0`)
 	if err != nil {
 		return err
 	}
@@ -481,6 +495,52 @@ func migrateStore(db *sql.DB) error {
 			return err
 		}
 		version = 8
+	}
+	if version == 8 {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS sync_jobs (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider         TEXT NOT NULL,
+			source_account   TEXT NOT NULL,
+			target_account   TEXT NOT NULL,
+			scope            TEXT NOT NULL,
+			mode             TEXT NOT NULL,
+			days             INTEGER NOT NULL,
+			finished_only    INTEGER NOT NULL DEFAULT 0,
+			min_confidence   REAL NOT NULL DEFAULT 0.80,
+			dry_run          INTEGER NOT NULL DEFAULT 0,
+			force            INTEGER NOT NULL DEFAULT 0,
+			status           TEXT NOT NULL,
+			cancel_requested INTEGER NOT NULL DEFAULT 0,
+			total_estimated  INTEGER NOT NULL DEFAULT 0,
+			processed_count  INTEGER NOT NULL DEFAULT 0,
+			confirmed_count  INTEGER NOT NULL DEFAULT 0,
+			skipped_count    INTEGER NOT NULL DEFAULT 0,
+			error_count      INTEGER NOT NULL DEFAULT 0,
+			sync_run_id      INTEGER REFERENCES sync_runs(id),
+			error_message    TEXT NOT NULL DEFAULT '',
+			created_at       TEXT NOT NULL,
+			started_at       TEXT NOT NULL DEFAULT '',
+			finished_at      TEXT NOT NULL DEFAULT ''
+		)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS auto_match_attempts (
+			provider        TEXT NOT NULL,
+			source_account  TEXT NOT NULL,
+			book_id         TEXT NOT NULL,
+			target_account  TEXT NOT NULL,
+			last_status     TEXT NOT NULL,
+			last_confidence REAL NOT NULL DEFAULT 0,
+			last_reason     TEXT NOT NULL DEFAULT '',
+			attempted_at    TEXT NOT NULL,
+			PRIMARY KEY (provider, source_account, book_id, target_account)
+		)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 9"); err != nil {
+			return err
+		}
+		version = 9
 	}
 	return tx.Commit()
 }

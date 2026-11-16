@@ -85,6 +85,11 @@ func MatchWithOptions(ctx context.Context, source Source, target Target, id, que
 	if err != nil {
 		return MatchReport{}, err
 	}
+	return MatchBookWithOptions(ctx, book, target, query, options)
+}
+
+// MatchBookWithOptions matches an already-fetched source Book against target without re-calling source.Book.
+func MatchBookWithOptions(ctx context.Context, book Book, target Target, query string, options MatchOptions) (MatchReport, error) {
 	var isbnMeta *isbn.Metadata
 	if options.ISBNProvider != nil && book.ISBN != "" {
 		if norm, err := NormalizeISBN(book.ISBN); err == nil {
@@ -283,6 +288,25 @@ func confirmLink(ctx context.Context, source Source, target Target, path string,
 	if expected != nil {
 		return store.ReplaceExpected(ctx, selection, *expected)
 	}
+	return store.Confirm(ctx, selection, replace)
+}
+
+// ConfirmLinkWithStore validates and persists a confirmed mapping using an already-fetched
+// source Book and an already-open Store, avoiding redundant source.Book calls or nested OpenOwnedStore handles.
+func ConfirmLinkWithStore(ctx context.Context, store *Store, book Book, target Target, selection Mapping, replace bool) error {
+	if store == nil {
+		return fmt.Errorf("mapping store required")
+	}
+	if selection.Provider != "weread" || !selection.valid() {
+		return ErrInvalidMapping
+	}
+	if book.ID != selection.BookID {
+		return fmt.Errorf("source identity differs from selection")
+	}
+	if err := target.ValidateLink(ctx, selection.WorkID, selection.EditionID); err != nil {
+		return err
+	}
+	selection.SourceTitle, selection.SourceISBN = book.Title, book.ISBN
 	return store.Confirm(ctx, selection, replace)
 }
 
