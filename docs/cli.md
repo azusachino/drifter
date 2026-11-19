@@ -237,8 +237,8 @@ refuse with an ownership error; `links` and pending reads may use the existing
 current schema read-only. If that schema needs migration, a reader fails rather
 than migrating under the owner. HTTP mapping maintenance uses the same owned
 capability; standalone `link` and `unlink` remain refused while
-`drifter-server` owns the state. See the [architecture](architecture.md) and the
-[HTTP user-story and test map](plans/http-server.md).
+`drifter-server` owns the state. See the [architecture](architecture.md) and
+[server guide](server.md).
 
 ## Local review decisions
 
@@ -470,8 +470,8 @@ Repeated paths/catalog IDs are rejected, not duplicated. The merge fails
 atomically with no partial stdout if any input is malformed/oversized or the
 combined document exceeds v1 limits; records are never silently truncated.
 Merge reads no database, makes no network/provider requests and mutates no
-personal state. See the [catalog contract](plans/matching-catalogs.md) for the
-exact lineage and schema-evolution boundary.
+personal state. See `schemas/matching-catalog-v1.schema.json` for the v1 schema
+contract.
 
 ## Pending matching worklist
 
@@ -663,23 +663,10 @@ backups and filesystem recovery are not erased by unlink. Back up the database
 only through a private, SQLite-consistent backup procedure. Do not copy only the
 main file during an active write or commit a personal database as a fixture.
 
-## Design and roadmap
+## Further reading
 
-- [Source-backed research and measured findings](research/reading-status-companion.md)
-- [First-slice plan, gates and owner-confirmed direction](plans/read-only-matching.md)
-- [Matching-worklist plan and confirmed review behavior (#7)](plans/matching-worklist.md)
-- [Domain language](../CONTEXT.md)
-- [Acceptance issue #1](https://github.com/azusachino/drifter/issues/1)
-
-Later direction is a persistent daemon in a single-replica k3s Deployment, not a
-CronJob. `config.toml` holds operational settings, applied on restart; SQLite
-holds mappings and reconciliation state. Future safe status deltas require
-mapping/bootstrap approval and one primary source per target work/account.
-Conflicts hold the affected book for explicit resolution, with durable CLI
-reports and logs. The 30-minute freshness goal still needs quota and acquisition
-verification. **Telegram notifications are on the roadmap**, outside this PR.
-
-Remote writes need separately verified mutation contracts, account identity,
-privacy/authority policy, durable intents/receipts and restart reconciliation.
-KU automation and Japanese coverage remain feasibility questions. This code is
-not authorization for live writes or deployment.
+- [Architecture overview](architecture.md)
+- [HTTP server & dashboard guide](server.md)
+- [Domain glossary](../CONTEXT.md)
+- [Synthetic walkthroughs](walkthroughs/README.md)
+- [Changelog](../CHANGELOG.md)

@@ -10,9 +10,10 @@ of TOML files.
 Compose uses host networking so strict Host/Origin checks see the same
 `127.0.0.1:8081` authority as the browser. There is deliberately no `ports`
 mapping: the example config binds only to `127.0.0.1`, and wildcard listening
-is not the default; a wildcard listener requires `server.allowed_hosts`. Host networking gives the container direct access to the
-Linux host network namespace; use it only on a trusted local host. Docker
-Desktop's host networking behavior differs and is not the target of this setup.
+is not the default; a wildcard listener requires `server.allowed_hosts`. Host
+networking gives the container direct access to the Linux host network
+namespace; use it only on a trusted local host. Docker Desktop's host
+networking behavior differs and is not the target of this setup.
 
 The example TOML is bind-mounted read-only with a private SELinux label. Replace
 its source with your own settings-only TOML if needed; do not put credentials in
@@ -90,7 +91,7 @@ sequenceDiagram
   actor Consumer as Consumer (Iroha)
   participant Server as Drifter Server (:8081)
   participant WeRead as WeRead Cloud API
-  participant Store as SQLite (mappings v8)
+  participant Store as SQLite (mappings v9)
 
   Consumer->>Server: GET /api/v1/reading/snapshot?limit=50
   Note over Consumer,Server: Authorization: Bearer DRIFTER_API_TOKEN
@@ -290,10 +291,7 @@ These owning gates passed:
 
 ```sh
 make check
-mise exec -- rumdl check README.md docs/architecture.md docs/cli.md \
-  docs/plans/http-server.md docs/plans/matching-worklist.md \
-  docs/plans/matching-catalogs.md docs/plans/read-only-matching.md \
-  docs/walkthroughs/README.md docs/server.md
+mise exec -- rumdl check README.md CONTEXT.md CHANGELOG.md docs/*.md docs/**/*.md
 make e2e-probe ROUTE=/
 make e2e
 git diff --check

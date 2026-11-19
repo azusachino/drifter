@@ -32,7 +32,7 @@ external services using ports and adapters:
 │  • Matching Engine (Author Partition, Exact Editions)  │
 │  • Three-Way Status Sync & Conflict Evaluator          │
 │  • Two-Phase Intent Ledger & Baseline Tracker          │
-│  • SQLite Storage Engine (Schema v8)                   │
+│  • SQLite Storage Engine (Schema v9)                   │
 └───────────────┬───────────────────────────┬────────────┘
                 │                           │
                 ▼                           ▼
@@ -66,7 +66,7 @@ packages. Providers import the core package to satisfy interfaces.
 | HTTP transport | `internal/provider/transport` | Token validation, response caps (2 MiB), pacing gates, and error sanitization. |
 | ISBN resolution | `internal/isbn` | Bibliographic resolution (Douban, OpenLibrary, custom URL) to bridge the translation gap. |
 | Community catalogs | `internal/catalog` | JSON schema validation, offline catalog merge, and untrusted match hints. |
-| SQLite storage | `internal/companion/store.go` | Private SQLite database (schema v8) with process locking, baselines, intents, audit runs, and advisor cache. |
+| SQLite storage | `internal/companion/store.go` | Private SQLite database (schema v9) with process locking, baselines, intents, sync jobs, audit runs, and advisor cache. |
 | LLM Advisor | `internal/advisor`, `internal/advisor/opencode` | Abstention-first conflict explanation and original work resolution with transparent SQLite response caching. |
 | Config & logging | `internal/config`, `internal/logging` | Strict TOML validation, `log/slog` structured logs, and standalone health probes. |
 

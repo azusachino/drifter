@@ -67,8 +67,7 @@ CLI cases prove separate edition consent, wrong-membership refusal, guarded
 replacement, imported inspection-only rows, writer refusal before providers,
 private/unknown privacy filtering and terminal-control stripping. The core suite
 also covers unchanged candidate sets under author ranking, decision migration
-rollback and read-only access under exclusive ownership. See the
-[M1–M7 evidence map](../plans/matching-worklist.md#g-executable-acceptance-checkpoint).
+rollback and read-only access under exclusive ownership.
 
 ## Guard boundary and live-shelf continuation
 
@@ -242,10 +241,7 @@ These end-to-end scenario tests tie together the full user journeys:
 
 ```sh
 make check
-mise exec -- rumdl check README.md docs/architecture.md docs/cli.md \
-  docs/plans/http-server.md docs/plans/matching-worklist.md \
-  docs/plans/account-and-provider-contracts.md \
-  docs/research/2026-10-15-design-review.md docs/walkthroughs/README.md
+mise exec -- rumdl check README.md CONTEXT.md CHANGELOG.md docs/*.md docs/**/*.md
 make e2e-probe ROUTE=/
 make e2e
 git diff --check
@@ -253,14 +249,10 @@ git diff --check
 
 `make check` runs vet, module verification, all race-enabled tests and both
 builds. The browser commands use the synthetic local server and check existing
-HTTP/native-form behavior, not the terminal journey. This is implementation
-and self-review evidence, not an independent review or live-provider experiment.
+HTTP/native-form behavior, not the terminal journey.
 
-## Later milestones remain unimplemented
+## Scope boundary
 
-Live provider write experiments, sync authority/baselines, bootstrap
-reconciliation, conflict holds, scheduling, KU intake, private backup and
-restore, deployment and public-sharing policy changes are not exercised or
-authorized by these tests. A mapping confirms identity only, not status-write
-authority. See the [matching plan](../plans/matching-worklist.md) and
-[Milestone 2 plan](../plans/account-and-provider-contracts.md).
+These synthetic walkthroughs run offline against in-process fake providers and
+temporary SQLite databases. They do not exercise live provider credentials,
+Kindle Unlimited intake, or cluster deployment.
