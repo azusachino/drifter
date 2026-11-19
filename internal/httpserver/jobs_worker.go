@@ -36,6 +36,7 @@ type jobWorkerConfig struct {
 	maxCooldownWait   time.Duration
 	maxRateLimitRetry int
 	advisorPaceDelay  time.Duration // < 0 disables pacing delay
+	attemptCooldown   time.Duration
 	advisor           advisor.Advisor
 }
 
@@ -49,7 +50,8 @@ func hasJobWorkerOptions(opts JobWorkerOptions) bool {
 		opts.MaxCooldownWait > 0 ||
 		opts.MaxRateLimitRetry > 0 ||
 		opts.AdvisorPaceDelay > 0 ||
-		opts.DisableAdvisorPace
+		opts.DisableAdvisorPace ||
+		opts.AttemptCooldown > 0
 }
 
 func (s *Server) setJobWorkerConfig(cfg jobWorkerConfig) {
@@ -93,6 +95,9 @@ func (s *Server) getJobWorkerConfig() jobWorkerConfig {
 		cfg.advisorPaceDelay = defaultJobAdvisorPaceDelay
 	} else if cfg.advisorPaceDelay < 0 {
 		cfg.advisorPaceDelay = 0
+	}
+	if cfg.attemptCooldown <= 0 {
+		cfg.attemptCooldown = companion.AutoMatchAttemptCooldown
 	}
 	return cfg
 }
@@ -415,15 +420,16 @@ func (s *Server) runSyncJob(serverCtx context.Context, job companion.SyncJob) {
 
 		discoverCtx, discoverCancel := context.WithTimeout(jobCtx, workerCfg.bookStepTimeout)
 		autoOpts := companion.AutoMatchOptions{
-			Provider:      job.Provider,
-			SourceAccount: sourceAccount,
-			TargetAccount: targetAccount,
-			Days:          job.Days,
-			MinConfidence: job.MinConfidence,
-			FinishedOnly:  job.FinishedOnly,
-			DryRun:        job.DryRun,
-			Force:         job.Force,
-			Now:           s.now().UTC(),
+			Provider:        job.Provider,
+			SourceAccount:   sourceAccount,
+			TargetAccount:   targetAccount,
+			Days:            job.Days,
+			MinConfidence:   job.MinConfidence,
+			FinishedOnly:    job.FinishedOnly,
+			DryRun:          job.DryRun,
+			Force:           job.Force,
+			Now:             s.now().UTC(),
+			AttemptCooldown: workerCfg.attemptCooldown,
 		}
 		candidates, discoverErr := companion.DiscoverAutoMatchCandidates(discoverCtx, store, cachedSrc, autoOpts)
 		discoverCancel()

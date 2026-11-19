@@ -47,8 +47,9 @@ type Provider interface {
 }
 
 const (
-	defaultHTTPTimeout = 30 * time.Second
-	responseLimit      = 2 << 20 // 2 MiB response cap
+	defaultHTTPTimeout    = 30 * time.Second
+	defaultDoubanInterval = 1500 * time.Millisecond
+	responseLimit         = 2 << 20 // 2 MiB response cap
 )
 
 // DoubanProvider resolves ISBN metadata by scraping Douban Books subject pages.
@@ -63,7 +64,7 @@ type DoubanProvider struct {
 
 // NewDoubanProvider creates a Douban ISBN provider using the official Douban Books ISBN endpoint.
 func NewDoubanProvider() *DoubanProvider {
-	return NewDoubanProviderWithClient("https://book.douban.com/isbn/", &http.Client{Timeout: defaultHTTPTimeout}, 1500*time.Millisecond)
+	return NewDoubanProviderWithClient("https://book.douban.com/isbn/", &http.Client{Timeout: defaultHTTPTimeout}, defaultDoubanInterval)
 }
 
 // NewDoubanProviderWithBaseURL creates a Douban provider with a custom base URL (useful for testing).

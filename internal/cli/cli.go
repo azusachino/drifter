@@ -378,7 +378,7 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 	flags.StringVar(&account, "source-account", "", "source account namespace (default: default or inferred)")
 	flags.StringVar(&account, "account", "", "alias for --source-account")
 	flags.StringVar(&targetAccount, "target-account", "", "target account namespace (default: default or inferred)")
-	flags.IntVar(&days, "days", 90, "recently opened window in days (1–36500; browsing counts)")
+	flags.IntVar(&days, "days", companion.DefaultLookbackDays, fmt.Sprintf("recently opened window in days (1–%d; browsing counts)", companion.MaxLookbackDays))
 	flags.IntVar(&year, "year", 0, "filter books opened in calendar year (e.g. 2025)")
 	flags.BoolVar(&finishedOnly, "finished", false, "filter to finished/completed books only")
 	flags.BoolVar(&includePrivate, "include-private", false, "explicitly include privacy-marked books (unknown privacy remains excluded)")
@@ -407,8 +407,8 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 		if !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
 			return fmt.Errorf("valid --account and --target-account required")
 		}
-		if days < 1 || days > 36500 {
-			return fmt.Errorf("--days must be between 1 and 36500")
+		if days < 1 || days > companion.MaxLookbackDays {
+			return fmt.Errorf("--days must be between 1 and %d", companion.MaxLookbackDays)
 		}
 		if year != 0 && (year < 2000 || year > 2100) {
 			return fmt.Errorf("--year must be between 2000 and 2100")

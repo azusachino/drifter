@@ -1090,6 +1090,7 @@ func TestServerOptionsConfigureJobWorkerAndTimeouts(t *testing.T) {
 			MaxCooldownWait:    3 * time.Minute,
 			MaxRateLimitRetry:  7,
 			DisableAdvisorPace: true,
+			AttemptCooldown:    48 * time.Hour,
 		},
 		Cache: CacheOptions{
 			MaxEntries: 2048,
@@ -1111,7 +1112,8 @@ func TestServerOptionsConfigureJobWorkerAndTimeouts(t *testing.T) {
 	wcfg := srv.getJobWorkerConfig()
 	if wcfg.pollInterval != 12*time.Second || wcfg.batchSize != 9 || wcfg.bookStepTimeout != 2*time.Minute ||
 		wcfg.reconcileTimeout != 30*time.Minute || wcfg.cooldownBase != 10*time.Second || wcfg.cooldownMax != 60*time.Second ||
-		wcfg.maxCooldownWait != 3*time.Minute || wcfg.maxRateLimitRetry != 7 || wcfg.advisorPaceDelay != 0 {
+		wcfg.maxCooldownWait != 3*time.Minute || wcfg.maxRateLimitRetry != 7 || wcfg.advisorPaceDelay != 0 ||
+		wcfg.attemptCooldown != 48*time.Hour {
 		t.Fatalf("unexpected jobWorkerConfig: %+v", wcfg)
 	}
 	if srv.cacheOptions.MaxEntries != 2048 || srv.cacheOptions.ShelfTTL != 10*time.Minute || srv.cacheOptions.TargetTTL != 45*time.Minute {

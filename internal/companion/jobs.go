@@ -103,13 +103,13 @@ func normalizeSyncJobInput(job *SyncJob) error {
 	}
 	if job.Days <= 0 {
 		if job.Scope == SyncJobScopeLifetime {
-			job.Days = 36500
+			job.Days = MaxLookbackDays
 		} else {
-			job.Days = 7
+			job.Days = DefaultRecentJobDays
 		}
 	}
 	if job.MinConfidence <= 0 {
-		job.MinConfidence = 0.80
+		job.MinConfidence = DefaultMinConfidence
 	}
 	if job.CreatedAt.IsZero() {
 		job.CreatedAt = time.Now().UTC()
@@ -119,7 +119,7 @@ func normalizeSyncJobInput(job *SyncJob) error {
 	if !ValidLabel(job.Provider) || !ValidLabel(job.SourceAccount) || !ValidLabel(job.TargetAccount) {
 		return ErrInvalidMappingKey
 	}
-	if !validSyncJobScope(job.Scope) || !validSyncJobMode(job.Mode) || job.Days < 1 || job.Days > 36500 || job.MinConfidence <= 0 || job.MinConfidence > 1.0 {
+	if !validSyncJobScope(job.Scope) || !validSyncJobMode(job.Mode) || job.Days < 1 || job.Days > MaxLookbackDays || job.MinConfidence <= 0 || job.MinConfidence > 1.0 {
 		return fmt.Errorf("invalid sync job parameters")
 	}
 	job.Status = SyncJobStatusQueued
@@ -596,16 +596,19 @@ func (s *Store) RecordAutoMatchAttempt(ctx context.Context, attempt AutoMatchAtt
 	return err
 }
 
-func isAttemptInCooldown(lastStatus string, lastConfidence float64, attemptedAt time.Time, minConf float64, force bool, now time.Time) bool {
+func isAttemptInCooldown(lastStatus string, lastConfidence float64, attemptedAt time.Time, minConf float64, force bool, now time.Time, window time.Duration) bool {
 	if force {
 		return false
+	}
+	if window <= 0 {
+		window = AutoMatchAttemptCooldown
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	} else {
 		now = now.UTC()
 	}
-	if attemptedAt.Before(now.Add(-AutoMatchAttemptCooldown)) {
+	if attemptedAt.Before(now.Add(-window)) {
 		return false
 	}
 	if lastStatus == "low_confidence" && minConf < lastConfidence {
@@ -642,13 +645,20 @@ func (s *Store) IsAutoMatchAttemptInCooldown(ctx context.Context, provider, sour
 	if err != nil {
 		return false, fmt.Errorf("corrupt attempted_at in auto_match_attempts: %w", err)
 	}
-	return isAttemptInCooldown(lastStatus, lastConfidence, attemptedAt, minConf, force, now), nil
+	return isAttemptInCooldown(lastStatus, lastConfidence, attemptedAt, minConf, force, now, AutoMatchAttemptCooldown), nil
 }
 
 // ListCooldownBookIDs returns the set of book IDs currently in abstention cooldown
 // for the given account pair and job parameters, so shelf filtering can skip them
 // before calling source.Book(ctx, id).
 func (s *Store) ListCooldownBookIDs(ctx context.Context, provider, sourceAccount, targetAccount string, minConf float64, force bool, now time.Time) (map[string]bool, error) {
+	return s.ListCooldownBookIDsWithWindow(ctx, provider, sourceAccount, targetAccount, minConf, force, now, AutoMatchAttemptCooldown)
+}
+
+// ListCooldownBookIDsWithWindow returns the set of book IDs currently in abstention
+// cooldown within window for the given account pair and job parameters, so shelf
+// filtering can skip them before calling source.Book(ctx, id).
+func (s *Store) ListCooldownBookIDsWithWindow(ctx context.Context, provider, sourceAccount, targetAccount string, minConf float64, force bool, now time.Time, window time.Duration) (map[string]bool, error) {
 	if !ValidLabel(provider) || !ValidLabel(sourceAccount) || !ValidLabel(targetAccount) {
 		return nil, ErrInvalidMappingKey
 	}
@@ -656,12 +666,15 @@ func (s *Store) ListCooldownBookIDs(ctx context.Context, provider, sourceAccount
 	if force {
 		return result, nil
 	}
+	if window <= 0 {
+		window = AutoMatchAttemptCooldown
+	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	} else {
 		now = now.UTC()
 	}
-	cutoffStr := now.Add(-AutoMatchAttemptCooldown).Format(time.RFC3339)
+	cutoffStr := now.Add(-window).Format(time.RFC3339)
 	rows, err := s.db.QueryContext(ctx, `SELECT book_id, last_status, last_confidence, attempted_at
 		FROM auto_match_attempts
 		WHERE provider = ? AND source_account = ? AND target_account = ? AND attempted_at >= ?`,
@@ -681,7 +694,7 @@ func (s *Store) ListCooldownBookIDs(ctx context.Context, provider, sourceAccount
 		if err != nil {
 			return nil, fmt.Errorf("corrupt attempted_at in auto_match_attempts: %w", err)
 		}
-		if isAttemptInCooldown(lastStatus, lastConfidence, attemptedAt, minConf, force, now) {
+		if isAttemptInCooldown(lastStatus, lastConfidence, attemptedAt, minConf, force, now, window) {
 			result[bookID] = true
 		}
 	}

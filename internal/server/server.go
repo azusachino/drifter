@@ -125,6 +125,7 @@ func Run(ctx context.Context, args []string, out, _ io.Writer, providers Provide
 			MaxRateLimitRetry:  cfg.Jobs.MaxRateLimitRetry,
 			AdvisorPaceDelay:   paceDelay,
 			DisableAdvisorPace: paceDelay == 0,
+			AttemptCooldown:    config.ParseDurationOr(cfg.Jobs.AttemptCooldown, 0),
 		},
 		Cache: httpserver.CacheOptions{
 			MaxEntries: cfg.Cache.MaxEntries,

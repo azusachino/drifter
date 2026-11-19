@@ -21,11 +21,16 @@ func Main() {
 	defer stop()
 	providers := clients{
 		sourceWithConfig: func(p config.ProvidersConfig) (source, error) {
-			return weread.NewWithOptions(
+			client, err := weread.NewWithOptions(
 				os.Getenv("WEREAD_API_KEY"),
 				config.ParseDurationOr(p.WeReadInterval, 0),
 				config.ParseDurationOr(p.Timeout, 0),
 			)
+			if err != nil {
+				return nil, err
+			}
+			client.SetSkillVersion(p.WeReadSkillVersion)
+			return client, nil
 		},
 		targetWithConfig: func(p config.ProvidersConfig) (target, error) {
 			return hardcover.NewWithOptions(

@@ -110,6 +110,7 @@ type JobWorkerOptions struct {
 	MaxRateLimitRetry  int
 	AdvisorPaceDelay   time.Duration
 	DisableAdvisorPace bool
+	AttemptCooldown    time.Duration
 }
 
 // CacheOptions configures the server's in-memory provider TTL cache.
@@ -216,6 +217,7 @@ func New(options Options) (*Server, error) {
 			maxCooldownWait:   options.Jobs.MaxCooldownWait,
 			maxRateLimitRetry: options.Jobs.MaxRateLimitRetry,
 			advisorPaceDelay:  paceDelay,
+			attemptCooldown:   options.Jobs.AttemptCooldown,
 		})
 	}
 	router := chi.NewRouter()
@@ -922,15 +924,15 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if autoMatch {
-		minConf := 0.80
+		minConf := companion.DefaultMinConfidence
 		if raw := query.Get("min_confidence"); raw != "" {
 			if parsed, err := strconv.ParseFloat(raw, 64); err == nil && parsed > 0 && parsed <= 1.0 {
 				minConf = parsed
 			}
 		}
-		days := 90
+		days := companion.DefaultLookbackDays
 		if raw := query.Get("days"); raw != "" {
-			if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 1 && parsed <= 36500 {
+			if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 1 && parsed <= companion.MaxLookbackDays {
 				days = parsed
 			}
 		}
@@ -1010,7 +1012,7 @@ func (s *Server) handleAutoMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	minConf := 0.80
+	minConf := companion.DefaultMinConfidence
 	if raw := query.Get("min_confidence"); raw != "" {
 		parsed, err := strconv.ParseFloat(raw, 64)
 		if err != nil || parsed <= 0 || parsed > 1.0 {
@@ -1020,10 +1022,10 @@ func (s *Server) handleAutoMatch(w http.ResponseWriter, r *http.Request) {
 		minConf = parsed
 	}
 
-	days := 90
+	days := companion.DefaultLookbackDays
 	if raw := query.Get("days"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 1 || parsed > 36500 {
+		if err != nil || parsed < 1 || parsed > companion.MaxLookbackDays {
 			apiError(w, http.StatusBadRequest, "invalid_days")
 			return
 		}
@@ -1835,7 +1837,7 @@ func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, 
 		}
 	}
 	account, target := query.Get("account"), query.Get("target_account")
-	days := 90
+	days := companion.DefaultLookbackDays
 	if raw := query.Get("days"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil {
@@ -1852,7 +1854,7 @@ func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, 
 		limit = parsed
 	}
 	finishedOnly := query.Get("finished") == "true" || query.Get("finished") == "1"
-	if !companion.ValidLabel(account) || !companion.ValidLabel(target) || days < 1 || days > 36500 {
+	if !companion.ValidLabel(account) || !companion.ValidLabel(target) || days < 1 || days > companion.MaxLookbackDays {
 		return companion.PendingOptions{}, fmt.Errorf("invalid options")
 	}
 	options := companion.PendingOptions{SourceAccount: account, TargetAccount: target, Days: days, Limit: limit, FinishedOnly: finishedOnly, After: query.Get("after"), Now: now}

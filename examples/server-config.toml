@@ -20,6 +20,7 @@ level = "info"
 # max_cooldown_wait = "2m"
 # max_rate_limit_retry = 5
 # advisor_pace_delay = "1s"
+# attempt_cooldown = "720h"
 
 # [cache]
 # max_entries = 10000
@@ -32,6 +33,7 @@ level = "info"
 # timeout = "30s"
 # weread_interval = "1s"
 # hardcover_interval = "1100ms"
+# weread_skill_version = "1.0.5"
 
 # [advisor]
 # base_url = "https://api.openai.com/v1"

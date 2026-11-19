@@ -185,6 +185,8 @@ func OpenOwnedStore(path string, owner *DatabaseOwnership) (*Store, error) {
 	return openStore(canonical, false, owner)
 }
 
+const defaultSQLiteBusyTimeoutMs = 5000
+
 func openStore(path string, readOnly bool, owner *DatabaseOwnership) (*Store, error) {
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
@@ -193,9 +195,9 @@ func openStore(path string, readOnly bool, owner *DatabaseOwnership) (*Store, er
 	if err := requireSingleLink(info); err != nil {
 		return nil, err
 	}
-	query := "_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL&_secure_delete=on"
+	query := fmt.Sprintf("_busy_timeout=%d&_foreign_keys=on&_journal_mode=WAL&_secure_delete=on", defaultSQLiteBusyTimeoutMs)
 	if readOnly {
-		query = "mode=ro&_busy_timeout=5000"
+		query = fmt.Sprintf("mode=ro&_busy_timeout=%d", defaultSQLiteBusyTimeoutMs)
 	}
 	u := url.URL{Scheme: "file", Path: path, RawQuery: query}
 	db, err := sql.Open("sqlite3", u.String())

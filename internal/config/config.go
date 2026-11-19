@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/BurntSushi/toml"
 	"github.com/azusachino/drifter/internal/catalog"
@@ -72,6 +73,7 @@ type JobsConfig struct {
 	MaxCooldownWait   string `toml:"max_cooldown_wait"`
 	MaxRateLimitRetry int    `toml:"max_rate_limit_retry"`
 	AdvisorPaceDelay  string `toml:"advisor_pace_delay"`
+	AttemptCooldown   string `toml:"attempt_cooldown"`
 }
 
 // CacheConfig configures the in-memory provider response TTL cache.
@@ -86,9 +88,10 @@ type CacheConfig struct {
 // ProvidersConfig configures HTTP client timeouts and rate-limit pacing for
 // upstream providers. Provider URLs remain fixed HTTPS endpoints.
 type ProvidersConfig struct {
-	Timeout           string `toml:"timeout"`
-	WeReadInterval    string `toml:"weread_interval"`
-	HardcoverInterval string `toml:"hardcover_interval"`
+	Timeout            string `toml:"timeout"`
+	WeReadInterval     string `toml:"weread_interval"`
+	HardcoverInterval  string `toml:"hardcover_interval"`
+	WeReadSkillVersion string `toml:"weread_skill_version"`
 }
 
 // Config is the complete validated settings file. Zero values become
@@ -143,6 +146,7 @@ func Defaults() Config {
 		MaxCooldownWait:   "2m",
 		MaxRateLimitRetry: 5,
 		AdvisorPaceDelay:  "1s",
+		AttemptCooldown:   "720h",
 	}
 	c.Cache = CacheConfig{
 		MaxEntries: 10000,
@@ -152,9 +156,10 @@ func Defaults() Config {
 		TargetTTL:  "1h",
 	}
 	c.Providers = ProvidersConfig{
-		Timeout:           "30s",
-		WeReadInterval:    "1s",
-		HardcoverInterval: "1100ms",
+		Timeout:            "30s",
+		WeReadInterval:     "1s",
+		HardcoverInterval:  "1100ms",
+		WeReadSkillVersion: "1.0.5",
 	}
 	c.Advisor.CacheTTL = "720h"
 	return c
@@ -266,6 +271,18 @@ func validateNonNegativeDuration(name, raw string) (time.Duration, error) {
 	return d, nil
 }
 
+func validateSkillVersion(name, raw string) error {
+	if raw == "" || len(raw) > 32 {
+		return fmt.Errorf("%s must be a non-empty string of at most 32 characters", name)
+	}
+	for _, r := range raw {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return fmt.Errorf("%s must not contain whitespace or control characters", name)
+		}
+	}
+	return nil
+}
+
 func (c Config) validate() error {
 	switch c.Log.Level {
 	case LevelDebug, LevelInfo, LevelWarn, LevelError:
@@ -302,6 +319,7 @@ func (c Config) validate() error {
 		{"jobs.book_step_timeout", c.Jobs.BookStepTimeout},
 		{"jobs.reconcile_timeout", c.Jobs.ReconcileTimeout},
 		{"jobs.max_cooldown_wait", c.Jobs.MaxCooldownWait},
+		{"jobs.attempt_cooldown", c.Jobs.AttemptCooldown},
 		{"cache.shelf_ttl", c.Cache.ShelfTTL},
 		{"cache.book_ttl", c.Cache.BookTTL},
 		{"cache.search_ttl", c.Cache.SearchTTL},
@@ -327,6 +345,9 @@ func (c Config) validate() error {
 		return fmt.Errorf("jobs.cooldown_max must be greater than or equal to jobs.cooldown_base")
 	}
 	if _, err := validateNonNegativeDuration("jobs.advisor_pace_delay", c.Jobs.AdvisorPaceDelay); err != nil {
+		return err
+	}
+	if err := validateSkillVersion("providers.weread_skill_version", c.Providers.WeReadSkillVersion); err != nil {
 		return err
 	}
 	if c.Jobs.BatchSize <= 0 {

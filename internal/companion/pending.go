@@ -133,8 +133,8 @@ func Pending(ctx context.Context, reader worklistSource, mappings []Mapping, opt
 
 func PendingWithDecisions(ctx context.Context, reader worklistSource, mappings []Mapping, decisions []Decision, options PendingOptions) (PendingReport, error) {
 	report := PendingReport{Books: []PendingBook{}, Issues: []PendingIssue{}}
-	if !ValidLabel(options.SourceAccount) || !ValidLabel(options.TargetAccount) || options.Days < 1 || options.Days > 36500 || options.Now.IsZero() {
-		return report, fmt.Errorf("pending requires account labels, time and a window of 1–36500 days")
+	if !ValidLabel(options.SourceAccount) || !ValidLabel(options.TargetAccount) || options.Days < 1 || options.Days > MaxLookbackDays || options.Now.IsZero() {
+		return report, fmt.Errorf("pending requires account labels, time and a window of 1–%d days", MaxLookbackDays)
 	}
 	if err := ctx.Err(); err != nil {
 		return report, err

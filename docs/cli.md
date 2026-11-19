@@ -101,6 +101,7 @@ allowed_hosts = ["localhost:8081"]  # optional additional host header allowlist
 # max_cooldown_wait = "2m"    # max single wait before aborting Phase 1
 # max_rate_limit_retry = 5    # max rate-limit retries per book
 # advisor_pace_delay = "1s"   # pause between advisor batches ("0s" disables)
+# attempt_cooldown = "720h"   # abstention cooldown window for auto-match retries
 
 # In-memory provider response TTL cache (all optional).
 [cache]
@@ -115,6 +116,7 @@ allowed_hosts = ["localhost:8081"]  # optional additional host header allowlist
 # timeout = "30s"
 # weread_interval = "1s"
 # hardcover_interval = "1100ms"
+# weread_skill_version = "1.0.5"
 
 # Matching catalogs are opt-in and fetched only by an explicit `match` command.
 [[matching.catalogs]]
@@ -139,6 +141,7 @@ provider = "default"  # default (Douban + OpenLibrary), douban, openlibrary, cus
 ```
 
 Settings files are discovered in the following order:
+
 1. Explicit `--config <path>` flag or `DRIFTER_CONFIG` environment variable
 2. `config.toml` in the current working directory
 3. `$XDG_CONFIG_HOME/drifter/config.toml` (or `~/.config/drifter/config.toml`)
@@ -584,7 +587,8 @@ Reconcile reading statuses across all confirmed mappings for an account:
 
 ```sh
 bin/drifter reconcile --account my-weread --target-account my-hardcover \
-  [--adopt-source | --adopt-target | --with-advisor] [--allow-private] [--source-vid VID] [--dry-run]
+  [--adopt-source | --adopt-target | --with-advisor] \
+  [--allow-private] [--source-vid VID] [--dry-run]
 ```
 
 `reconcile` iterates sequentially through all confirmed mappings, evaluates

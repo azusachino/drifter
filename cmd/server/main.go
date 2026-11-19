@@ -21,11 +21,16 @@ func main() {
 		Source: func() (companion.Source, error) { return weread.New(os.Getenv("WEREAD_API_KEY")) },
 		Target: func() (companion.Target, error) { return hardcover.New(os.Getenv("HARDCOVER_API_KEY")) },
 		SourceWithConfig: func(p config.ProvidersConfig) (companion.Source, error) {
-			return weread.NewWithOptions(
+			client, err := weread.NewWithOptions(
 				os.Getenv("WEREAD_API_KEY"),
 				config.ParseDurationOr(p.WeReadInterval, 0),
 				config.ParseDurationOr(p.Timeout, 0),
 			)
+			if err != nil {
+				return nil, err
+			}
+			client.SetSkillVersion(p.WeReadSkillVersion)
+			return client, nil
 		},
 		TargetWithConfig: func(p config.ProvidersConfig) (companion.Target, error) {
 			return hardcover.NewWithOptions(

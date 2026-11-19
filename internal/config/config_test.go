@@ -340,6 +340,7 @@ cooldown_max = "2m"
 max_cooldown_wait = "5m"
 max_rate_limit_retry = 8
 advisor_pace_delay = "0s"
+attempt_cooldown = "48h"
 
 [cache]
 max_entries = 25000
@@ -352,6 +353,7 @@ target_ttl = "45m"
 timeout = "45s"
 weread_interval = "1500ms"
 hardcover_interval = "2s"
+weread_skill_version = "1.0.6"
 
 [advisor]
 base_url = "https://gateway.example.com/v1"
@@ -366,13 +368,13 @@ cache_ttl = "168h"
 	if cfg.Server.OperationTimeout != "3m" || cfg.Server.WriteTimeout != "4m" || cfg.Server.ShutdownTimeout != "20s" {
 		t.Fatalf("unexpected server config: %+v", cfg.Server)
 	}
-	if cfg.Jobs.BatchSize != 12 || cfg.Jobs.ReconcileTimeout != "30m" || cfg.Jobs.AdvisorPaceDelay != "0s" || cfg.Jobs.MaxRateLimitRetry != 8 {
+	if cfg.Jobs.BatchSize != 12 || cfg.Jobs.ReconcileTimeout != "30m" || cfg.Jobs.AdvisorPaceDelay != "0s" || cfg.Jobs.MaxRateLimitRetry != 8 || cfg.Jobs.AttemptCooldown != "48h" {
 		t.Fatalf("unexpected jobs config: %+v", cfg.Jobs)
 	}
 	if cfg.Cache.MaxEntries != 25000 || cfg.Cache.ShelfTTL != "10m" || cfg.Cache.BookTTL != "12h" {
 		t.Fatalf("unexpected cache config: %+v", cfg.Cache)
 	}
-	if cfg.Providers.Timeout != "45s" || cfg.Providers.WeReadInterval != "1500ms" || cfg.Providers.HardcoverInterval != "2s" {
+	if cfg.Providers.Timeout != "45s" || cfg.Providers.WeReadInterval != "1500ms" || cfg.Providers.HardcoverInterval != "2s" || cfg.Providers.WeReadSkillVersion != "1.0.6" {
 		t.Fatalf("unexpected providers config: %+v", cfg.Providers)
 	}
 	if len(cfg.Advisor.Models) != 2 || cfg.Advisor.Models[1] != "fallback-model" || cfg.Advisor.CacheTTL != "168h" {
@@ -382,16 +384,22 @@ cache_ttl = "168h"
 
 func TestLoadRejectsInvalidOperationalSettings(t *testing.T) {
 	cases := map[string]string{
-		"zero-operation-timeout": "[server]\noperation_timeout = \"0s\"\n",
-		"bad-reconcile-timeout":  "[jobs]\nreconcile_timeout = \"soon\"\n",
-		"cooldown-max-lt-base":   "[jobs]\ncooldown_base = \"30s\"\ncooldown_max = \"10s\"\n",
-		"negative-pace-delay":    "[jobs]\nadvisor_pace_delay = \"-1s\"\n",
-		"zero-batch-size":        "[jobs]\nbatch_size = 0\n",
-		"zero-rate-limit-retry":  "[jobs]\nmax_rate_limit_retry = 0\n",
-		"zero-cache-entries":     "[cache]\nmax_entries = 0\n",
-		"zero-shelf-ttl":         "[cache]\nshelf_ttl = \"0s\"\n",
-		"zero-provider-timeout":  "[providers]\ntimeout = \"0s\"\n",
-		"zero-advisor-cache-ttl": "[advisor]\ncache_ttl = \"0s\"\n",
+		"zero-operation-timeout":     "[server]\noperation_timeout = \"0s\"\n",
+		"bad-reconcile-timeout":      "[jobs]\nreconcile_timeout = \"soon\"\n",
+		"cooldown-max-lt-base":       "[jobs]\ncooldown_base = \"30s\"\ncooldown_max = \"10s\"\n",
+		"negative-pace-delay":        "[jobs]\nadvisor_pace_delay = \"-1s\"\n",
+		"zero-batch-size":            "[jobs]\nbatch_size = 0\n",
+		"zero-rate-limit-retry":      "[jobs]\nmax_rate_limit_retry = 0\n",
+		"zero-cache-entries":         "[cache]\nmax_entries = 0\n",
+		"zero-shelf-ttl":             "[cache]\nshelf_ttl = \"0s\"\n",
+		"zero-provider-timeout":      "[providers]\ntimeout = \"0s\"\n",
+		"zero-advisor-cache-ttl":     "[advisor]\ncache_ttl = \"0s\"\n",
+		"zero-attempt-cooldown":      "[jobs]\nattempt_cooldown = \"0s\"\n",
+		"negative-attempt-cooldown":  "[jobs]\nattempt_cooldown = \"-1h\"\n",
+		"empty-skill-version":        "[providers]\nweread_skill_version = \"\"\n",
+		"too-long-skill-version":     "[providers]\nweread_skill_version = \"123456789012345678901234567890123\"\n",
+		"whitespace-skill-version":   "[providers]\nweread_skill_version = \"1.0.5 beta\"\n",
+		"control-char-skill-version": "[providers]\nweread_skill_version = \"1.0.5\\n\"\n",
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -284,6 +284,15 @@ func TestAutoMatchAttemptCooldownAndBypass(t *testing.T) {
 	if err != nil || len(cooldownMapForce) != 0 {
 		t.Fatalf("expected empty cooldown map when force=true, got %+v, err=%v", cooldownMapForce, err)
 	}
+
+	// Custom cooldown window (48h): 101 (5d ago) is expired; 104 (1h ago) stays in cooldown
+	cooldownMap48h, err := s.ListCooldownBookIDsWithWindow(ctx, "weread", "default", "default", 0.80, false, now, 48*time.Hour)
+	if err != nil {
+		t.Fatalf("ListCooldownBookIDsWithWindow(48h) failed: %v", err)
+	}
+	if cooldownMap48h["101"] || !cooldownMap48h["104"] {
+		t.Fatalf("unexpected 48h cooldown map: %+v", cooldownMap48h)
+	}
 }
 
 func TestOwnedStoresSerializeConcurrentInProcessWrites(t *testing.T) {

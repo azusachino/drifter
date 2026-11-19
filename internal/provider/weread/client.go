@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/azusachino/drifter/internal/companion"
@@ -19,9 +20,14 @@ const DefaultURL = "https://i.weread.qq.com/api/agent/gateway"
 // DefaultInterval is the default minimum spacing between WeRead requests.
 const DefaultInterval = time.Second
 
+// DefaultSkillVersion is the default skill_version passed to the WeRead agent gateway.
+const DefaultSkillVersion = "1.0.5"
+
 // Client is the WeRead intake provider client.
 type Client struct {
-	api *transport.Client
+	api          *transport.Client
+	mu           sync.RWMutex
+	skillVersion string
 }
 
 var (
@@ -53,6 +59,24 @@ func NewWithTransport(api *transport.Client) *Client {
 	return &Client{api: api}
 }
 
+// SetSkillVersion overrides the skill_version sent to the WeRead agent gateway.
+// An empty value resets to DefaultSkillVersion.
+func (c *Client) SetSkillVersion(version string) {
+	c.mu.Lock()
+	c.skillVersion = strings.TrimSpace(version)
+	c.mu.Unlock()
+}
+
+func (c *Client) effectiveSkillVersion() string {
+	c.mu.RLock()
+	v := c.skillVersion
+	c.mu.RUnlock()
+	if v == "" {
+		return DefaultSkillVersion
+	}
+	return v
+}
+
 func (c *Client) call(ctx context.Context, name string, args map[string]any, target any) error {
 	// Only explicit read operations exist; there is no generic exported gateway.
 	switch name {
@@ -60,7 +84,7 @@ func (c *Client) call(ctx context.Context, name string, args map[string]any, tar
 	default:
 		return fmt.Errorf("unsupported WeRead operation")
 	}
-	args["api_name"], args["skill_version"] = name, "1.0.5"
+	args["api_name"], args["skill_version"] = name, c.effectiveSkillVersion()
 	var raw json.RawMessage
 	if err := c.api.Post(ctx, args, &raw); err != nil {
 		return err
