@@ -52,22 +52,16 @@ func hasJobWorkerOptions(opts JobWorkerOptions) bool {
 		opts.DisableAdvisorPace
 }
 
-var (
-	serverJobCachesMu sync.Mutex
-	serverJobCaches   = make(map[*Server]*companion.MemoryTTLCache)
-	serverJobConfigs  = make(map[*Server]jobWorkerConfig)
-)
-
 func (s *Server) setJobWorkerConfig(cfg jobWorkerConfig) {
-	serverJobCachesMu.Lock()
-	serverJobConfigs[s] = cfg
-	serverJobCachesMu.Unlock()
+	s.jobMu.Lock()
+	s.jobConfig = cfg
+	s.jobMu.Unlock()
 }
 
 func (s *Server) getJobWorkerConfig() jobWorkerConfig {
-	serverJobCachesMu.Lock()
-	cfg := serverJobConfigs[s]
-	serverJobCachesMu.Unlock()
+	s.jobMu.Lock()
+	cfg := s.jobConfig
+	s.jobMu.Unlock()
 	if cfg.pollInterval <= 0 {
 		cfg.pollInterval = jobWorkerFallbackPollInterval
 	}
@@ -119,21 +113,46 @@ func (t *advisorCallTracker) ResolveOriginalWork(ctx context.Context, req adviso
 }
 
 func (s *Server) getJobCache() *companion.MemoryTTLCache {
-	serverJobCachesMu.Lock()
-	defer serverJobCachesMu.Unlock()
-	c, ok := serverJobCaches[s]
-	if !ok {
-		c = companion.NewMemoryTTLCache(s.cacheOptions.MaxEntries, s.now)
-		serverJobCaches[s] = c
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
+	if s.jobCache == nil {
+		s.jobCache = companion.NewMemoryTTLCache(s.cacheOptions.MaxEntries, s.now)
 	}
-	return c
+	return s.jobCache
 }
 
 func (s *Server) clearJobCache() {
-	serverJobCachesMu.Lock()
-	delete(serverJobCaches, s)
-	delete(serverJobConfigs, s)
-	serverJobCachesMu.Unlock()
+	s.jobMu.Lock()
+	s.jobCache = nil
+	s.jobMu.Unlock()
+}
+
+func (s *Server) buildAdvisor(store *companion.Store) (advisor.Advisor, *advisorCallTracker) {
+	workerCfg := s.getJobWorkerConfig()
+	if workerCfg.advisor != nil {
+		tracker := &advisorCallTracker{inner: workerCfg.advisor}
+		return tracker, tracker
+	}
+	var (
+		cfg    opencode.Config
+		cfgErr error
+		advTTL time.Duration
+	)
+	if s.advisorOptions != nil {
+		cfg, cfgErr = opencode.LoadConfigWithSettings(s.advisorOptions.Settings)
+		advTTL = s.advisorOptions.CacheTTL
+	} else {
+		cfg, cfgErr = opencode.LoadConfig()
+	}
+	if cfgErr != nil {
+		return nil, nil
+	}
+	client, cliErr := opencode.NewWithConfig(cfg)
+	if cliErr != nil {
+		return nil, nil
+	}
+	tracker := &advisorCallTracker{inner: client}
+	return advisor.NewCachedAdvisorWithTTL(tracker, store, cfg.Model, opencode.PromptHash(), advTTL), tracker
 }
 
 func (s *Server) ensureJobNotifyCh() chan struct{} {
@@ -369,30 +388,7 @@ func (s *Server) runSyncJob(serverCtx context.Context, job companion.SyncJob) {
 	}
 
 	workerCfg := s.getJobWorkerConfig()
-	var adv advisor.Advisor
-	var advTracker *advisorCallTracker
-	if workerCfg.advisor != nil {
-		advTracker = &advisorCallTracker{inner: workerCfg.advisor}
-		adv = advTracker
-	} else {
-		var (
-			cfg    opencode.Config
-			cfgErr error
-			advTTL time.Duration
-		)
-		if s.advisorOptions != nil {
-			cfg, cfgErr = opencode.LoadConfigWithSettings(s.advisorOptions.Settings)
-			advTTL = s.advisorOptions.CacheTTL
-		} else {
-			cfg, cfgErr = opencode.LoadConfig()
-		}
-		if cfgErr == nil {
-			if client, cliErr := opencode.NewWithConfig(cfg); cliErr == nil {
-				advTracker = &advisorCallTracker{inner: client}
-				adv = advisor.NewCachedAdvisorWithTTL(advTracker, store, cfg.Model, opencode.PromptHash(), advTTL)
-			}
-		}
-	}
+	adv, advTracker := s.buildAdvisor(store)
 
 	totalEstimated := job.TotalEstimated
 	processedCount := job.ProcessedCount

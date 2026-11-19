@@ -88,6 +88,9 @@ type Server struct {
 	cacheOptions     CacheOptions
 	advisorOptions   *AdvisorOptions
 	jobNotifyCh      chan struct{}
+	jobMu            sync.Mutex
+	jobCache         *companion.MemoryTTLCache
+	jobConfig        jobWorkerConfig
 	activeJobMu      sync.Mutex
 	activeJobID      int64
 	activeJobCancel  context.CancelFunc
@@ -894,13 +897,7 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 
 	var adv advisor.Advisor
 	if withAdvisor || autoMatch {
-		cfg, err := opencode.LoadConfig()
-		if err == nil {
-			client, err := opencode.NewWithConfig(cfg)
-			if err == nil {
-				adv = advisor.NewCachedAdvisor(client, store, cfg.Model, opencode.PromptHash())
-			}
-		}
+		adv, _ = s.buildAdvisor(store)
 	}
 
 	if autoMatch {
@@ -1062,14 +1059,7 @@ func (s *Server) handleAutoMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var adv advisor.Advisor
-	cfg, err := opencode.LoadConfig()
-	if err == nil {
-		client, err := opencode.NewWithConfig(cfg)
-		if err == nil {
-			adv = advisor.NewCachedAdvisor(client, store, cfg.Model, opencode.PromptHash())
-		}
-	}
+	adv, _ := s.buildAdvisor(store)
 
 	report, err := companion.AutoMatchOwned(ctx, store, src, target, s.database, s.ownership, adv, companion.AutoMatchOptions{
 		Provider:      provider,
