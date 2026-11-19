@@ -159,7 +159,7 @@ func TestCanceledPendingReturnsSafeEmptyArrays(t *testing.T) {
 	// This test invokes the handler directly, bypassing Serve's initialization
 	// before Accept. Initialize ownership synchronously instead of racing Serve.
 	db := filepath.Join(t.TempDir(), "db.sqlite")
-	s, err := New(Options{Address: "127.0.0.1:8081", Database: db, Source: src, Target: &targetStub{}, operationTimeout: time.Second, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return now }})
+	s, err := New(Options{Address: "127.0.0.1:8081", Database: db, Source: src, Target: &targetStub{}, OperationTimeout: time.Second, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}

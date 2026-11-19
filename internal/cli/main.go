@@ -10,6 +10,7 @@ import (
 	"github.com/azusachino/drifter/internal/advisor"
 	"github.com/azusachino/drifter/internal/advisor/opencode"
 	"github.com/azusachino/drifter/internal/companion"
+	"github.com/azusachino/drifter/internal/config"
 	"github.com/azusachino/drifter/internal/provider/hardcover"
 	"github.com/azusachino/drifter/internal/provider/weread"
 )
@@ -18,10 +19,32 @@ import (
 func Main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	loadFileCfg := func() config.Config {
+		cfg, err := config.Load(config.DefaultPath())
+		if err != nil {
+			return config.Defaults()
+		}
+		return cfg
+	}
 	providers := clients{
-		source: func() (source, error) { return weread.New(os.Getenv("WEREAD_API_KEY")) },
-		target: func() (target, error) { return hardcover.New(os.Getenv("HARDCOVER_API_KEY")) },
+		source: func() (source, error) {
+			p := loadFileCfg().Providers
+			return weread.NewWithOptions(
+				os.Getenv("WEREAD_API_KEY"),
+				config.ParseDurationOr(p.WeReadInterval, 0),
+				config.ParseDurationOr(p.Timeout, 0),
+			)
+		},
+		target: func() (target, error) {
+			p := loadFileCfg().Providers
+			return hardcover.NewWithOptions(
+				os.Getenv("HARDCOVER_API_KEY"),
+				config.ParseDurationOr(p.HardcoverInterval, 0),
+				config.ParseDurationOr(p.Timeout, 0),
+			)
+		},
 		advisor: func(store *companion.Store) (advisor.Advisor, error) {
+			fileCfg := loadFileCfg()
 			cfg, err := opencode.LoadConfig()
 			if err != nil {
 				return nil, err
@@ -31,7 +54,8 @@ func Main() {
 				return nil, err
 			}
 			if store != nil {
-				return advisor.NewCachedAdvisor(client, store, cfg.Model, opencode.PromptHash()), nil
+				ttl := config.ParseDurationOr(fileCfg.Advisor.CacheTTL, 0)
+				return advisor.NewCachedAdvisorWithTTL(client, store, cfg.Model, opencode.PromptHash(), ttl), nil
 			}
 			return client, nil
 		},

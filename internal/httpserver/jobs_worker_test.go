@@ -1057,3 +1057,56 @@ func TestJobWorkerLongRateLimitCooldownAbortsPhase1AndRunsPhase2(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestServerOptionsConfigureJobWorkerAndTimeouts(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "drifter.sqlite")
+	srv, err := New(Options{
+		Address:           "127.0.0.1:0",
+		Database:          db,
+		Source:            &sourceStub{},
+		Target:            &targetStub{},
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		OperationTimeout:  3 * time.Minute,
+		ReadHeaderTimeout: 7 * time.Second,
+		ReadTimeout:       20 * time.Second,
+		WriteTimeout:      4 * time.Minute,
+		IdleTimeout:       90 * time.Second,
+		ShutdownTimeout:   15 * time.Second,
+		Jobs: JobWorkerOptions{
+			PollInterval:       12 * time.Second,
+			BatchSize:          9,
+			BookStepTimeout:    2 * time.Minute,
+			ReconcileTimeout:   30 * time.Minute,
+			CooldownBase:       10 * time.Second,
+			CooldownMax:        60 * time.Second,
+			MaxCooldownWait:    3 * time.Minute,
+			MaxRateLimitRetry:  7,
+			DisableAdvisorPace: true,
+		},
+		Cache: CacheOptions{
+			MaxEntries: 2048,
+			ShelfTTL:   10 * time.Minute,
+			BookTTL:    2 * time.Hour,
+			SearchTTL:  30 * time.Minute,
+			TargetTTL:  45 * time.Minute,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.operationTimeout != 3*time.Minute || srv.shutdownTimeout != 15*time.Second {
+		t.Fatalf("unexpected server timeouts: op=%v shutdown=%v", srv.operationTimeout, srv.shutdownTimeout)
+	}
+	if srv.http.ReadHeaderTimeout != 7*time.Second || srv.http.ReadTimeout != 20*time.Second || srv.http.WriteTimeout != 4*time.Minute || srv.http.IdleTimeout != 90*time.Second {
+		t.Fatalf("unexpected http.Server timeouts: %+v", srv.http)
+	}
+	wcfg := srv.getJobWorkerConfig()
+	if wcfg.pollInterval != 12*time.Second || wcfg.batchSize != 9 || wcfg.bookStepTimeout != 2*time.Minute ||
+		wcfg.reconcileTimeout != 30*time.Minute || wcfg.cooldownBase != 10*time.Second || wcfg.cooldownMax != 60*time.Second ||
+		wcfg.maxCooldownWait != 3*time.Minute || wcfg.maxRateLimitRetry != 7 || wcfg.advisorPaceDelay != 0 {
+		t.Fatalf("unexpected jobWorkerConfig: %+v", wcfg)
+	}
+	if srv.cacheOptions.MaxEntries != 2048 || srv.cacheOptions.ShelfTTL != 10*time.Minute || srv.cacheOptions.TargetTTL != 45*time.Minute {
+		t.Fatalf("unexpected cacheOptions: %+v", srv.cacheOptions)
+	}
+}

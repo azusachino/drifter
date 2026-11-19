@@ -16,6 +16,9 @@ import (
 // DefaultURL is the production WeRead agent gateway endpoint.
 const DefaultURL = "https://i.weread.qq.com/api/agent/gateway"
 
+// DefaultInterval is the default minimum spacing between WeRead requests.
+const DefaultInterval = time.Second
+
 // Client is the WeRead intake provider client.
 type Client struct {
 	api *transport.Client
@@ -26,9 +29,19 @@ var (
 	_ companion.PreviewSource  = (*Client)(nil)
 )
 
-// New constructs an authenticated WeRead client using DefaultURL and a 1s rate-limit interval.
+// New constructs an authenticated WeRead client using DefaultURL, DefaultInterval,
+// and transport.DefaultTimeout.
 func New(token string) (*Client, error) {
-	api, err := transport.NewClient("WeRead", DefaultURL, token, time.Second)
+	return NewWithOptions(token, DefaultInterval, transport.DefaultTimeout)
+}
+
+// NewWithOptions constructs an authenticated WeRead client with custom pacing
+// interval and HTTP timeout. Non-positive values fall back to defaults.
+func NewWithOptions(token string, interval, timeout time.Duration) (*Client, error) {
+	if interval <= 0 {
+		interval = DefaultInterval
+	}
+	api, err := transport.NewClientWithTimeout("WeRead", DefaultURL, token, interval, timeout)
 	if err != nil {
 		return nil, err
 	}

@@ -27,12 +27,29 @@ const (
 )
 
 type jobWorkerConfig struct {
+	pollInterval      time.Duration
+	batchSize         int
+	bookStepTimeout   time.Duration
+	reconcileTimeout  time.Duration
 	cooldownBase      time.Duration
 	cooldownMax       time.Duration
 	maxCooldownWait   time.Duration
 	maxRateLimitRetry int
 	advisorPaceDelay  time.Duration // < 0 disables pacing delay
 	advisor           advisor.Advisor
+}
+
+func hasJobWorkerOptions(opts JobWorkerOptions) bool {
+	return opts.PollInterval > 0 ||
+		opts.BatchSize > 0 ||
+		opts.BookStepTimeout > 0 ||
+		opts.ReconcileTimeout > 0 ||
+		opts.CooldownBase > 0 ||
+		opts.CooldownMax > 0 ||
+		opts.MaxCooldownWait > 0 ||
+		opts.MaxRateLimitRetry > 0 ||
+		opts.AdvisorPaceDelay > 0 ||
+		opts.DisableAdvisorPace
 }
 
 var (
@@ -51,6 +68,18 @@ func (s *Server) getJobWorkerConfig() jobWorkerConfig {
 	serverJobCachesMu.Lock()
 	cfg := serverJobConfigs[s]
 	serverJobCachesMu.Unlock()
+	if cfg.pollInterval <= 0 {
+		cfg.pollInterval = jobWorkerFallbackPollInterval
+	}
+	if cfg.batchSize <= 0 {
+		cfg.batchSize = jobAutoMatchBatchSize
+	}
+	if cfg.bookStepTimeout <= 0 {
+		cfg.bookStepTimeout = jobBookStepTimeout
+	}
+	if cfg.reconcileTimeout <= 0 {
+		cfg.reconcileTimeout = jobReconcileTimeout
+	}
 	if cfg.cooldownBase <= 0 {
 		cfg.cooldownBase = defaultJobCooldownBase
 	}
@@ -94,7 +123,7 @@ func (s *Server) getJobCache() *companion.MemoryTTLCache {
 	defer serverJobCachesMu.Unlock()
 	c, ok := serverJobCaches[s]
 	if !ok {
-		c = companion.NewMemoryTTLCache(10000, s.now)
+		c = companion.NewMemoryTTLCache(s.cacheOptions.MaxEntries, s.now)
 		serverJobCaches[s] = c
 	}
 	return c
@@ -173,7 +202,7 @@ func (s *Server) startJobWorker(serverCtx context.Context) func() {
 }
 
 func (s *Server) jobWorkerLoop(workerCtx context.Context, notifyCh <-chan struct{}) {
-	ticker := time.NewTicker(jobWorkerFallbackPollInterval)
+	ticker := time.NewTicker(s.getJobWorkerConfig().pollInterval)
 	defer ticker.Stop()
 
 	s.drainQueuedJobs(workerCtx)
@@ -321,11 +350,11 @@ func (s *Server) runSyncJob(serverCtx context.Context, job companion.SyncJob) {
 	}
 
 	cache := s.getJobCache()
-	cachedSrc := companion.NewCachedSource(rawSrc, cache, s.now)
+	cachedSrc := companion.NewCachedSourceWithTTLs(rawSrc, cache, s.now, s.cacheOptions.ShelfTTL, s.cacheOptions.BookTTL, s.cacheOptions.SearchTTL)
 	if job.Force {
 		cachedSrc.InvalidateShelf()
 	}
-	cachedTgt := companion.NewCachedTarget(rawTgt, cache, s.now)
+	cachedTgt := companion.NewCachedTargetWithTTL(rawTgt, cache, s.now, s.cacheOptions.TargetTTL)
 
 	resolveCtx, resolveCancel := context.WithTimeout(jobCtx, 10*time.Second)
 	sourceAccount, targetAccount, err := store.ResolveAccounts(resolveCtx, job.SourceAccount, job.TargetAccount)
@@ -345,10 +374,23 @@ func (s *Server) runSyncJob(serverCtx context.Context, job companion.SyncJob) {
 	if workerCfg.advisor != nil {
 		advTracker = &advisorCallTracker{inner: workerCfg.advisor}
 		adv = advTracker
-	} else if cfg, cfgErr := opencode.LoadConfig(); cfgErr == nil {
-		if client, cliErr := opencode.NewWithConfig(cfg); cliErr == nil {
-			advTracker = &advisorCallTracker{inner: client}
-			adv = advisor.NewCachedAdvisor(advTracker, store, cfg.Model, opencode.PromptHash())
+	} else {
+		var (
+			cfg    opencode.Config
+			cfgErr error
+			advTTL time.Duration
+		)
+		if s.advisorOptions != nil {
+			cfg, cfgErr = opencode.LoadConfigWithSettings(s.advisorOptions.Settings)
+			advTTL = s.advisorOptions.CacheTTL
+		} else {
+			cfg, cfgErr = opencode.LoadConfig()
+		}
+		if cfgErr == nil {
+			if client, cliErr := opencode.NewWithConfig(cfg); cliErr == nil {
+				advTracker = &advisorCallTracker{inner: client}
+				adv = advisor.NewCachedAdvisorWithTTL(advTracker, store, cfg.Model, opencode.PromptHash(), advTTL)
+			}
 		}
 	}
 
@@ -367,7 +409,7 @@ func (s *Server) runSyncJob(serverCtx context.Context, job companion.SyncJob) {
 			return
 		}
 
-		discoverCtx, discoverCancel := context.WithTimeout(jobCtx, jobBookStepTimeout)
+		discoverCtx, discoverCancel := context.WithTimeout(jobCtx, workerCfg.bookStepTimeout)
 		autoOpts := companion.AutoMatchOptions{
 			Provider:      job.Provider,
 			SourceAccount: sourceAccount,
@@ -397,13 +439,13 @@ func (s *Server) runSyncJob(serverCtx context.Context, job companion.SyncJob) {
 
 		backoff := workerCfg.cooldownBase
 
-		for start := 0; start < len(candidates); start += jobAutoMatchBatchSize {
+		for start := 0; start < len(candidates); start += workerCfg.batchSize {
 			if jobCtx.Err() != nil || serverCtx.Err() != nil || s.isJobCancelRequested(store, job.ID) {
 				s.finalizeInterruptedOrCancelledJob(store, job.ID, serverCtx)
 				return
 			}
 
-			end := start + jobAutoMatchBatchSize
+			end := start + workerCfg.batchSize
 			if end > len(candidates) {
 				end = len(candidates)
 			}
@@ -429,7 +471,7 @@ func (s *Server) runSyncJob(serverCtx context.Context, job companion.SyncJob) {
 				if advTracker != nil {
 					advTracker.called = false
 				}
-				bookCtx, bookCancel := context.WithTimeout(jobCtx, jobBookStepTimeout)
+				bookCtx, bookCancel := context.WithTimeout(jobCtx, workerCfg.bookStepTimeout)
 				autoOpts.Now = s.now().UTC()
 				item := companion.AutoMatchBookWithStore(bookCtx, store, cachedSrc, cachedTgt, adv, row, autoOpts)
 				bookCancel()
@@ -515,7 +557,7 @@ func (s *Server) runSyncJob(serverCtx context.Context, job companion.SyncJob) {
 				break
 			}
 
-			if batchHitAdvisor && start+jobAutoMatchBatchSize < len(candidates) && workerCfg.advisorPaceDelay > 0 {
+			if batchHitAdvisor && start+workerCfg.batchSize < len(candidates) && workerCfg.advisorPaceDelay > 0 {
 				if !s.waitCooldown(jobCtx, serverCtx, store, job.ID, workerCfg.advisorPaceDelay) {
 					s.finalizeInterruptedOrCancelledJob(store, job.ID, serverCtx)
 					return
@@ -553,8 +595,8 @@ func (s *Server) runSyncJob(serverCtx context.Context, job companion.SyncJob) {
 		}
 
 		recTimeout := s.operationTimeout
-		if recTimeout < jobReconcileTimeout {
-			recTimeout = jobReconcileTimeout
+		if recTimeout < workerCfg.reconcileTimeout {
+			recTimeout = workerCfg.reconcileTimeout
 		}
 		recCtx, recCancel := context.WithTimeout(jobCtx, recTimeout)
 		summary, recErr := companion.ReconcileAccount(

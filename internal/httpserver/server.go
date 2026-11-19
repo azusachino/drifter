@@ -32,9 +32,16 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-const maxRequestBody = 8 << 10
-const maxImportRequestBody = 4 << 20
-const defaultOperationTimeout = 90 * time.Second
+const (
+	maxRequestBody           = 8 << 10
+	maxImportRequestBody     = 4 << 20
+	defaultOperationTimeout  = 90 * time.Second
+	defaultReadHeaderTimeout = 5 * time.Second
+	defaultReadTimeout       = 15 * time.Second
+	defaultWriteTimeout      = 2 * time.Minute
+	defaultIdleTimeout       = 60 * time.Second
+	defaultShutdownTimeout   = 10 * time.Second
+)
 
 var errProviderUnavailable = errors.New("provider unavailable")
 
@@ -77,10 +84,44 @@ type Server struct {
 	targetErr        error
 	operationSlot    chan struct{}
 	operationTimeout time.Duration
+	shutdownTimeout  time.Duration
+	cacheOptions     CacheOptions
+	advisorOptions   *AdvisorOptions
 	jobNotifyCh      chan struct{}
 	activeJobMu      sync.Mutex
 	activeJobID      int64
 	activeJobCancel  context.CancelFunc
+}
+
+// JobWorkerOptions configures background sync job worker budgets and pacing.
+// Zero values fall back to documented defaults.
+type JobWorkerOptions struct {
+	PollInterval       time.Duration
+	BatchSize          int
+	BookStepTimeout    time.Duration
+	ReconcileTimeout   time.Duration
+	CooldownBase       time.Duration
+	CooldownMax        time.Duration
+	MaxCooldownWait    time.Duration
+	MaxRateLimitRetry  int
+	AdvisorPaceDelay   time.Duration
+	DisableAdvisorPace bool
+}
+
+// CacheOptions configures the server's in-memory provider TTL cache.
+// Zero values fall back to companion package defaults.
+type CacheOptions struct {
+	MaxEntries int
+	ShelfTTL   time.Duration
+	BookTTL    time.Duration
+	SearchTTL  time.Duration
+	TargetTTL  time.Duration
+}
+
+// AdvisorOptions carries settings-file advisor configuration into the HTTP server.
+type AdvisorOptions struct {
+	Settings opencode.Settings
+	CacheTTL time.Duration
 }
 
 type Options struct {
@@ -95,8 +136,16 @@ type Options struct {
 	Now           func() time.Time
 	// APIToken protects the versioned /api/v1 read endpoints. Empty falls back
 	// to DRIFTER_API_TOKEN; when neither is set those endpoints reject requests.
-	APIToken         string
-	operationTimeout time.Duration
+	APIToken          string
+	OperationTimeout  time.Duration
+	ReadHeaderTimeout time.Duration
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
+	ShutdownTimeout   time.Duration
+	Jobs              JobWorkerOptions
+	Cache             CacheOptions
+	Advisor           *AdvisorOptions
 }
 
 func New(options Options) (*Server, error) {
@@ -112,8 +161,23 @@ func New(options Options) (*Server, error) {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
-	if options.operationTimeout <= 0 {
-		options.operationTimeout = defaultOperationTimeout
+	if options.OperationTimeout <= 0 {
+		options.OperationTimeout = defaultOperationTimeout
+	}
+	if options.ReadHeaderTimeout <= 0 {
+		options.ReadHeaderTimeout = defaultReadHeaderTimeout
+	}
+	if options.ReadTimeout <= 0 {
+		options.ReadTimeout = defaultReadTimeout
+	}
+	if options.WriteTimeout <= 0 {
+		options.WriteTimeout = defaultWriteTimeout
+	}
+	if options.IdleTimeout <= 0 {
+		options.IdleTimeout = defaultIdleTimeout
+	}
+	if options.ShutdownTimeout <= 0 {
+		options.ShutdownTimeout = defaultShutdownTimeout
 	}
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
@@ -130,8 +194,26 @@ func New(options Options) (*Server, error) {
 		apiToken: apiToken,
 		logger:   options.Logger, now: options.Now, source: options.Source, sourceFactory: options.SourceFactory,
 		target: options.Target, targetFactory: options.TargetFactory,
-		operationSlot: make(chan struct{}, 1), operationTimeout: options.operationTimeout,
+		operationSlot: make(chan struct{}, 1), operationTimeout: options.OperationTimeout,
+		shutdownTimeout: options.ShutdownTimeout, cacheOptions: options.Cache, advisorOptions: options.Advisor,
 		jobNotifyCh: make(chan struct{}, 1)}
+	if hasJobWorkerOptions(options.Jobs) {
+		paceDelay := options.Jobs.AdvisorPaceDelay
+		if options.Jobs.DisableAdvisorPace {
+			paceDelay = -1
+		}
+		s.setJobWorkerConfig(jobWorkerConfig{
+			pollInterval:      options.Jobs.PollInterval,
+			batchSize:         options.Jobs.BatchSize,
+			bookStepTimeout:   options.Jobs.BookStepTimeout,
+			reconcileTimeout:  options.Jobs.ReconcileTimeout,
+			cooldownBase:      options.Jobs.CooldownBase,
+			cooldownMax:       options.Jobs.CooldownMax,
+			maxCooldownWait:   options.Jobs.MaxCooldownWait,
+			maxRateLimitRetry: options.Jobs.MaxRateLimitRetry,
+			advisorPaceDelay:  paceDelay,
+		})
+	}
 	router := chi.NewRouter()
 	router.Use(requestRouteLogAttribute)
 	ready := []probes.Readiness{{Name: "mapping_database", Check: func(r *http.Request) error {
@@ -202,8 +284,8 @@ func New(options Options) (*Server, error) {
 		jobs.Post("/cancel", s.handleFormJobCancel)
 	})
 	s.http = &http.Server{
-		Addr: options.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second,
+		Addr: options.Address, Handler: router, ReadHeaderTimeout: options.ReadHeaderTimeout,
+		ReadTimeout: options.ReadTimeout, WriteTimeout: options.WriteTimeout, IdleTimeout: options.IdleTimeout,
 	}
 	return s, nil
 }
@@ -1936,7 +2018,7 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		}
 		return fmt.Errorf("HTTP server failed")
 	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdown, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
 		defer cancel()
 		if err := s.http.Shutdown(shutdown); err != nil {
 			_ = s.http.Close()

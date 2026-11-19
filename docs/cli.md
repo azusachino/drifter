@@ -80,9 +80,41 @@ addr = "127.0.0.1:8080"  # standalone read-only health endpoint
 [server]
 addr = "127.0.0.1:8081"  # local HTTP server; loopback by default
 allowed_hosts = ["localhost:8081"]  # optional additional host header allowlist
+# operation_timeout = "90s"         # admitted sync/pending deadline
+# read_header_timeout = "5s"        # HTTP read header timeout
+# read_timeout = "15s"              # HTTP read timeout
+# write_timeout = "2m"              # HTTP write timeout
+# idle_timeout = "60s"              # HTTP idle keep-alive timeout
+# shutdown_timeout = "10s"          # graceful shutdown deadline
 
 [database]
 # path = "/var/lib/drifter/mappings.sqlite"  # optional absolute override
+
+# Background sync job worker budgets and pacing (all optional).
+[jobs]
+# poll_interval = "5s"        # fallback queue poll interval
+# batch_size = 5              # auto-match books per batch
+# book_step_timeout = "75s"   # per-book discovery/auto-match budget
+# reconcile_timeout = "15m"   # Phase 2 reconcile budget
+# cooldown_base = "15s"       # rate-limit backoff base
+# cooldown_max = "90s"        # rate-limit backoff cap
+# max_cooldown_wait = "2m"    # max single wait before aborting Phase 1
+# max_rate_limit_retry = 5    # max rate-limit retries per book
+# advisor_pace_delay = "1s"   # pause between advisor batches ("0s" disables)
+
+# In-memory provider response TTL cache (all optional).
+[cache]
+# max_entries = 10000
+# shelf_ttl = "5m"
+# book_ttl = "6h"
+# search_ttl = "1h"
+# target_ttl = "1h"
+
+# Upstream provider HTTP timeout and pacing (endpoints remain fixed HTTPS).
+[providers]
+# timeout = "30s"
+# weread_interval = "1s"
+# hardcover_interval = "1100ms"
 
 # Matching catalogs are opt-in and fetched only by an explicit `match` command.
 [[matching.catalogs]]
@@ -96,11 +128,14 @@ provider = "default"  # default (Douban + OpenLibrary), douban, openlibrary, cus
 # url = "https://example.com/books/{isbn}"  # required when provider = "custom"
 
 # OpenCode LLM advisor settings (OpenAI-compatible completions gateway).
-# API keys belong strictly in the environment (MAGPIE_GATEWAY_KEY, OPENCODE_API_KEY, DRIFTER_ADVISOR_KEY), never here.
+# API keys belong strictly in the environment (MAGPIE_GATEWAY_KEY,
+# OPENCODE_API_KEY, DRIFTER_ADVISOR_KEY), never here.
 [advisor]
 # base_url = "https://ai-gateway.example.org/v1"  # default: https://api.openai.com/v1
 # model = "opencode-go/beam-free"                 # default: opencode-go/beam-free
+# models = ["opencode-go/beam-free"]              # optional fallback chain
 # timeout = "30s"                                 # default: 30s
+# cache_ttl = "720h"                              # default: 720h (30 days)
 ```
 
 Settings files are discovered in the following order:

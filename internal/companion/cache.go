@@ -7,12 +7,13 @@ import (
 	"time"
 )
 
-// Default TTLs for cached companion operations.
+// Default TTLs and capacity for cached companion operations.
 const (
-	DefaultShelfCacheTTL  = 5 * time.Minute
-	DefaultBookCacheTTL   = 6 * time.Hour
-	DefaultSearchCacheTTL = 1 * time.Hour
-	DefaultTargetCacheTTL = 1 * time.Hour
+	DefaultCacheMaxEntries = 10000
+	DefaultShelfCacheTTL   = 5 * time.Minute
+	DefaultBookCacheTTL    = 6 * time.Hour
+	DefaultSearchCacheTTL  = 1 * time.Hour
+	DefaultTargetCacheTTL  = 1 * time.Hour
 )
 
 // Cache defines the minimal thread-safe cache operations.
@@ -43,7 +44,7 @@ var _ Cache = (*MemoryTTLCache)(nil)
 // If now is nil, time.Now().UTC is used.
 func NewMemoryTTLCache(maxEntries int, now func() time.Time) *MemoryTTLCache {
 	if maxEntries <= 0 {
-		maxEntries = 10000
+		maxEntries = DefaultCacheMaxEntries
 	}
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
@@ -144,33 +145,50 @@ func (c *MemoryTTLCache) Len() int {
 // - Search is cached with 1-hour TTL.
 // - ResolveAccountFingerprint is passed through without caching.
 type CachedSource struct {
-	inner    Source
-	cache    *MemoryTTLCache
-	shelfTTL time.Duration
-	bookTTL  time.Duration
-	now      func() time.Time
+	inner     Source
+	cache     *MemoryTTLCache
+	shelfTTL  time.Duration
+	bookTTL   time.Duration
+	searchTTL time.Duration
+	now       func() time.Time
 }
 
 var _ Source = (*CachedSource)(nil)
 var _ PreviewSource = (*CachedSource)(nil)
 var _ SourceProvider = (*CachedSource)(nil)
 
-// NewCachedSource wraps inner Source with MemoryTTLCache.
+// NewCachedSource wraps inner Source with MemoryTTLCache using default TTLs.
 // If cache is nil, a default cache is instantiated.
 // If now is nil, time.Now().UTC is used.
 func NewCachedSource(inner Source, cache *MemoryTTLCache, now func() time.Time) *CachedSource {
+	return NewCachedSourceWithTTLs(inner, cache, now, DefaultShelfCacheTTL, DefaultBookCacheTTL, DefaultSearchCacheTTL)
+}
+
+// NewCachedSourceWithTTLs wraps inner Source with MemoryTTLCache and custom TTLs.
+// Non-positive TTLs fall back to their respective package defaults.
+func NewCachedSourceWithTTLs(inner Source, cache *MemoryTTLCache, now func() time.Time, shelfTTL, bookTTL, searchTTL time.Duration) *CachedSource {
 	if cache == nil {
-		cache = NewMemoryTTLCache(10000, now)
+		cache = NewMemoryTTLCache(DefaultCacheMaxEntries, now)
 	}
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	if shelfTTL <= 0 {
+		shelfTTL = DefaultShelfCacheTTL
+	}
+	if bookTTL <= 0 {
+		bookTTL = DefaultBookCacheTTL
+	}
+	if searchTTL <= 0 {
+		searchTTL = DefaultSearchCacheTTL
+	}
 	return &CachedSource{
-		inner:    inner,
-		cache:    cache,
-		shelfTTL: DefaultShelfCacheTTL,
-		bookTTL:  DefaultBookCacheTTL,
-		now:      now,
+		inner:     inner,
+		cache:     cache,
+		shelfTTL:  shelfTTL,
+		bookTTL:   bookTTL,
+		searchTTL: searchTTL,
+		now:       now,
 	}
 }
 
@@ -219,7 +237,7 @@ func (c *CachedSource) Search(ctx context.Context, query string) (SearchResult, 
 	if err != nil {
 		return SearchResult{}, err
 	}
-	c.cache.Set(key, res, DefaultSearchCacheTTL)
+	c.cache.Set(key, res, c.searchTTL)
 	return res, nil
 }
 
@@ -271,18 +289,27 @@ var _ PreviewTarget = (*CachedTarget)(nil)
 var _ TargetProvider = (*CachedTarget)(nil)
 var _ ApplyTarget = (*CachedTarget)(nil)
 
-// NewCachedTarget wraps inner Target with MemoryTTLCache.
+// NewCachedTarget wraps inner Target with MemoryTTLCache using DefaultTargetCacheTTL.
 func NewCachedTarget(inner Target, cache *MemoryTTLCache, now func() time.Time) *CachedTarget {
+	return NewCachedTargetWithTTL(inner, cache, now, DefaultTargetCacheTTL)
+}
+
+// NewCachedTargetWithTTL wraps inner Target with MemoryTTLCache and a custom TTL.
+// A non-positive targetTTL falls back to DefaultTargetCacheTTL.
+func NewCachedTargetWithTTL(inner Target, cache *MemoryTTLCache, now func() time.Time, targetTTL time.Duration) *CachedTarget {
 	if cache == nil {
-		cache = NewMemoryTTLCache(10000, now)
+		cache = NewMemoryTTLCache(DefaultCacheMaxEntries, now)
 	}
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	if targetTTL <= 0 {
+		targetTTL = DefaultTargetCacheTTL
+	}
 	return &CachedTarget{
 		inner:     inner,
 		cache:     cache,
-		targetTTL: DefaultTargetCacheTTL,
+		targetTTL: targetTTL,
 		now:       now,
 	}
 }

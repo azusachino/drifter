@@ -42,9 +42,53 @@ type ISBNConfig struct {
 // Credentials (API keys) never belong in the configuration file;
 // they come strictly from the environment.
 type AdvisorConfig struct {
-	BaseURL string `toml:"base_url"`
-	Model   string `toml:"model"`
-	Timeout string `toml:"timeout"`
+	BaseURL  string   `toml:"base_url"`
+	Model    string   `toml:"model"`
+	Models   []string `toml:"models"`
+	Timeout  string   `toml:"timeout"`
+	CacheTTL string   `toml:"cache_ttl"`
+}
+
+// ServerConfig configures the local HTTP server listener and timeouts.
+type ServerConfig struct {
+	Addr              string   `toml:"addr"`
+	AllowedHosts      []string `toml:"allowed_hosts"`
+	OperationTimeout  string   `toml:"operation_timeout"`
+	ReadHeaderTimeout string   `toml:"read_header_timeout"`
+	ReadTimeout       string   `toml:"read_timeout"`
+	WriteTimeout      string   `toml:"write_timeout"`
+	IdleTimeout       string   `toml:"idle_timeout"`
+	ShutdownTimeout   string   `toml:"shutdown_timeout"`
+}
+
+// JobsConfig configures the background sync job worker budgets and pacing.
+type JobsConfig struct {
+	PollInterval      string `toml:"poll_interval"`
+	BatchSize         int    `toml:"batch_size"`
+	BookStepTimeout   string `toml:"book_step_timeout"`
+	ReconcileTimeout  string `toml:"reconcile_timeout"`
+	CooldownBase      string `toml:"cooldown_base"`
+	CooldownMax       string `toml:"cooldown_max"`
+	MaxCooldownWait   string `toml:"max_cooldown_wait"`
+	MaxRateLimitRetry int    `toml:"max_rate_limit_retry"`
+	AdvisorPaceDelay  string `toml:"advisor_pace_delay"`
+}
+
+// CacheConfig configures the in-memory provider response TTL cache.
+type CacheConfig struct {
+	MaxEntries int    `toml:"max_entries"`
+	ShelfTTL   string `toml:"shelf_ttl"`
+	BookTTL    string `toml:"book_ttl"`
+	SearchTTL  string `toml:"search_ttl"`
+	TargetTTL  string `toml:"target_ttl"`
+}
+
+// ProvidersConfig configures HTTP client timeouts and rate-limit pacing for
+// upstream providers. Provider URLs remain fixed HTTPS endpoints.
+type ProvidersConfig struct {
+	Timeout           string `toml:"timeout"`
+	WeReadInterval    string `toml:"weread_interval"`
+	HardcoverInterval string `toml:"hardcover_interval"`
 }
 
 // Config is the complete validated settings file. Zero values become
@@ -57,10 +101,7 @@ type Config struct {
 		Enabled bool   `toml:"enabled"`
 		Addr    string `toml:"addr"`
 	} `toml:"probes"`
-	Server struct {
-		Addr         string   `toml:"addr"`
-		AllowedHosts []string `toml:"allowed_hosts"`
-	} `toml:"server"`
+	Server   ServerConfig `toml:"server"`
 	Database struct {
 		// Path overrides the CLI default mapping database location.
 		Path string `toml:"path"`
@@ -69,7 +110,10 @@ type Config struct {
 		Catalogs []catalog.Subscription `toml:"catalogs"`
 		ISBN     ISBNConfig             `toml:"isbn"`
 	} `toml:"matching"`
-	Advisor AdvisorConfig `toml:"advisor"`
+	Jobs      JobsConfig      `toml:"jobs"`
+	Cache     CacheConfig     `toml:"cache"`
+	Providers ProvidersConfig `toml:"providers"`
+	Advisor   AdvisorConfig   `toml:"advisor"`
 }
 
 // Defaults returns the configuration used when no file is present.
@@ -78,10 +122,56 @@ func Defaults() Config {
 	c.Log.Level = LevelInfo
 	c.Probes.Enabled = false
 	c.Probes.Addr = "127.0.0.1:8080"
-	c.Server.Addr = "127.0.0.1:8081"
+	c.Server = ServerConfig{
+		Addr:              "127.0.0.1:8081",
+		OperationTimeout:  "90s",
+		ReadHeaderTimeout: "5s",
+		ReadTimeout:       "15s",
+		WriteTimeout:      "2m",
+		IdleTimeout:       "60s",
+		ShutdownTimeout:   "10s",
+	}
 	c.Matching.ISBN.Enabled = false
 	c.Matching.ISBN.Provider = "default"
+	c.Jobs = JobsConfig{
+		PollInterval:      "5s",
+		BatchSize:         5,
+		BookStepTimeout:   "75s",
+		ReconcileTimeout:  "15m",
+		CooldownBase:      "15s",
+		CooldownMax:       "90s",
+		MaxCooldownWait:   "2m",
+		MaxRateLimitRetry: 5,
+		AdvisorPaceDelay:  "1s",
+	}
+	c.Cache = CacheConfig{
+		MaxEntries: 10000,
+		ShelfTTL:   "5m",
+		BookTTL:    "6h",
+		SearchTTL:  "1h",
+		TargetTTL:  "1h",
+	}
+	c.Providers = ProvidersConfig{
+		Timeout:           "30s",
+		WeReadInterval:    "1s",
+		HardcoverInterval: "1100ms",
+	}
+	c.Advisor.CacheTTL = "720h"
 	return c
+}
+
+// ParseDurationOr parses raw as a Go duration, returning fallback when raw is
+// empty or invalid. Callers normally pass values already validated by Load.
+func ParseDurationOr(raw string, fallback time.Duration) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return fallback
+	}
+	return d
 }
 
 // secretKeyPatterns are key fragments that must never appear in a settings
@@ -160,6 +250,22 @@ func hasAllowedHost(hosts []string) bool {
 	return false
 }
 
+func validatePositiveDuration(name, raw string) (time.Duration, error) {
+	d, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration (e.g. 30s)", name)
+	}
+	return d, nil
+}
+
+func validateNonNegativeDuration(name, raw string) (time.Duration, error) {
+	d, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative duration (e.g. 1s or 0s)", name)
+	}
+	return d, nil
+}
+
 func (c Config) validate() error {
 	switch c.Log.Level {
 	case LevelDebug, LevelInfo, LevelWarn, LevelError:
@@ -184,6 +290,53 @@ func (c Config) validate() error {
 		if strings.TrimSpace(h) == "" || strings.ContainsAny(h, "/\\@?#") {
 			return fmt.Errorf("server.allowed_hosts entries must be valid host[:port] strings")
 		}
+	}
+	for _, field := range []struct{ name, val string }{
+		{"server.operation_timeout", c.Server.OperationTimeout},
+		{"server.read_header_timeout", c.Server.ReadHeaderTimeout},
+		{"server.read_timeout", c.Server.ReadTimeout},
+		{"server.write_timeout", c.Server.WriteTimeout},
+		{"server.idle_timeout", c.Server.IdleTimeout},
+		{"server.shutdown_timeout", c.Server.ShutdownTimeout},
+		{"jobs.poll_interval", c.Jobs.PollInterval},
+		{"jobs.book_step_timeout", c.Jobs.BookStepTimeout},
+		{"jobs.reconcile_timeout", c.Jobs.ReconcileTimeout},
+		{"jobs.max_cooldown_wait", c.Jobs.MaxCooldownWait},
+		{"cache.shelf_ttl", c.Cache.ShelfTTL},
+		{"cache.book_ttl", c.Cache.BookTTL},
+		{"cache.search_ttl", c.Cache.SearchTTL},
+		{"cache.target_ttl", c.Cache.TargetTTL},
+		{"providers.timeout", c.Providers.Timeout},
+		{"providers.weread_interval", c.Providers.WeReadInterval},
+		{"providers.hardcover_interval", c.Providers.HardcoverInterval},
+		{"advisor.cache_ttl", c.Advisor.CacheTTL},
+	} {
+		if _, err := validatePositiveDuration(field.name, field.val); err != nil {
+			return err
+		}
+	}
+	cooldownBase, err := validatePositiveDuration("jobs.cooldown_base", c.Jobs.CooldownBase)
+	if err != nil {
+		return err
+	}
+	cooldownMax, err := validatePositiveDuration("jobs.cooldown_max", c.Jobs.CooldownMax)
+	if err != nil {
+		return err
+	}
+	if cooldownMax < cooldownBase {
+		return fmt.Errorf("jobs.cooldown_max must be greater than or equal to jobs.cooldown_base")
+	}
+	if _, err := validateNonNegativeDuration("jobs.advisor_pace_delay", c.Jobs.AdvisorPaceDelay); err != nil {
+		return err
+	}
+	if c.Jobs.BatchSize <= 0 {
+		return fmt.Errorf("jobs.batch_size must be positive")
+	}
+	if c.Jobs.MaxRateLimitRetry <= 0 {
+		return fmt.Errorf("jobs.max_rate_limit_retry must be positive")
+	}
+	if c.Cache.MaxEntries <= 0 {
+		return fmt.Errorf("cache.max_entries must be positive")
 	}
 	if strings.TrimSpace(c.Database.Path) != "" && !filepath.IsAbs(c.Database.Path) {
 		return fmt.Errorf("database.path must be absolute")
@@ -212,9 +365,8 @@ func (c Config) validate() error {
 		}
 	}
 	if strings.TrimSpace(c.Advisor.Timeout) != "" {
-		d, err := time.ParseDuration(strings.TrimSpace(c.Advisor.Timeout))
-		if err != nil || d <= 0 {
-			return fmt.Errorf("advisor.timeout must be a positive duration (e.g. 30s)")
+		if _, err := validatePositiveDuration("advisor.timeout", c.Advisor.Timeout); err != nil {
+			return err
 		}
 	}
 	return nil

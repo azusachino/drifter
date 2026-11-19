@@ -115,6 +115,7 @@ func LoadConfigPath(path string) (Config, error) {
 		if fileCfg, err := config.Load(path); err == nil {
 			s.BaseURL = fileCfg.Advisor.BaseURL
 			s.Model = fileCfg.Advisor.Model
+			s.Models = fileCfg.Advisor.Models
 			if strings.TrimSpace(fileCfg.Advisor.Timeout) != "" {
 				if d, err := time.ParseDuration(strings.TrimSpace(fileCfg.Advisor.Timeout)); err == nil {
 					s.Timeout = d

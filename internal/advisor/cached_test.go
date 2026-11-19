@@ -222,3 +222,31 @@ func TestCachedAdvisorEntriesExpire(t *testing.T) {
 		t.Fatalf("entry past the TTL must miss, got %d inner calls", got)
 	}
 }
+
+func TestCachedAdvisorCustomTTL(t *testing.T) {
+	mock := &countingAdvisor{}
+	store := &memoryStore{data: make(map[string]string)}
+	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	cached := NewCachedAdvisorWithTTL(mock, store, "test-model", "prompt-1", 2*time.Hour)
+	cached.now = func() time.Time { return now }
+	ctx := context.Background()
+	req := ConflictExplanationRequest{SourceTitle: "T", SourceStatus: "read", TargetStatus: "reading"}
+
+	if _, err := cached.ExplainConflict(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	if _, err := cached.ExplainConflict(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if got := mock.conflictCalls.Load(); got != 1 {
+		t.Fatalf("entry inside custom TTL must hit, got %d inner calls", got)
+	}
+	now = now.Add(2 * time.Hour)
+	if _, err := cached.ExplainConflict(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if got := mock.conflictCalls.Load(); got != 2 {
+		t.Fatalf("entry past custom TTL must miss, got %d inner calls", got)
+	}
+}
