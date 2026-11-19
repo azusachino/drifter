@@ -21,12 +21,12 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v3
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
       - name: Ensure C toolchain for CGO (go-sqlite3)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libc6-dev
       - name: Cache Go modules and build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # Go comes from mise, so setup-go's cache does not apply here.
           path: |
