@@ -256,7 +256,7 @@ func (s *Server) drainQueuedJobs(workerCtx context.Context) {
 	}
 }
 
-func (s *Server) acquireBatchSlot(jobCtx, serverCtx context.Context) (func(), error) {
+func acquireSlot(slot chan struct{}, jobCtx, serverCtx context.Context) (func(), error) {
 	select {
 	case <-jobCtx.Done():
 		return nil, jobCtx.Err()
@@ -266,13 +266,21 @@ func (s *Server) acquireBatchSlot(jobCtx, serverCtx context.Context) (func(), er
 	}
 
 	select {
-	case s.operationSlot <- struct{}{}:
-		return func() { <-s.operationSlot }, nil
+	case slot <- struct{}{}:
+		return func() { <-slot }, nil
 	case <-jobCtx.Done():
 		return nil, jobCtx.Err()
 	case <-serverCtx.Done():
 		return nil, serverCtx.Err()
 	}
+}
+
+func (s *Server) acquireBatchSlot(jobCtx, serverCtx context.Context) (func(), error) {
+	return acquireSlot(s.operationSlot, jobCtx, serverCtx)
+}
+
+func (s *Server) acquireReconcileSlot(jobCtx, serverCtx context.Context) (func(), error) {
+	return acquireSlot(s.reconcileSlot, jobCtx, serverCtx)
 }
 
 func (s *Server) waitCooldown(jobCtx, serverCtx context.Context, store *companion.Store, jobID int64, d time.Duration) bool {
@@ -572,7 +580,7 @@ func (s *Server) runSyncJob(serverCtx context.Context, job companion.SyncJob) {
 	reconcileErrors := 0
 
 	if job.Mode != companion.SyncJobModeMatchOnly {
-		releaseReconcile, slotErr := s.acquireBatchSlot(jobCtx, serverCtx)
+		releaseReconcile, slotErr := s.acquireReconcileSlot(jobCtx, serverCtx)
 		if slotErr != nil {
 			s.finalizeInterruptedOrCancelledJob(store, job.ID, serverCtx)
 			return

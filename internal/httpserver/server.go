@@ -83,6 +83,7 @@ type Server struct {
 	targetOnce       sync.Once
 	targetErr        error
 	operationSlot    chan struct{}
+	reconcileSlot    chan struct{}
 	operationTimeout time.Duration
 	shutdownTimeout  time.Duration
 	cacheOptions     CacheOptions
@@ -197,7 +198,7 @@ func New(options Options) (*Server, error) {
 		apiToken: apiToken,
 		logger:   options.Logger, now: options.Now, source: options.Source, sourceFactory: options.SourceFactory,
 		target: options.Target, targetFactory: options.TargetFactory,
-		operationSlot: make(chan struct{}, 1), operationTimeout: options.OperationTimeout,
+		operationSlot: make(chan struct{}, 1), reconcileSlot: make(chan struct{}, 1), operationTimeout: options.OperationTimeout,
 		shutdownTimeout: options.ShutdownTimeout, cacheOptions: options.Cache, advisorOptions: options.Advisor,
 		jobNotifyCh: make(chan struct{}, 1)}
 	if hasJobWorkerOptions(options.Jobs) {
@@ -301,6 +302,26 @@ func (s *Server) admit(parent context.Context) (context.Context, func(), bool) {
 	}
 	ctx, cancel := context.WithTimeout(parent, s.operationTimeout)
 	return ctx, func() { cancel(); <-s.operationSlot }, true
+}
+
+func (s *Server) admitReconcile(parent context.Context) (context.Context, func(), bool) {
+	select {
+	case s.operationSlot <- struct{}{}:
+	default:
+		return nil, nil, false
+	}
+	select {
+	case s.reconcileSlot <- struct{}{}:
+	default:
+		<-s.operationSlot
+		return nil, nil, false
+	}
+	ctx, cancel := context.WithTimeout(parent, s.operationTimeout)
+	return ctx, func() {
+		cancel()
+		<-s.reconcileSlot
+		<-s.operationSlot
+	}, true
 }
 
 func (s *Server) pendingSource() (companion.Source, error) {
@@ -853,7 +874,7 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, release, admitted := s.admit(r.Context())
+	ctx, release, admitted := s.admitReconcile(r.Context())
 	if !admitted {
 		apiError(w, http.StatusServiceUnavailable, "provider_operation_busy")
 		return
