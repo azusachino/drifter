@@ -14,7 +14,6 @@ import (
 
 	"github.com/azusachino/drifter/internal/catalog"
 	"github.com/azusachino/drifter/internal/companion"
-	"github.com/azusachino/drifter/internal/config"
 	"github.com/azusachino/drifter/internal/isbn"
 	"github.com/spf13/cobra"
 )
@@ -22,7 +21,7 @@ import (
 var reviewProviderTimeout = 60 * time.Second
 
 func (app *cliApp) reviewCommand() *cobra.Command {
-	var account, targetAccount, dbPath, configPath string
+	var account, targetAccount, dbPath string
 	var days, year int
 	var includePrivate, includeImported, finishedOnly bool
 	cmd := &cobra.Command{Use: "review", Short: "Review pending books, save decisions, and confirm local links"}
@@ -34,7 +33,6 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 	f.IntVar(&year, "year", 0, "filter books opened in calendar year (e.g. 2025)")
 	f.BoolVar(&finishedOnly, "finished", false, "filter to finished/completed books only")
 	f.StringVar(&dbPath, "db", "", "private SQLite path (config database.path overrides this; otherwise default)")
-	f.StringVar(&configPath, "config", config.DefaultPath(), "settings-only TOML path (missing file uses defaults)")
 	f.BoolVar(&includePrivate, "include-private", false, "explicitly include privacy-marked books")
 	f.BoolVar(&includeImported, "include-imported", false, "inspect imported books (linking unsupported)")
 	return app.command(cmd, func(c *cobra.Command, _ []string) (reviewErr error) {
@@ -44,7 +42,7 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 		if year != 0 && (year < 2000 || year > 2100) {
 			return fmt.Errorf("--year must be between 2000 and 2100")
 		}
-		cfg, err := config.Load(configPath)
+		cfg, err := app.loadConfig()
 		if err != nil {
 			return err
 		}
@@ -205,7 +203,7 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 							targetClient, sourceErr := loadTarget()
 							var report companion.MatchReport
 							if sourceErr == nil {
-								adv, _ := app.getAdvisor(nil)
+								adv, _ := app.getAdvisor(store)
 								report, sourceErr = companion.MatchWithOptions(lookupCtx, source, targetClient, book.ID, query, companion.MatchOptions{
 									CatalogLoader:  loader,
 									ISBNProvider:   isbnProvider,

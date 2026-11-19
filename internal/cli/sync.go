@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/azusachino/drifter/internal/companion"
-	"github.com/azusachino/drifter/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -14,17 +13,14 @@ func (app *cliApp) getApplyTarget() (companion.ApplyTarget, error) {
 	if app.providers.applyTarget != nil {
 		return app.providers.applyTarget()
 	}
-	if app.providers.target != nil {
-		t, err := app.providers.target()
-		if err != nil {
-			return nil, err
-		}
-		if at, ok := t.(companion.ApplyTarget); ok {
-			return at, nil
-		}
-		return nil, fmt.Errorf("target provider does not support status mutation")
+	t, err := app.getTarget()
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("target provider not configured")
+	if at, ok := t.(companion.ApplyTarget); ok {
+		return at, nil
+	}
+	return nil, fmt.Errorf("target provider does not support status mutation")
 }
 
 func (app *cliApp) syncCommand() *cobra.Command {
@@ -41,7 +37,6 @@ func (app *cliApp) syncCommand() *cobra.Command {
 		adoptSource   bool
 		adoptTarget   bool
 		withAdvisor   bool
-		configPath    string
 	)
 
 	command := &cobra.Command{
@@ -57,7 +52,6 @@ func (app *cliApp) syncCommand() *cobra.Command {
 	flags.StringVar(&provider, "source", companion.DefaultSourceProvider, "source provider name (default: weread)")
 	flags.StringVar(&provider, "provider", companion.DefaultSourceProvider, "alias for --source")
 	flags.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
-	flags.StringVar(&configPath, "config", config.DefaultPath(), "settings-only TOML path (missing file uses defaults; never credentials)")
 	flags.StringVar(&policyVersion, "policy-version", companion.DefaultPolicyVersion, "policy version for three-way evaluation")
 	flags.StringVar(&sourceVID, "source-vid", os.Getenv("WEREAD_VID"), "declared source user VID for account fingerprint binding")
 	flags.BoolVar(&allowPrivate, "allow-private", false, "allow synchronizing private reading status")
@@ -69,6 +63,9 @@ func (app *cliApp) syncCommand() *cobra.Command {
 	markRequiredFlags(command, "book-id")
 
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
+		if _, err := app.loadConfig(); err != nil {
+			return err
+		}
 		if adoptSource && adoptTarget {
 			return fmt.Errorf("cannot specify both --adopt-source and --adopt-target")
 		}

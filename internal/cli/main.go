@@ -19,33 +19,28 @@ import (
 func Main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	loadFileCfg := func() config.Config {
-		cfg, err := config.Load(config.DefaultPath())
-		if err != nil {
-			return config.Defaults()
-		}
-		return cfg
-	}
 	providers := clients{
-		source: func() (source, error) {
-			p := loadFileCfg().Providers
+		sourceWithConfig: func(p config.ProvidersConfig) (source, error) {
 			return weread.NewWithOptions(
 				os.Getenv("WEREAD_API_KEY"),
 				config.ParseDurationOr(p.WeReadInterval, 0),
 				config.ParseDurationOr(p.Timeout, 0),
 			)
 		},
-		target: func() (target, error) {
-			p := loadFileCfg().Providers
+		targetWithConfig: func(p config.ProvidersConfig) (target, error) {
 			return hardcover.NewWithOptions(
 				os.Getenv("HARDCOVER_API_KEY"),
 				config.ParseDurationOr(p.HardcoverInterval, 0),
 				config.ParseDurationOr(p.Timeout, 0),
 			)
 		},
-		advisor: func(store *companion.Store) (advisor.Advisor, error) {
-			fileCfg := loadFileCfg()
-			cfg, err := opencode.LoadConfig()
+		advisorWithConfig: func(advCfg config.AdvisorConfig, store *companion.Store) (advisor.Advisor, error) {
+			cfg, err := opencode.LoadConfigWithSettings(opencode.Settings{
+				BaseURL: advCfg.BaseURL,
+				Model:   advCfg.Model,
+				Models:  advCfg.Models,
+				Timeout: config.ParseDurationOr(advCfg.Timeout, 0),
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -54,7 +49,7 @@ func Main() {
 				return nil, err
 			}
 			if store != nil {
-				ttl := config.ParseDurationOr(fileCfg.Advisor.CacheTTL, 0)
+				ttl := config.ParseDurationOr(advCfg.CacheTTL, 0)
 				return advisor.NewCachedAdvisorWithTTL(client, store, cfg.Model, opencode.PromptHash(), ttl), nil
 			}
 			return client, nil

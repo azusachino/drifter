@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/azusachino/drifter/internal/companion"
-	"github.com/azusachino/drifter/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -23,7 +22,6 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 		adoptTarget   bool
 		withAdvisor   bool
 		dryRun        bool
-		configPath    string
 	)
 
 	command := &cobra.Command{
@@ -38,7 +36,6 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 	flags.StringVar(&provider, "source", companion.DefaultSourceProvider, "source provider name (default: weread)")
 	flags.StringVar(&provider, "provider", companion.DefaultSourceProvider, "alias for --source")
 	flags.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
-	flags.StringVar(&configPath, "config", config.DefaultPath(), "settings-only TOML path (missing file uses defaults; never credentials)")
 	flags.StringVar(&policyVersion, "policy-version", companion.DefaultPolicyVersion, "policy version for three-way evaluation")
 	flags.StringVar(&sourceVID, "source-vid", os.Getenv("WEREAD_VID"), "declared source user VID for account fingerprint binding")
 	flags.BoolVar(&allowPrivate, "allow-private", false, "allow synchronizing private reading status")
@@ -48,6 +45,9 @@ func (app *cliApp) reconcileCommand() *cobra.Command {
 	flags.BoolVar(&dryRun, "dry-run", false, "preview reconciliation without mutating target")
 
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
+		if _, err := app.loadConfig(); err != nil {
+			return err
+		}
 		if adoptSource && adoptTarget {
 			return fmt.Errorf("cannot specify both --adopt-source and --adopt-target")
 		}
