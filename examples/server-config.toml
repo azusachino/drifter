@@ -1,5 +1,43 @@
 [server]
 addr = "127.0.0.1:8081"
+# operation_timeout = "90s"
+# read_header_timeout = "5s"
+# read_timeout = "15s"
+# write_timeout = "2m"
+# idle_timeout = "60s"
+# shutdown_timeout = "10s"
 
 [log]
 level = "info"
+
+# [jobs]
+# poll_interval = "5s"
+# batch_size = 5
+# book_step_timeout = "75s"
+# reconcile_timeout = "15m"
+# cooldown_base = "15s"
+# cooldown_max = "90s"
+# max_cooldown_wait = "2m"
+# max_rate_limit_retry = 5
+# advisor_pace_delay = "1s"
+# attempt_cooldown = "720h"
+
+# [cache]
+# max_entries = 10000
+# shelf_ttl = "5m"
+# book_ttl = "6h"
+# search_ttl = "1h"
+# target_ttl = "1h"
+
+# [providers]
+# timeout = "30s"
+# weread_interval = "1s"
+# hardcover_interval = "1100ms"
+# weread_skill_version = "1.0.5"
+
+# [advisor]
+# base_url = "https://api.openai.com/v1"
+# model = "opencode-go/beam-free"
+# models = ["opencode-go/beam-free"]
+# timeout = "30s"
+# cache_ttl = "720h"

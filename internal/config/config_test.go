@@ -318,3 +318,94 @@ func TestDefaultPath(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadConfigurableOperationalSettings(t *testing.T) {
+	cfg, err := Load(write(t, `
+[server]
+addr = "127.0.0.1:8082"
+operation_timeout = "3m"
+read_header_timeout = "10s"
+read_timeout = "30s"
+write_timeout = "4m"
+idle_timeout = "120s"
+shutdown_timeout = "20s"
+
+[jobs]
+poll_interval = "10s"
+batch_size = 12
+book_step_timeout = "2m"
+reconcile_timeout = "30m"
+cooldown_base = "20s"
+cooldown_max = "2m"
+max_cooldown_wait = "5m"
+max_rate_limit_retry = 8
+advisor_pace_delay = "0s"
+attempt_cooldown = "48h"
+
+[cache]
+max_entries = 25000
+shelf_ttl = "10m"
+book_ttl = "12h"
+search_ttl = "30m"
+target_ttl = "45m"
+
+[providers]
+timeout = "45s"
+weread_interval = "1500ms"
+hardcover_interval = "2s"
+weread_skill_version = "1.0.6"
+
+[advisor]
+base_url = "https://gateway.example.com/v1"
+model = "primary-model"
+models = ["primary-model", "fallback-model"]
+timeout = "60s"
+cache_ttl = "168h"
+`))
+	if err != nil {
+		t.Fatalf("valid operational config rejected: %v", err)
+	}
+	if cfg.Server.OperationTimeout != "3m" || cfg.Server.WriteTimeout != "4m" || cfg.Server.ShutdownTimeout != "20s" {
+		t.Fatalf("unexpected server config: %+v", cfg.Server)
+	}
+	if cfg.Jobs.BatchSize != 12 || cfg.Jobs.ReconcileTimeout != "30m" || cfg.Jobs.AdvisorPaceDelay != "0s" || cfg.Jobs.MaxRateLimitRetry != 8 || cfg.Jobs.AttemptCooldown != "48h" {
+		t.Fatalf("unexpected jobs config: %+v", cfg.Jobs)
+	}
+	if cfg.Cache.MaxEntries != 25000 || cfg.Cache.ShelfTTL != "10m" || cfg.Cache.BookTTL != "12h" {
+		t.Fatalf("unexpected cache config: %+v", cfg.Cache)
+	}
+	if cfg.Providers.Timeout != "45s" || cfg.Providers.WeReadInterval != "1500ms" || cfg.Providers.HardcoverInterval != "2s" || cfg.Providers.WeReadSkillVersion != "1.0.6" {
+		t.Fatalf("unexpected providers config: %+v", cfg.Providers)
+	}
+	if len(cfg.Advisor.Models) != 2 || cfg.Advisor.Models[1] != "fallback-model" || cfg.Advisor.CacheTTL != "168h" {
+		t.Fatalf("unexpected advisor config: %+v", cfg.Advisor)
+	}
+}
+
+func TestLoadRejectsInvalidOperationalSettings(t *testing.T) {
+	cases := map[string]string{
+		"zero-operation-timeout":     "[server]\noperation_timeout = \"0s\"\n",
+		"bad-reconcile-timeout":      "[jobs]\nreconcile_timeout = \"soon\"\n",
+		"cooldown-max-lt-base":       "[jobs]\ncooldown_base = \"30s\"\ncooldown_max = \"10s\"\n",
+		"negative-pace-delay":        "[jobs]\nadvisor_pace_delay = \"-1s\"\n",
+		"zero-batch-size":            "[jobs]\nbatch_size = 0\n",
+		"zero-rate-limit-retry":      "[jobs]\nmax_rate_limit_retry = 0\n",
+		"zero-cache-entries":         "[cache]\nmax_entries = 0\n",
+		"zero-shelf-ttl":             "[cache]\nshelf_ttl = \"0s\"\n",
+		"zero-provider-timeout":      "[providers]\ntimeout = \"0s\"\n",
+		"zero-advisor-cache-ttl":     "[advisor]\ncache_ttl = \"0s\"\n",
+		"zero-attempt-cooldown":      "[jobs]\nattempt_cooldown = \"0s\"\n",
+		"negative-attempt-cooldown":  "[jobs]\nattempt_cooldown = \"-1h\"\n",
+		"empty-skill-version":        "[providers]\nweread_skill_version = \"\"\n",
+		"too-long-skill-version":     "[providers]\nweread_skill_version = \"123456789012345678901234567890123\"\n",
+		"whitespace-skill-version":   "[providers]\nweread_skill_version = \"1.0.5 beta\"\n",
+		"control-char-skill-version": "[providers]\nweread_skill_version = \"1.0.5\\n\"\n",
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(write(t, content)); err == nil {
+				t.Fatalf("invalid operational config accepted: %s", name)
+			}
+		})
+	}
+}

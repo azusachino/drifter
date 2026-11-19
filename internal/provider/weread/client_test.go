@@ -268,3 +268,34 @@ func TestWeReadBookTranslatorHandling(t *testing.T) {
 		}
 	})
 }
+
+func TestWeReadSetSkillVersion(t *testing.T) {
+	var seen []string
+	w := testClient(t, func(rw http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if v, ok := body["skill_version"].(string); ok {
+			seen = append(seen, v)
+		}
+		io.WriteString(rw, `{"books":[],"bookCount":0}`)
+	})
+
+	if _, err := w.Shelf(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w.SetSkillVersion("1.0.9")
+	if _, err := w.Shelf(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w.SetSkillVersion("")
+	if _, err := w.Shelf(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{DefaultSkillVersion, "1.0.9", DefaultSkillVersion}
+	if len(seen) != len(want) || seen[0] != want[0] || seen[1] != want[1] || seen[2] != want[2] {
+		t.Fatalf("skill_version sequence = %v, want %v", seen, want)
+	}
+}

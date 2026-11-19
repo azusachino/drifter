@@ -116,7 +116,7 @@ domain models and state engines from external providers:
 │                    Core Domain                         │
 │  • Book & Match Contracts   • Pending Worklists        │
 │  • Three-Way Sync Engine    • Two-Phase Intent Ledger  │
-│  • SQLite Storage (v6)      • Catalog Match & Merge    │
+│  • SQLite Storage (v9)      • Catalog Match & Merge    │
 └───────────────┬───────────────────────────┬────────────┘
                 │                           │
                 ▼                           ▼

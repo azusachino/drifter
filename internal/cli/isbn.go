@@ -5,13 +5,12 @@ import (
 	"fmt"
 
 	"github.com/azusachino/drifter/internal/companion"
-	"github.com/azusachino/drifter/internal/config"
 	"github.com/azusachino/drifter/internal/isbn"
 	"github.com/spf13/cobra"
 )
 
 func (app *cliApp) isbnCommand() *cobra.Command {
-	var isbnFlag, providerName, customURL, configPath string
+	var isbnFlag, providerName, customURL string
 	command := &cobra.Command{
 		Use:   "isbn [isbn]",
 		Short: "Query authoritative metadata for an ISBN",
@@ -21,7 +20,6 @@ func (app *cliApp) isbnCommand() *cobra.Command {
 	flags.StringVar(&isbnFlag, "isbn", "", "ISBN to query")
 	flags.StringVar(&providerName, "provider", "", "Override ISBN provider: default, douban, openlibrary, custom")
 	flags.StringVar(&customURL, "url", "", "Custom provider URL template containing {isbn}")
-	flags.StringVar(&configPath, "config", config.DefaultPath(), "settings-only TOML path (missing file uses defaults; never credentials)")
 
 	return app.command(command, func(cmd *cobra.Command, args []string) error {
 		rawISBN := isbnFlag
@@ -37,7 +35,7 @@ func (app *cliApp) isbnCommand() *cobra.Command {
 			return fmt.Errorf("invalid ISBN %s: %w", rawISBN, err)
 		}
 
-		cfg, err := config.Load(configPath)
+		cfg, err := app.loadConfig()
 		if err != nil {
 			return err
 		}

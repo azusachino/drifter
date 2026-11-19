@@ -13,6 +13,9 @@ import (
 	"time"
 )
 
+// DefaultTimeout is the default per-request HTTP timeout for provider calls.
+const DefaultTimeout = 30 * time.Second
+
 // ResponseLimit is the maximum body size read from a provider response (2 MiB).
 const ResponseLimit = 2 << 20
 
@@ -25,10 +28,19 @@ type Client struct {
 	next             time.Time
 }
 
-// NewClient creates an authenticated rate-limited client for endpoint url.
+// NewClient creates an authenticated rate-limited client for endpoint url using DefaultTimeout.
 func NewClient(name, url, token string, interval time.Duration) (*Client, error) {
+	return NewClientWithTimeout(name, url, token, interval, DefaultTimeout)
+}
+
+// NewClientWithTimeout creates an authenticated rate-limited client for endpoint url.
+// A non-positive timeout falls back to DefaultTimeout.
+func NewClientWithTimeout(name, url, token string, interval, timeout time.Duration) (*Client, error) {
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
 	return NewClientWithHTTP(name, url, token, interval, &http.Client{
-		Timeout:       30 * time.Second,
+		Timeout:       timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	})
 }

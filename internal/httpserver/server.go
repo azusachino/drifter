@@ -32,9 +32,16 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-const maxRequestBody = 8 << 10
-const maxImportRequestBody = 4 << 20
-const defaultOperationTimeout = 90 * time.Second
+const (
+	maxRequestBody           = 8 << 10
+	maxImportRequestBody     = 4 << 20
+	defaultOperationTimeout  = 90 * time.Second
+	defaultReadHeaderTimeout = 5 * time.Second
+	defaultReadTimeout       = 15 * time.Second
+	defaultWriteTimeout      = 2 * time.Minute
+	defaultIdleTimeout       = 60 * time.Second
+	defaultShutdownTimeout   = 10 * time.Second
+)
 
 var errProviderUnavailable = errors.New("provider unavailable")
 
@@ -76,11 +83,50 @@ type Server struct {
 	targetOnce       sync.Once
 	targetErr        error
 	operationSlot    chan struct{}
+	reconcileSlot    chan struct{}
 	operationTimeout time.Duration
+	shutdownTimeout  time.Duration
+	cacheOptions     CacheOptions
+	advisorOptions   *AdvisorOptions
 	jobNotifyCh      chan struct{}
+	jobMu            sync.Mutex
+	jobCache         *companion.MemoryTTLCache
+	jobConfig        jobWorkerConfig
 	activeJobMu      sync.Mutex
 	activeJobID      int64
 	activeJobCancel  context.CancelFunc
+}
+
+// JobWorkerOptions configures background sync job worker budgets and pacing.
+// Zero values fall back to documented defaults.
+type JobWorkerOptions struct {
+	PollInterval       time.Duration
+	BatchSize          int
+	BookStepTimeout    time.Duration
+	ReconcileTimeout   time.Duration
+	CooldownBase       time.Duration
+	CooldownMax        time.Duration
+	MaxCooldownWait    time.Duration
+	MaxRateLimitRetry  int
+	AdvisorPaceDelay   time.Duration
+	DisableAdvisorPace bool
+	AttemptCooldown    time.Duration
+}
+
+// CacheOptions configures the server's in-memory provider TTL cache.
+// Zero values fall back to companion package defaults.
+type CacheOptions struct {
+	MaxEntries int
+	ShelfTTL   time.Duration
+	BookTTL    time.Duration
+	SearchTTL  time.Duration
+	TargetTTL  time.Duration
+}
+
+// AdvisorOptions carries settings-file advisor configuration into the HTTP server.
+type AdvisorOptions struct {
+	Settings opencode.Settings
+	CacheTTL time.Duration
 }
 
 type Options struct {
@@ -95,8 +141,16 @@ type Options struct {
 	Now           func() time.Time
 	// APIToken protects the versioned /api/v1 read endpoints. Empty falls back
 	// to DRIFTER_API_TOKEN; when neither is set those endpoints reject requests.
-	APIToken         string
-	operationTimeout time.Duration
+	APIToken          string
+	OperationTimeout  time.Duration
+	ReadHeaderTimeout time.Duration
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
+	ShutdownTimeout   time.Duration
+	Jobs              JobWorkerOptions
+	Cache             CacheOptions
+	Advisor           *AdvisorOptions
 }
 
 func New(options Options) (*Server, error) {
@@ -112,8 +166,23 @@ func New(options Options) (*Server, error) {
 	if options.Now == nil {
 		options.Now = time.Now
 	}
-	if options.operationTimeout <= 0 {
-		options.operationTimeout = defaultOperationTimeout
+	if options.OperationTimeout <= 0 {
+		options.OperationTimeout = defaultOperationTimeout
+	}
+	if options.ReadHeaderTimeout <= 0 {
+		options.ReadHeaderTimeout = defaultReadHeaderTimeout
+	}
+	if options.ReadTimeout <= 0 {
+		options.ReadTimeout = defaultReadTimeout
+	}
+	if options.WriteTimeout <= 0 {
+		options.WriteTimeout = defaultWriteTimeout
+	}
+	if options.IdleTimeout <= 0 {
+		options.IdleTimeout = defaultIdleTimeout
+	}
+	if options.ShutdownTimeout <= 0 {
+		options.ShutdownTimeout = defaultShutdownTimeout
 	}
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
@@ -130,8 +199,27 @@ func New(options Options) (*Server, error) {
 		apiToken: apiToken,
 		logger:   options.Logger, now: options.Now, source: options.Source, sourceFactory: options.SourceFactory,
 		target: options.Target, targetFactory: options.TargetFactory,
-		operationSlot: make(chan struct{}, 1), operationTimeout: options.operationTimeout,
+		operationSlot: make(chan struct{}, 1), reconcileSlot: make(chan struct{}, 1), operationTimeout: options.OperationTimeout,
+		shutdownTimeout: options.ShutdownTimeout, cacheOptions: options.Cache, advisorOptions: options.Advisor,
 		jobNotifyCh: make(chan struct{}, 1)}
+	if hasJobWorkerOptions(options.Jobs) {
+		paceDelay := options.Jobs.AdvisorPaceDelay
+		if options.Jobs.DisableAdvisorPace {
+			paceDelay = -1
+		}
+		s.setJobWorkerConfig(jobWorkerConfig{
+			pollInterval:      options.Jobs.PollInterval,
+			batchSize:         options.Jobs.BatchSize,
+			bookStepTimeout:   options.Jobs.BookStepTimeout,
+			reconcileTimeout:  options.Jobs.ReconcileTimeout,
+			cooldownBase:      options.Jobs.CooldownBase,
+			cooldownMax:       options.Jobs.CooldownMax,
+			maxCooldownWait:   options.Jobs.MaxCooldownWait,
+			maxRateLimitRetry: options.Jobs.MaxRateLimitRetry,
+			advisorPaceDelay:  paceDelay,
+			attemptCooldown:   options.Jobs.AttemptCooldown,
+		})
+	}
 	router := chi.NewRouter()
 	router.Use(requestRouteLogAttribute)
 	ready := []probes.Readiness{{Name: "mapping_database", Check: func(r *http.Request) error {
@@ -202,8 +290,8 @@ func New(options Options) (*Server, error) {
 		jobs.Post("/cancel", s.handleFormJobCancel)
 	})
 	s.http = &http.Server{
-		Addr: options.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second,
+		Addr: options.Address, Handler: router, ReadHeaderTimeout: options.ReadHeaderTimeout,
+		ReadTimeout: options.ReadTimeout, WriteTimeout: options.WriteTimeout, IdleTimeout: options.IdleTimeout,
 	}
 	return s, nil
 }
@@ -216,6 +304,26 @@ func (s *Server) admit(parent context.Context) (context.Context, func(), bool) {
 	}
 	ctx, cancel := context.WithTimeout(parent, s.operationTimeout)
 	return ctx, func() { cancel(); <-s.operationSlot }, true
+}
+
+func (s *Server) admitReconcile(parent context.Context) (context.Context, func(), bool) {
+	select {
+	case s.operationSlot <- struct{}{}:
+	default:
+		return nil, nil, false
+	}
+	select {
+	case s.reconcileSlot <- struct{}{}:
+	default:
+		<-s.operationSlot
+		return nil, nil, false
+	}
+	ctx, cancel := context.WithTimeout(parent, s.operationTimeout)
+	return ctx, func() {
+		cancel()
+		<-s.reconcileSlot
+		<-s.operationSlot
+	}, true
 }
 
 func (s *Server) pendingSource() (companion.Source, error) {
@@ -768,7 +876,7 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, release, admitted := s.admit(r.Context())
+	ctx, release, admitted := s.admitReconcile(r.Context())
 	if !admitted {
 		apiError(w, http.StatusServiceUnavailable, "provider_operation_busy")
 		return
@@ -812,25 +920,19 @@ func (s *Server) handleReconcile(w http.ResponseWriter, r *http.Request) {
 
 	var adv advisor.Advisor
 	if withAdvisor || autoMatch {
-		cfg, err := opencode.LoadConfig()
-		if err == nil {
-			client, err := opencode.NewWithConfig(cfg)
-			if err == nil {
-				adv = advisor.NewCachedAdvisor(client, store, cfg.Model, opencode.PromptHash())
-			}
-		}
+		adv, _ = s.buildAdvisor(store)
 	}
 
 	if autoMatch {
-		minConf := 0.80
+		minConf := companion.DefaultMinConfidence
 		if raw := query.Get("min_confidence"); raw != "" {
 			if parsed, err := strconv.ParseFloat(raw, 64); err == nil && parsed > 0 && parsed <= 1.0 {
 				minConf = parsed
 			}
 		}
-		days := 90
+		days := companion.DefaultLookbackDays
 		if raw := query.Get("days"); raw != "" {
-			if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 1 && parsed <= 36500 {
+			if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 1 && parsed <= companion.MaxLookbackDays {
 				days = parsed
 			}
 		}
@@ -910,7 +1012,7 @@ func (s *Server) handleAutoMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	minConf := 0.80
+	minConf := companion.DefaultMinConfidence
 	if raw := query.Get("min_confidence"); raw != "" {
 		parsed, err := strconv.ParseFloat(raw, 64)
 		if err != nil || parsed <= 0 || parsed > 1.0 {
@@ -920,10 +1022,10 @@ func (s *Server) handleAutoMatch(w http.ResponseWriter, r *http.Request) {
 		minConf = parsed
 	}
 
-	days := 90
+	days := companion.DefaultLookbackDays
 	if raw := query.Get("days"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 1 || parsed > 36500 {
+		if err != nil || parsed < 1 || parsed > companion.MaxLookbackDays {
 			apiError(w, http.StatusBadRequest, "invalid_days")
 			return
 		}
@@ -980,14 +1082,7 @@ func (s *Server) handleAutoMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var adv advisor.Advisor
-	cfg, err := opencode.LoadConfig()
-	if err == nil {
-		client, err := opencode.NewWithConfig(cfg)
-		if err == nil {
-			adv = advisor.NewCachedAdvisor(client, store, cfg.Model, opencode.PromptHash())
-		}
-	}
+	adv, _ := s.buildAdvisor(store)
 
 	report, err := companion.AutoMatchOwned(ctx, store, src, target, s.database, s.ownership, adv, companion.AutoMatchOptions{
 		Provider:      provider,
@@ -1742,7 +1837,7 @@ func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, 
 		}
 	}
 	account, target := query.Get("account"), query.Get("target_account")
-	days := 90
+	days := companion.DefaultLookbackDays
 	if raw := query.Get("days"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil {
@@ -1759,7 +1854,7 @@ func pendingOptions(query url.Values, now time.Time) (companion.PendingOptions, 
 		limit = parsed
 	}
 	finishedOnly := query.Get("finished") == "true" || query.Get("finished") == "1"
-	if !companion.ValidLabel(account) || !companion.ValidLabel(target) || days < 1 || days > 36500 {
+	if !companion.ValidLabel(account) || !companion.ValidLabel(target) || days < 1 || days > companion.MaxLookbackDays {
 		return companion.PendingOptions{}, fmt.Errorf("invalid options")
 	}
 	options := companion.PendingOptions{SourceAccount: account, TargetAccount: target, Days: days, Limit: limit, FinishedOnly: finishedOnly, After: query.Get("after"), Now: now}
@@ -1936,7 +2031,7 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 		}
 		return fmt.Errorf("HTTP server failed")
 	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdown, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout)
 		defer cancel()
 		if err := s.http.Shutdown(shutdown); err != nil {
 			_ = s.http.Close()

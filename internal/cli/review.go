@@ -14,7 +14,6 @@ import (
 
 	"github.com/azusachino/drifter/internal/catalog"
 	"github.com/azusachino/drifter/internal/companion"
-	"github.com/azusachino/drifter/internal/config"
 	"github.com/azusachino/drifter/internal/isbn"
 	"github.com/spf13/cobra"
 )
@@ -22,7 +21,7 @@ import (
 var reviewProviderTimeout = 60 * time.Second
 
 func (app *cliApp) reviewCommand() *cobra.Command {
-	var account, targetAccount, dbPath, configPath string
+	var account, targetAccount, dbPath string
 	var days, year int
 	var includePrivate, includeImported, finishedOnly bool
 	cmd := &cobra.Command{Use: "review", Short: "Review pending books, save decisions, and confirm local links"}
@@ -30,21 +29,20 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 	f.StringVar(&account, "source-account", "", "source account namespace (default: default or inferred)")
 	f.StringVar(&account, "account", "", "alias for --source-account")
 	f.StringVar(&targetAccount, "target-account", "", "target account namespace (default: default or inferred)")
-	f.IntVar(&days, "days", 90, "recently opened window in days (1–36500)")
+	f.IntVar(&days, "days", companion.DefaultLookbackDays, fmt.Sprintf("recently opened window in days (1–%d)", companion.MaxLookbackDays))
 	f.IntVar(&year, "year", 0, "filter books opened in calendar year (e.g. 2025)")
 	f.BoolVar(&finishedOnly, "finished", false, "filter to finished/completed books only")
 	f.StringVar(&dbPath, "db", "", "private SQLite path (config database.path overrides this; otherwise default)")
-	f.StringVar(&configPath, "config", config.DefaultPath(), "settings-only TOML path (missing file uses defaults)")
 	f.BoolVar(&includePrivate, "include-private", false, "explicitly include privacy-marked books")
 	f.BoolVar(&includeImported, "include-imported", false, "inspect imported books (linking unsupported)")
 	return app.command(cmd, func(c *cobra.Command, _ []string) (reviewErr error) {
-		if days < 1 || days > 36500 {
-			return fmt.Errorf("--days between 1 and 36500 required")
+		if days < 1 || days > companion.MaxLookbackDays {
+			return fmt.Errorf("--days between 1 and %d required", companion.MaxLookbackDays)
 		}
 		if year != 0 && (year < 2000 || year > 2100) {
 			return fmt.Errorf("--year must be between 2000 and 2100")
 		}
-		cfg, err := config.Load(configPath)
+		cfg, err := app.loadConfig()
 		if err != nil {
 			return err
 		}
@@ -205,7 +203,7 @@ func (app *cliApp) reviewCommand() *cobra.Command {
 							targetClient, sourceErr := loadTarget()
 							var report companion.MatchReport
 							if sourceErr == nil {
-								adv, _ := app.getAdvisor(nil)
+								adv, _ := app.getAdvisor(store)
 								report, sourceErr = companion.MatchWithOptions(lookupCtx, source, targetClient, book.ID, query, companion.MatchOptions{
 									CatalogLoader:  loader,
 									ISBNProvider:   isbnProvider,

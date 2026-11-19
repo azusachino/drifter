@@ -24,12 +24,15 @@ type source = companion.Source
 type target = companion.Target
 
 type clients struct {
-	source        func() (source, error)
-	target        func() (target, error)
-	previewSource func() (companion.PreviewSource, error)
-	previewTarget func() (companion.PreviewTarget, error)
-	applyTarget   func() (companion.ApplyTarget, error)
-	advisor       func(store *companion.Store) (advisor.Advisor, error)
+	source            func() (source, error)
+	target            func() (target, error)
+	sourceWithConfig  func(config.ProvidersConfig) (source, error)
+	targetWithConfig  func(config.ProvidersConfig) (target, error)
+	previewSource     func() (companion.PreviewSource, error)
+	previewTarget     func() (companion.PreviewTarget, error)
+	applyTarget       func() (companion.ApplyTarget, error)
+	advisor           func(store *companion.Store) (advisor.Advisor, error)
+	advisorWithConfig func(config.AdvisorConfig, *companion.Store) (advisor.Advisor, error)
 }
 
 type cliApp struct {
@@ -37,6 +40,22 @@ type cliApp struct {
 	commandError *error
 	flagError    *error
 	input        io.Reader
+	configPath   string
+	cfg          config.Config
+	cfgLoaded    bool
+}
+
+func (app *cliApp) loadConfig() (config.Config, error) {
+	if app.cfgLoaded {
+		return app.cfg, nil
+	}
+	cfg, err := config.Load(app.configPath)
+	if err != nil {
+		return config.Config{}, err
+	}
+	app.cfg = cfg
+	app.cfgLoaded = true
+	return cfg, nil
 }
 
 func defaultDB() (string, error) {
@@ -55,6 +74,13 @@ func defaultDB() (string, error) {
 }
 
 func (app *cliApp) getAdvisor(store *companion.Store) (advisor.Advisor, error) {
+	if app.providers.advisorWithConfig != nil {
+		cfg, err := app.loadConfig()
+		if err != nil {
+			return nil, err
+		}
+		return app.providers.advisorWithConfig(cfg.Advisor, store)
+	}
 	if app.providers.advisor != nil {
 		return app.providers.advisor(store)
 	}
@@ -119,6 +145,7 @@ come only from WEREAD_API_KEY and HARDCOVER_API_KEY in the process environment.`
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.SetOut(out)
 	root.SetErr(errOut)
+	root.PersistentFlags().StringVar(&app.configPath, "config", config.DefaultPath(), "settings-only TOML path (missing file uses defaults; never credentials)")
 	root.SetFlagErrorFunc(func(cmd *cobra.Command, _ error) error {
 		err := fmt.Errorf("invalid flags; use %s -h", cmd.CommandPath())
 		*app.flagError = err
@@ -182,6 +209,13 @@ func encodeJSON(cmd *cobra.Command, value any) error {
 }
 
 func (app *cliApp) getSource() (companion.Source, error) {
+	if app.providers.sourceWithConfig != nil {
+		cfg, err := app.loadConfig()
+		if err != nil {
+			return nil, err
+		}
+		return app.providers.sourceWithConfig(cfg.Providers)
+	}
 	if app.providers.source == nil {
 		return nil, fmt.Errorf("source provider not configured")
 	}
@@ -189,6 +223,13 @@ func (app *cliApp) getSource() (companion.Source, error) {
 }
 
 func (app *cliApp) getTarget() (companion.Target, error) {
+	if app.providers.targetWithConfig != nil {
+		cfg, err := app.loadConfig()
+		if err != nil {
+			return nil, err
+		}
+		return app.providers.targetWithConfig(cfg.Providers)
+	}
 	if app.providers.target == nil {
 		return nil, fmt.Errorf("target provider not configured")
 	}
@@ -266,12 +307,11 @@ func (app *cliApp) inspectCommand() *cobra.Command {
 }
 
 func (app *cliApp) matchCommand() *cobra.Command {
-	var bookID, query, configPath, dbPath string
+	var bookID, query, dbPath string
 	var isbnLookup bool
 	command := &cobra.Command{Use: "match", Short: "Suggest Hardcover matches for a WeRead book"}
 	command.Flags().StringVar(&bookID, "book-id", "", "WeRead book ID (required)")
 	command.Flags().StringVar(&query, "query", "", "original-language or alternate title search")
-	command.Flags().StringVar(&configPath, "config", config.DefaultPath(), "settings-only TOML path (missing file uses defaults; never credentials)")
 	command.Flags().StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
 	command.Flags().BoolVar(&isbnLookup, "isbn-lookup", false, "lookup authoritative metadata for the book's ISBN")
 	markRequiredFlags(command, "book-id")
@@ -279,7 +319,7 @@ func (app *cliApp) matchCommand() *cobra.Command {
 		if !companion.ValidBookID(bookID) {
 			return fmt.Errorf("valid --book-id required")
 		}
-		cfg, err := config.Load(configPath)
+		cfg, err := app.loadConfig()
 		if err != nil {
 			return err
 		}
@@ -338,7 +378,7 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 	flags.StringVar(&account, "source-account", "", "source account namespace (default: default or inferred)")
 	flags.StringVar(&account, "account", "", "alias for --source-account")
 	flags.StringVar(&targetAccount, "target-account", "", "target account namespace (default: default or inferred)")
-	flags.IntVar(&days, "days", 90, "recently opened window in days (1–36500; browsing counts)")
+	flags.IntVar(&days, "days", companion.DefaultLookbackDays, fmt.Sprintf("recently opened window in days (1–%d; browsing counts)", companion.MaxLookbackDays))
 	flags.IntVar(&year, "year", 0, "filter books opened in calendar year (e.g. 2025)")
 	flags.BoolVar(&finishedOnly, "finished", false, "filter to finished/completed books only")
 	flags.BoolVar(&includePrivate, "include-private", false, "explicitly include privacy-marked books (unknown privacy remains excluded)")
@@ -367,8 +407,8 @@ func (app *cliApp) pendingCommand() *cobra.Command {
 		if !companion.ValidLabel(account) || !companion.ValidLabel(targetAccount) {
 			return fmt.Errorf("valid --account and --target-account required")
 		}
-		if days < 1 || days > 36500 {
-			return fmt.Errorf("--days must be between 1 and 36500")
+		if days < 1 || days > companion.MaxLookbackDays {
+			return fmt.Errorf("--days must be between 1 and %d", companion.MaxLookbackDays)
 		}
 		if year != 0 && (year < 2000 || year > 2100) {
 			return fmt.Errorf("--year must be between 2000 and 2100")
@@ -637,11 +677,10 @@ func (app *cliApp) unlinkCommand() *cobra.Command {
 }
 
 func (app *cliApp) serveProbesCommand() *cobra.Command {
-	var configPath, dbPath string
+	var dbPath string
 	var requireProviders bool
 	command := &cobra.Command{Use: "serve-probes", Short: "Serve standalone local health probes"}
 	flags := command.Flags()
-	flags.StringVar(&configPath, "config", "", "settings-only TOML path (missing file uses defaults; never credentials)")
 	flags.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
 	flags.BoolVar(&requireProviders, "require-providers", false, "readiness reports unready when provider credentials are absent (no network calls)")
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
@@ -652,6 +691,6 @@ func (app *cliApp) serveProbesCommand() *cobra.Command {
 				return err
 			}
 		}
-		return serveProbes(cmd.Context(), configPath, dbPath, requireProviders, cmd.OutOrStdout())
+		return serveProbes(cmd.Context(), app.configPath, dbPath, requireProviders, cmd.OutOrStdout())
 	})
 }

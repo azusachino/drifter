@@ -17,6 +17,9 @@ import (
 // DefaultURL is the production Hardcover GraphQL endpoint.
 const DefaultURL = "https://api.hardcover.app/v1/graphql"
 
+// DefaultInterval is the default minimum spacing between Hardcover requests.
+const DefaultInterval = 1100 * time.Millisecond
+
 // Client is the Hardcover destination provider client.
 type Client struct {
 	api    *transport.Client
@@ -30,9 +33,19 @@ var (
 	_ companion.ApplyTarget    = (*Client)(nil)
 )
 
-// New constructs an authenticated Hardcover client using DefaultURL and a 1100ms rate-limit interval.
+// New constructs an authenticated Hardcover client using DefaultURL, DefaultInterval,
+// and transport.DefaultTimeout.
 func New(token string) (*Client, error) {
-	api, err := transport.NewClient("Hardcover", DefaultURL, token, 1100*time.Millisecond)
+	return NewWithOptions(token, DefaultInterval, transport.DefaultTimeout)
+}
+
+// NewWithOptions constructs an authenticated Hardcover client with custom pacing
+// interval and HTTP timeout. Non-positive values fall back to defaults.
+func NewWithOptions(token string, interval, timeout time.Duration) (*Client, error) {
+	if interval <= 0 {
+		interval = DefaultInterval
+	}
+	api, err := transport.NewClientWithTimeout("Hardcover", DefaultURL, token, interval, timeout)
 	if err != nil {
 		return nil, err
 	}

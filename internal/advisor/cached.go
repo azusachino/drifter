@@ -28,19 +28,30 @@ type CachedAdvisor struct {
 	store      CacheStore
 	model      string
 	promptHash string
+	ttl        time.Duration
 	now        func() time.Time
 }
 
 var _ Advisor = (*CachedAdvisor)(nil)
 
 // NewCachedAdvisor creates a CachedAdvisor wrapping inner with the given
-// CacheStore. promptHash identifies the prompt templates in use.
+// CacheStore using the default CacheTTL. promptHash identifies the prompt templates in use.
 func NewCachedAdvisor(inner Advisor, store CacheStore, model, promptHash string) *CachedAdvisor {
+	return NewCachedAdvisorWithTTL(inner, store, model, promptHash, CacheTTL)
+}
+
+// NewCachedAdvisorWithTTL creates a CachedAdvisor with a custom cache TTL.
+// A non-positive ttl falls back to CacheTTL.
+func NewCachedAdvisorWithTTL(inner Advisor, store CacheStore, model, promptHash string, ttl time.Duration) *CachedAdvisor {
+	if ttl <= 0 {
+		ttl = CacheTTL
+	}
 	return &CachedAdvisor{
 		inner:      inner,
 		store:      store,
 		model:      strings.TrimSpace(model),
 		promptHash: promptHash,
+		ttl:        ttl,
 		now:        func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -65,7 +76,11 @@ func cached[Req, Resp any](ctx context.Context, c *CachedAdvisor, promptType str
 		return call(ctx, req)
 	}
 	now := c.now()
-	if hit, err := c.store.GetAdvisorCache(ctx, key, now.Add(-CacheTTL)); err == nil && hit != "" {
+	ttl := c.ttl
+	if ttl <= 0 {
+		ttl = CacheTTL
+	}
+	if hit, err := c.store.GetAdvisorCache(ctx, key, now.Add(-ttl)); err == nil && hit != "" {
 		var resp Resp
 		if err := json.Unmarshal([]byte(hit), &resp); err == nil {
 			return resp, nil

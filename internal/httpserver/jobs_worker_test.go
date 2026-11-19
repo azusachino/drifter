@@ -1,12 +1,14 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -70,13 +72,14 @@ func (s *workerTestSource) ResolveAccountFingerprint(_ context.Context, _ string
 }
 
 type workerTestTarget struct {
-	mu           sync.Mutex
-	matches      map[string]companion.MatchReport
-	queryMatches map[string]companion.MatchReport
-	statuses     map[int64]*companion.UserBookStatus
-	matchCalls   atomic.Int32
-	applyCalls   atomic.Int32
-	fingerprint  string
+	mu            sync.Mutex
+	matches       map[string]companion.MatchReport
+	queryMatches  map[string]companion.MatchReport
+	statuses      map[int64]*companion.UserBookStatus
+	getStatusHook func(ctx context.Context, workID int64) error
+	matchCalls    atomic.Int32
+	applyCalls    atomic.Int32
+	fingerprint   string
 }
 
 func (t *workerTestTarget) Match(_ context.Context, book companion.Book, query string) (companion.MatchReport, error) {
@@ -98,7 +101,12 @@ func (t *workerTestTarget) ValidateLink(context.Context, int64, int64) error {
 	return nil
 }
 
-func (t *workerTestTarget) GetUserBookStatus(_ context.Context, workID int64) (*companion.UserBookStatus, error) {
+func (t *workerTestTarget) GetUserBookStatus(ctx context.Context, workID int64) (*companion.UserBookStatus, error) {
+	if t.getStatusHook != nil {
+		if err := t.getStatusHook(ctx, workID); err != nil {
+			return nil, err
+		}
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.statuses != nil {
@@ -1055,5 +1063,257 @@ func TestJobWorkerLongRateLimitCooldownAbortsPhase1AndRunsPhase2(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestServerOptionsConfigureJobWorkerAndTimeouts(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "drifter.sqlite")
+	srv, err := New(Options{
+		Address:           "127.0.0.1:0",
+		Database:          db,
+		Source:            &sourceStub{},
+		Target:            &targetStub{},
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		OperationTimeout:  3 * time.Minute,
+		ReadHeaderTimeout: 7 * time.Second,
+		ReadTimeout:       20 * time.Second,
+		WriteTimeout:      4 * time.Minute,
+		IdleTimeout:       90 * time.Second,
+		ShutdownTimeout:   15 * time.Second,
+		Jobs: JobWorkerOptions{
+			PollInterval:       12 * time.Second,
+			BatchSize:          9,
+			BookStepTimeout:    2 * time.Minute,
+			ReconcileTimeout:   30 * time.Minute,
+			CooldownBase:       10 * time.Second,
+			CooldownMax:        60 * time.Second,
+			MaxCooldownWait:    3 * time.Minute,
+			MaxRateLimitRetry:  7,
+			DisableAdvisorPace: true,
+			AttemptCooldown:    48 * time.Hour,
+		},
+		Cache: CacheOptions{
+			MaxEntries: 2048,
+			ShelfTTL:   10 * time.Minute,
+			BookTTL:    2 * time.Hour,
+			SearchTTL:  30 * time.Minute,
+			TargetTTL:  45 * time.Minute,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.operationTimeout != 3*time.Minute || srv.shutdownTimeout != 15*time.Second {
+		t.Fatalf("unexpected server timeouts: op=%v shutdown=%v", srv.operationTimeout, srv.shutdownTimeout)
+	}
+	if srv.http.ReadHeaderTimeout != 7*time.Second || srv.http.ReadTimeout != 20*time.Second || srv.http.WriteTimeout != 4*time.Minute || srv.http.IdleTimeout != 90*time.Second {
+		t.Fatalf("unexpected http.Server timeouts: %+v", srv.http)
+	}
+	wcfg := srv.getJobWorkerConfig()
+	if wcfg.pollInterval != 12*time.Second || wcfg.batchSize != 9 || wcfg.bookStepTimeout != 2*time.Minute ||
+		wcfg.reconcileTimeout != 30*time.Minute || wcfg.cooldownBase != 10*time.Second || wcfg.cooldownMax != 60*time.Second ||
+		wcfg.maxCooldownWait != 3*time.Minute || wcfg.maxRateLimitRetry != 7 || wcfg.advisorPaceDelay != 0 ||
+		wcfg.attemptCooldown != 48*time.Hour {
+		t.Fatalf("unexpected jobWorkerConfig: %+v", wcfg)
+	}
+	if srv.cacheOptions.MaxEntries != 2048 || srv.cacheOptions.ShelfTTL != 10*time.Minute || srv.cacheOptions.TargetTTL != 45*time.Minute {
+		t.Fatalf("unexpected cacheOptions: %+v", srv.cacheOptions)
+	}
+}
+
+func TestJobWorkerPhase2ReconcileDoesNotStarveInteractiveRoutes(t *testing.T) {
+	isolateWorkerAdvisorEnv(t)
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	db := filepath.Join(t.TempDir(), "worker-reconcile-slot.sqlite")
+
+	secret := 0
+	opened := now.Add(-1 * time.Hour).Unix()
+	src := &workerTestSource{
+		shelf: companion.ShelfResult{
+			Complete: true,
+			Books: []companion.ShelfBook{
+				{ID: "5001", Title: "Mapped Book", LastOpened: &opened, Secret: &secret},
+				{ID: "5002", Title: "Pending Book", LastOpened: &opened, Secret: &secret},
+			},
+		},
+	}
+
+	phase2Entered := make(chan struct{})
+	var phase2Once sync.Once
+	unblockPhase2 := make(chan struct{})
+
+	tgt := &workerTestTarget{
+		getStatusHook: func(ctx context.Context, _ int64) error {
+			phase2Once.Do(func() { close(phase2Entered) })
+			select {
+			case <-unblockPhase2:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	}
+
+	srv, err := New(Options{
+		Address:  "127.0.0.1:0",
+		Database: db,
+		Source:   src,
+		Target:   tgt,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Now:      func() time.Time { return now },
+		APIToken: "secret-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.setJobWorkerConfig(jobWorkerConfig{
+		pollInterval:     20 * time.Millisecond,
+		batchSize:        5,
+		bookStepTimeout:  5 * time.Second,
+		reconcileTimeout: 10 * time.Second,
+		advisorPaceDelay: -1,
+	})
+
+	listener, err := srv.Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ctx, listener) }()
+	t.Cleanup(func() {
+		http.DefaultClient.CloseIdleConnections()
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("server did not stop")
+		}
+	})
+
+	base := "http://" + listener.Addr().String()
+	for i := 0; i < 50; i++ {
+		resp, err := http.Get(base + "/readyz")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	store, err := companion.OpenOwnedStore(db, srv.ownership)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Confirm(context.Background(), companion.Mapping{
+		Provider:      "weread",
+		SourceAccount: "default",
+		BookID:        "5001",
+		SourceTitle:   "Mapped Book",
+		TargetAccount: "default",
+		WorkID:        9001,
+		EditionID:     0,
+		CreatedAt:     now,
+	}, false); err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	job, err := store.EnqueueSyncJob(context.Background(), companion.SyncJob{
+		Scope:         companion.SyncJobScopeRecent,
+		Mode:          companion.SyncJobModeReconcileOnly,
+		Days:          7,
+		MinConfidence: 0.80,
+		CreatedAt:     now,
+	})
+	_ = store.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv.notifyJobWorker()
+
+	select {
+	case <-phase2Entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for worker Phase 2 reconcile to block in GetUserBookStatus")
+	}
+
+	doReq := func(method, path string, headers map[string]string, body []byte) (int, string, error) {
+		var rdr io.Reader = http.NoBody
+		if body != nil {
+			rdr = bytes.NewReader(body)
+		}
+		req, err := http.NewRequest(method, base+path, rdr)
+		if err != nil {
+			return 0, "", err
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0, "", err
+		}
+		defer resp.Body.Close()
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return resp.StatusCode, "", err
+		}
+		return resp.StatusCode, string(raw), nil
+	}
+
+	auth := map[string]string{"Authorization": "Bearer secret-token"}
+	authJSON := map[string]string{
+		"Authorization": "Bearer secret-token",
+		"Content-Type":  "application/json",
+	}
+
+	// While the background worker is blocked inside Phase 2 reconcile, interactive
+	// operationSlot endpoints and reading snapshot must all succeed, while
+	// POST /api/v1/reconcile must fail fast with 503 provider_operation_busy.
+	checks := []struct {
+		name    string
+		method  string
+		path    string
+		headers map[string]string
+		body    []byte
+		want    int
+		wantSub string
+	}{
+		{name: "pending", method: http.MethodGet, path: "/api/pending?account=default&target_account=default&days=7", want: http.StatusOK},
+		{name: "confirm", method: http.MethodPost, path: "/api/v1/mappings/confirm", headers: authJSON, body: []byte(`{"source_account":"default","book_id":"5002","target_account":"default","work_id":9002,"edition_id":0}`), want: http.StatusOK},
+		{name: "snapshot", method: http.MethodGet, path: "/api/v1/reading/snapshot", headers: auth, want: http.StatusOK},
+		{name: "reconcile", method: http.MethodPost, path: "/api/v1/reconcile", headers: auth, want: http.StatusServiceUnavailable, wantSub: "provider_operation_busy"},
+	}
+
+	for _, tc := range checks {
+		code, respBody, reqErr := doReq(tc.method, tc.path, tc.headers, tc.body)
+		if reqErr != nil {
+			t.Fatalf("%s request error: %v", tc.name, reqErr)
+		}
+		if code != tc.want {
+			t.Fatalf("%s expected %d while Phase 2 is running, got %d (%s)", tc.name, tc.want, code, respBody)
+		}
+		if tc.wantSub != "" && !strings.Contains(respBody, tc.wantSub) {
+			t.Fatalf("%s expected body containing %q, got %q", tc.name, tc.wantSub, respBody)
+		}
+	}
+
+	close(unblockPhase2)
+
+	finished := waitForJobTerminal(t, db, srv.ownership, job.ID, 3*time.Second)
+	if finished.Status != companion.SyncJobStatusCompleted {
+		t.Fatalf("expected job completed after unblocking Phase 2, got status=%s err=%q", finished.Status, finished.ErrorMessage)
+	}
+
+	code, body, err := doReq(http.MethodPost, "/api/v1/reconcile", auth, nil)
+	if err != nil {
+		t.Fatalf("post-unblock reconcile request error: %v", err)
+	}
+	if code != http.StatusOK {
+		t.Fatalf("expected subsequent POST /api/v1/reconcile to return 200, got %d (%s)", code, body)
 	}
 }

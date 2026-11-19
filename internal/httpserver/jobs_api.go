@@ -76,7 +76,7 @@ func parseSyncJobInput(r *http.Request) (companion.SyncJob, error) {
 	}
 	if val := q.Get("days"); val != "" {
 		d, err := strconv.Atoi(val)
-		if err != nil || d < 1 || d > 36500 {
+		if err != nil || d < 1 || d > companion.MaxLookbackDays {
 			return companion.SyncJob{}, errors.New("invalid_days")
 		}
 		payload.Days = d
@@ -362,7 +362,7 @@ func (s *Server) handleFormJobSync(w http.ResponseWriter, r *http.Request) {
 	days := 0
 	if rawDays := values.Get("days"); rawDays != "" {
 		d, err := strconv.Atoi(rawDays)
-		if err != nil || d < 1 || d > 36500 {
+		if err != nil || d < 1 || d > companion.MaxLookbackDays {
 			http.Error(w, "invalid form", http.StatusBadRequest)
 			return
 		}

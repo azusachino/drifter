@@ -10,6 +10,7 @@ import (
 	"github.com/azusachino/drifter/internal/advisor"
 	"github.com/azusachino/drifter/internal/advisor/opencode"
 	"github.com/azusachino/drifter/internal/companion"
+	"github.com/azusachino/drifter/internal/config"
 	"github.com/azusachino/drifter/internal/provider/hardcover"
 	"github.com/azusachino/drifter/internal/provider/weread"
 )
@@ -19,10 +20,32 @@ func Main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	providers := clients{
-		source: func() (source, error) { return weread.New(os.Getenv("WEREAD_API_KEY")) },
-		target: func() (target, error) { return hardcover.New(os.Getenv("HARDCOVER_API_KEY")) },
-		advisor: func(store *companion.Store) (advisor.Advisor, error) {
-			cfg, err := opencode.LoadConfig()
+		sourceWithConfig: func(p config.ProvidersConfig) (source, error) {
+			client, err := weread.NewWithOptions(
+				os.Getenv("WEREAD_API_KEY"),
+				config.ParseDurationOr(p.WeReadInterval, 0),
+				config.ParseDurationOr(p.Timeout, 0),
+			)
+			if err != nil {
+				return nil, err
+			}
+			client.SetSkillVersion(p.WeReadSkillVersion)
+			return client, nil
+		},
+		targetWithConfig: func(p config.ProvidersConfig) (target, error) {
+			return hardcover.NewWithOptions(
+				os.Getenv("HARDCOVER_API_KEY"),
+				config.ParseDurationOr(p.HardcoverInterval, 0),
+				config.ParseDurationOr(p.Timeout, 0),
+			)
+		},
+		advisorWithConfig: func(advCfg config.AdvisorConfig, store *companion.Store) (advisor.Advisor, error) {
+			cfg, err := opencode.LoadConfigWithSettings(opencode.Settings{
+				BaseURL: advCfg.BaseURL,
+				Model:   advCfg.Model,
+				Models:  advCfg.Models,
+				Timeout: config.ParseDurationOr(advCfg.Timeout, 0),
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -31,7 +54,8 @@ func Main() {
 				return nil, err
 			}
 			if store != nil {
-				return advisor.NewCachedAdvisor(client, store, cfg.Model, opencode.PromptHash()), nil
+				ttl := config.ParseDurationOr(advCfg.CacheTTL, 0)
+				return advisor.NewCachedAdvisorWithTTL(client, store, cfg.Model, opencode.PromptHash(), ttl), nil
 			}
 			return client, nil
 		},

@@ -16,6 +16,11 @@ const (
 	DefaultTargetAccount  = "default"
 	DefaultSourceProvider = "weread"
 	DefaultTargetProvider = "hardcover"
+
+	DefaultMinConfidence = 0.80
+	DefaultLookbackDays  = 90
+	MaxLookbackDays      = 36500
+	DefaultRecentJobDays = 7
 )
 
 // Source and Target are the provider dependencies of core operations. Adapters

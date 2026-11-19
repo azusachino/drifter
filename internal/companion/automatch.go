@@ -16,18 +16,19 @@ type ShelfRow = ShelfBook
 
 // AutoMatchOptions controls automated matching and confirmation behavior.
 type AutoMatchOptions struct {
-	Provider      string
-	SourceAccount string
-	TargetAccount string
-	Days          int
-	MinConfidence float64
-	Limit         int
-	BookID        string
-	FinishedOnly  bool
-	DryRun        bool
-	Force         bool
-	Now           time.Time
-	After         string
+	Provider        string
+	SourceAccount   string
+	TargetAccount   string
+	Days            int
+	MinConfidence   float64
+	Limit           int
+	BookID          string
+	FinishedOnly    bool
+	DryRun          bool
+	Force           bool
+	Now             time.Time
+	After           string
+	AttemptCooldown time.Duration
 }
 
 // AutoMatchReport summarizes the outcome of an automated matching batch.
@@ -64,13 +65,16 @@ func normalizeAutoMatchOptions(opts *AutoMatchOptions) {
 		opts.TargetAccount = DefaultTargetAccount
 	}
 	if opts.MinConfidence <= 0 {
-		opts.MinConfidence = 0.80
+		opts.MinConfidence = DefaultMinConfidence
 	}
 	if opts.Days <= 0 {
-		opts.Days = 7
+		opts.Days = DefaultRecentJobDays
 	}
 	if opts.Limit <= 0 {
 		opts.Limit = 20
+	}
+	if opts.AttemptCooldown <= 0 {
+		opts.AttemptCooldown = AutoMatchAttemptCooldown
 	}
 	if opts.Now.IsZero() {
 		opts.Now = time.Now().UTC()
@@ -122,7 +126,7 @@ func DiscoverAutoMatchCandidates(
 			}
 		}
 		if !opts.Force {
-			cooldowns, err := store.ListCooldownBookIDs(ctx, opts.Provider, opts.SourceAccount, opts.TargetAccount, opts.MinConfidence, opts.Force, opts.Now)
+			cooldowns, err := store.ListCooldownBookIDsWithWindow(ctx, opts.Provider, opts.SourceAccount, opts.TargetAccount, opts.MinConfidence, opts.Force, opts.Now, opts.AttemptCooldown)
 			if err != nil {
 				return nil, err
 			}
@@ -132,7 +136,7 @@ func DiscoverAutoMatchCandidates(
 		}
 	}
 
-	includeUnread := opts.Days >= 36500
+	includeUnread := opts.Days >= MaxLookbackDays
 	cutoff := opts.Now.Add(-time.Duration(opts.Days) * 24 * time.Hour).Unix()
 	nowUnix := opts.Now.Unix()
 

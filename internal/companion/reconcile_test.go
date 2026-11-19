@@ -318,3 +318,64 @@ func TestReconcileAccount_ConflictHoldsPersisted(t *testing.T) {
 		t.Fatalf("expected reason %s, got %s", ReasonManualTargetEdit, holds[0].Reason)
 	}
 }
+
+type cancellingSource struct {
+	*multiMockSource
+	cancel context.CancelFunc
+}
+
+func (c *cancellingSource) Book(ctx context.Context, id string) (Book, error) {
+	c.cancel()
+	return Book{}, context.Canceled
+}
+
+func TestReconcileAccount_FinalizesSyncRunOnContextCancel(t *testing.T) {
+	baseCtx := context.Background()
+	store, err := OpenStore(filepath.Join(t.TempDir(), "drifter.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 11, 16, 14, 0, 0, 0, time.UTC)
+	if err := store.Confirm(baseCtx, Mapping{
+		Provider:      "weread",
+		SourceAccount: "mine",
+		BookID:        "101",
+		TargetAccount: "default",
+		WorkID:        1001,
+		EditionID:     2001,
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(baseCtx)
+	defer cancel()
+
+	src := &cancellingSource{
+		multiMockSource: &multiMockSource{fingerprint: "weread:10001"},
+		cancel:          cancel,
+	}
+	tgt := &multiMockTarget{fingerprint: "hardcover:20002"}
+
+	summary, err := ReconcileAccount(ctx, store, src, tgt, ReconcileOptions{
+		SourceAccount: "mine",
+		TargetAccount: "default",
+		PolicyVersion: "v1",
+		Now:           now,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if summary.RunID == 0 {
+		t.Fatal("expected sync run to be created")
+	}
+
+	latest, err := store.GetLatestSyncRun(baseCtx, "mine", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest == nil || latest.Status == "in_progress" {
+		t.Fatalf("expected sync_run to be finalized, got %+v", latest)
+	}
+}

@@ -80,9 +80,43 @@ addr = "127.0.0.1:8080"  # standalone read-only health endpoint
 [server]
 addr = "127.0.0.1:8081"  # local HTTP server; loopback by default
 allowed_hosts = ["localhost:8081"]  # optional additional host header allowlist
+# operation_timeout = "90s"         # admitted sync/pending deadline
+# read_header_timeout = "5s"        # HTTP read header timeout
+# read_timeout = "15s"              # HTTP read timeout
+# write_timeout = "2m"              # HTTP write timeout
+# idle_timeout = "60s"              # HTTP idle keep-alive timeout
+# shutdown_timeout = "10s"          # graceful shutdown deadline
 
 [database]
 # path = "/var/lib/drifter/mappings.sqlite"  # optional absolute override
+
+# Background sync job worker budgets and pacing (all optional).
+[jobs]
+# poll_interval = "5s"        # fallback queue poll interval
+# batch_size = 5              # auto-match books per batch
+# book_step_timeout = "75s"   # per-book discovery/auto-match budget
+# reconcile_timeout = "15m"   # Phase 2 reconcile budget
+# cooldown_base = "15s"       # rate-limit backoff base
+# cooldown_max = "90s"        # rate-limit backoff cap
+# max_cooldown_wait = "2m"    # max single wait before aborting Phase 1
+# max_rate_limit_retry = 5    # max rate-limit retries per book
+# advisor_pace_delay = "1s"   # pause between advisor batches ("0s" disables)
+# attempt_cooldown = "720h"   # abstention cooldown window for auto-match retries
+
+# In-memory provider response TTL cache (all optional).
+[cache]
+# max_entries = 10000
+# shelf_ttl = "5m"
+# book_ttl = "6h"
+# search_ttl = "1h"
+# target_ttl = "1h"
+
+# Upstream provider HTTP timeout and pacing (endpoints remain fixed HTTPS).
+[providers]
+# timeout = "30s"
+# weread_interval = "1s"
+# hardcover_interval = "1100ms"
+# weread_skill_version = "1.0.5"
 
 # Matching catalogs are opt-in and fetched only by an explicit `match` command.
 [[matching.catalogs]]
@@ -96,14 +130,18 @@ provider = "default"  # default (Douban + OpenLibrary), douban, openlibrary, cus
 # url = "https://example.com/books/{isbn}"  # required when provider = "custom"
 
 # OpenCode LLM advisor settings (OpenAI-compatible completions gateway).
-# API keys belong strictly in the environment (MAGPIE_GATEWAY_KEY, OPENCODE_API_KEY, DRIFTER_ADVISOR_KEY), never here.
+# API keys belong strictly in the environment (MAGPIE_GATEWAY_KEY,
+# OPENCODE_API_KEY, DRIFTER_ADVISOR_KEY), never here.
 [advisor]
 # base_url = "https://ai-gateway.example.org/v1"  # default: https://api.openai.com/v1
 # model = "opencode-go/beam-free"                 # default: opencode-go/beam-free
+# models = ["opencode-go/beam-free"]              # optional fallback chain
 # timeout = "30s"                                 # default: 30s
+# cache_ttl = "720h"                              # default: 720h (30 days)
 ```
 
 Settings files are discovered in the following order:
+
 1. Explicit `--config <path>` flag or `DRIFTER_CONFIG` environment variable
 2. `config.toml` in the current working directory
 3. `$XDG_CONFIG_HOME/drifter/config.toml` (or `~/.config/drifter/config.toml`)
@@ -199,8 +237,8 @@ refuse with an ownership error; `links` and pending reads may use the existing
 current schema read-only. If that schema needs migration, a reader fails rather
 than migrating under the owner. HTTP mapping maintenance uses the same owned
 capability; standalone `link` and `unlink` remain refused while
-`drifter-server` owns the state. See the [architecture](architecture.md) and the
-[HTTP user-story and test map](plans/http-server.md).
+`drifter-server` owns the state. See the [architecture](architecture.md) and
+[server guide](server.md).
 
 ## Local review decisions
 
@@ -432,8 +470,8 @@ Repeated paths/catalog IDs are rejected, not duplicated. The merge fails
 atomically with no partial stdout if any input is malformed/oversized or the
 combined document exceeds v1 limits; records are never silently truncated.
 Merge reads no database, makes no network/provider requests and mutates no
-personal state. See the [catalog contract](plans/matching-catalogs.md) for the
-exact lineage and schema-evolution boundary.
+personal state. See `schemas/matching-catalog-v1.schema.json` for the v1 schema
+contract.
 
 ## Pending matching worklist
 
@@ -549,7 +587,8 @@ Reconcile reading statuses across all confirmed mappings for an account:
 
 ```sh
 bin/drifter reconcile --account my-weread --target-account my-hardcover \
-  [--adopt-source | --adopt-target | --with-advisor] [--allow-private] [--source-vid VID] [--dry-run]
+  [--adopt-source | --adopt-target | --with-advisor] \
+  [--allow-private] [--source-vid VID] [--dry-run]
 ```
 
 `reconcile` iterates sequentially through all confirmed mappings, evaluates
@@ -624,23 +663,10 @@ backups and filesystem recovery are not erased by unlink. Back up the database
 only through a private, SQLite-consistent backup procedure. Do not copy only the
 main file during an active write or commit a personal database as a fixture.
 
-## Design and roadmap
+## Further reading
 
-- [Source-backed research and measured findings](research/reading-status-companion.md)
-- [First-slice plan, gates and owner-confirmed direction](plans/read-only-matching.md)
-- [Matching-worklist plan and confirmed review behavior (#7)](plans/matching-worklist.md)
-- [Domain language](../CONTEXT.md)
-- [Acceptance issue #1](https://github.com/azusachino/drifter/issues/1)
-
-Later direction is a persistent daemon in a single-replica k3s Deployment, not a
-CronJob. `config.toml` holds operational settings, applied on restart; SQLite
-holds mappings and reconciliation state. Future safe status deltas require
-mapping/bootstrap approval and one primary source per target work/account.
-Conflicts hold the affected book for explicit resolution, with durable CLI
-reports and logs. The 30-minute freshness goal still needs quota and acquisition
-verification. **Telegram notifications are on the roadmap**, outside this PR.
-
-Remote writes need separately verified mutation contracts, account identity,
-privacy/authority policy, durable intents/receipts and restart reconciliation.
-KU automation and Japanese coverage remain feasibility questions. This code is
-not authorization for live writes or deployment.
+- [Architecture overview](architecture.md)
+- [HTTP server & dashboard guide](server.md)
+- [Domain glossary](../CONTEXT.md)
+- [Synthetic walkthroughs](walkthroughs/README.md)
+- [Changelog](../CHANGELOG.md)

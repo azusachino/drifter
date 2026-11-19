@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/azusachino/drifter/internal/companion"
-	"github.com/azusachino/drifter/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -14,34 +13,28 @@ func (app *cliApp) getPreviewSource() (companion.PreviewSource, error) {
 	if app.providers.previewSource != nil {
 		return app.providers.previewSource()
 	}
-	if app.providers.source != nil {
-		s, err := app.providers.source()
-		if err != nil {
-			return nil, err
-		}
-		if ps, ok := s.(companion.PreviewSource); ok {
-			return ps, nil
-		}
-		return nil, fmt.Errorf("source provider does not support preview")
+	s, err := app.getSource()
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("source provider not configured")
+	if ps, ok := s.(companion.PreviewSource); ok {
+		return ps, nil
+	}
+	return nil, fmt.Errorf("source provider does not support preview")
 }
 
 func (app *cliApp) getPreviewTarget() (companion.PreviewTarget, error) {
 	if app.providers.previewTarget != nil {
 		return app.providers.previewTarget()
 	}
-	if app.providers.target != nil {
-		t, err := app.providers.target()
-		if err != nil {
-			return nil, err
-		}
-		if pt, ok := t.(companion.PreviewTarget); ok {
-			return pt, nil
-		}
-		return nil, fmt.Errorf("target provider does not support preview")
+	t, err := app.getTarget()
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("target provider not configured")
+	if pt, ok := t.(companion.PreviewTarget); ok {
+		return pt, nil
+	}
+	return nil, fmt.Errorf("target provider does not support preview")
 }
 
 func (app *cliApp) previewCommand() *cobra.Command {
@@ -56,7 +49,6 @@ func (app *cliApp) previewCommand() *cobra.Command {
 		allowPrivate  bool
 		adoptSource   bool
 		adoptTarget   bool
-		configPath    string
 	)
 
 	command := &cobra.Command{
@@ -72,7 +64,6 @@ func (app *cliApp) previewCommand() *cobra.Command {
 	flags.StringVar(&provider, "source", companion.DefaultSourceProvider, "source provider name (default: weread)")
 	flags.StringVar(&provider, "provider", companion.DefaultSourceProvider, "alias for --source")
 	flags.StringVar(&dbPath, "db", "", "private SQLite path (default: XDG_STATE_HOME/drifter/mappings.sqlite)")
-	flags.StringVar(&configPath, "config", config.DefaultPath(), "settings-only TOML path (missing file uses defaults; never credentials)")
 	flags.StringVar(&policyVersion, "policy-version", companion.DefaultPolicyVersion, "policy version for three-way evaluation")
 	flags.StringVar(&sourceVID, "source-vid", os.Getenv("WEREAD_VID"), "declared source user VID for account fingerprint binding")
 	flags.BoolVar(&allowPrivate, "allow-private", false, "allow previewing private book synchronization")
@@ -82,6 +73,9 @@ func (app *cliApp) previewCommand() *cobra.Command {
 	markRequiredFlags(command, "book-id")
 
 	return app.command(command, func(cmd *cobra.Command, _ []string) error {
+		if _, err := app.loadConfig(); err != nil {
+			return err
+		}
 		if adoptSource && adoptTarget {
 			return fmt.Errorf("cannot specify both --adopt-source and --adopt-target")
 		}
